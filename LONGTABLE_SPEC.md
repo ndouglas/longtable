@@ -1,4 +1,4 @@
-# Longtable Specification v0.3
+# Longtable Specification v0.4
 
 ## 1. Overview & Goals
 
@@ -242,6 +242,16 @@ Relationships are manipulated with `link!` and `unlink!`:
 (unlink! alice :follows bob)
 ```
 
+**Link/unlink semantics:**
+
+| Operation | Behavior |
+|-----------|----------|
+| `link!` existing edge | No-op (idempotent, no duplicate) |
+| `link!` violating `:one-to-one` | Error |
+| `unlink!` missing edge | No-op (no error) |
+
+**Ordering**: For `:one-to-many` and `:many-to-many` relationships using `:field` storage, the `Vec<EntityRef>` maintains stable insertion order. This order is deterministic but not semantically meaningful—do not rely on it for game logic.
+
 The system maintains bidirectional indices automatically for O(1) traversal in both directions.
 
 ### 2.7 Rule
@@ -287,7 +297,10 @@ Derived components:
 - Can be used in rule patterns and queries
 - Track dependencies automatically
 
-**Cycle Detection**: Cycles in derived component dependencies within a single tick are compile-time errors. Feedback loops across ticks (via regular components and rules) are allowed.
+**Cycle Detection**:
+- **Static**: The compiler detects cycles in explicit derived→derived references (derived A references derived B by name)
+- **Runtime**: A guard stack detects evaluation recursion within a tick (guaranteed to catch all cycles)
+- **Across ticks**: Feedback loops via regular components and rules are allowed and expected
 
 ### 2.9 Constraint
 
@@ -307,6 +320,10 @@ A **Constraint** is an invariant checked after rule execution:
 - `:warn` - Log warning, allow violation
 
 When `:clamp` is triggered, the adjustment is recorded as a **system-generated effect** in the trace, showing which constraint fired and what it changed.
+
+**Constraint iteration**: Constraints run in a **single pass**. Clamps do not trigger re-evaluation of other constraints. If clamping constraint A causes constraint B to be violated, constraint B will `:rollback` or `:warn` as configured—clamps do not cascade.
+
+**Design implication**: Users must design constraints to be non-conflicting. For example, if you have both `health >= 0` and `health <= max`, clamping one should not violate the other.
 
 ---
 
@@ -342,31 +359,66 @@ When enabled, operations like `(/ 0.0 0.0)` or `(sqrt -1.0)` will throw an error
 | `:vec<T>`      | Ordered sequence              | `[1 2 3]`, `["a" "b"]`      |
 | `:set<T>`      | Unordered unique collection   | `#{1 2 3}`                  |
 | `:map<K,V>`    | Key-value mapping             | `{:a 1 :b 2}`               |
-| `:option<T>`   | Optional value (Some or None) | `(some 42)`, `none`         |
 
-### 3.3 Type Modifiers in Component Schemas
+### 3.3 Nullability
+
+Longtable uses `nil` directly for absent values—there is no wrapped Option type at runtime.
+
+**Schema annotation**: `:option<T>` indicates a field may contain `nil`:
 
 ```clojure
 (component: example
-  :required-int :int                      ;; Must have a value
-  :optional-int :option<:int>             ;; Can be none
-  :defaulted-int :int :default 0          ;; Has default value
+  :required-int :int                      ;; Must have a value, nil is error
+  :optional-int :option<:int>             ;; Can be nil
+  :defaulted-int :int :default 0          ;; Has default, never nil
   :computed-default :int :default (tick)) ;; Default from expression
 ```
 
-### 3.4 Type Checking
-
-Longtable is **statically typed at the schema level**:
-- Component field types are declared and enforced
-- Function parameter/return types can be annotated (optional)
-- Patterns are type-checked against component schemas
+**Runtime behavior**: Values are either the value or `nil`. No unwrapping needed:
 
 ```clojure
-(fn: add-ints :- :int [a :- :int, b :- :int]
-  (+ a b))
+;; Check for presence
+(nil? x)       ;; true if x is nil
+(some? x)      ;; true if x is not nil
+
+;; Idiomatic patterns
+(when-let [hp (get ?e :health/current)]
+  (use hp))
+
+(if (some? target)
+  (attack target)
+  (wander))
+
+;; Default values
+(or (get ?e :nickname) (get ?e :name))
 ```
 
-Type errors are caught at load time, not runtime.
+**Schema enforcement**: Assigning `nil` to a non-optional field is a load-time or runtime error depending on context.
+
+### 3.4 Type Checking
+
+Longtable has a **hybrid type system**:
+
+**Schema-typed (load-time checking):**
+- Component field types are declared and enforced
+- Pattern matching is type-checked against component schemas
+- Relationship cardinality and storage are validated
+
+**Dynamically typed (runtime):**
+- General expression evaluation
+- Collection operations
+- Function arguments (unless annotated)
+
+```clojure
+;; Optional type annotations for functions
+(fn: add-ints :- :int [a :- :int, b :- :int]
+  (+ a b))
+
+;; This compiles but fails at runtime:
+(map inc ["a" "b" "c"])  ;; Runtime error: inc expects number
+```
+
+**Practical implication**: Component access and pattern matching catch type errors at load time. General expressions may produce runtime type errors. Use optional annotations for critical functions.
 
 ### 3.5 Equality and Hashing
 
@@ -923,6 +975,23 @@ Match on absence of patterns:
 
 **Negation semantics**: Evaluated against the **base snapshot** (not the overlay). This ensures deterministic, order-independent evaluation.
 
+**Safety rule**: All variables in a negated pattern must be bound by earlier positive patterns. This prevents ambiguous "global negation":
+
+```clojure
+;; VALID: ?e is bound before negation
+:where [[?e :position _]
+        (not [?e :velocity _])]
+
+;; INVALID: ?e is unbound (compile-time error)
+:where [(not [?e :tag/enemy])]
+
+;; For "no enemies exist", use query-exists? in a guard:
+:where [[?world :world/singleton]]
+:guard [(not (query-exists? :where [[_ :tag/enemy]]))]
+```
+
+This safety rule ensures negation has clear, unambiguous semantics: "for this bound entity, no matching pattern exists."
+
 ### 5.3 Previous Tick Access
 
 Access values from the committed previous tick:
@@ -1036,6 +1105,26 @@ Effects modify the overlay (visible immediately within the tick):
 (enable-rule! rule-entity)
 (disable-rule! rule-entity)
 ```
+
+### 5.8 Write Conflict Semantics
+
+When multiple rules write to the same entity/field within a tick, **last-write-wins**:
+
+```clojure
+;; Rule A (salience 10) fires first:
+(set! ?e :health/current 50)
+
+;; Rule B (salience 5) fires second:
+(set! ?e :health/current 75)
+
+;; Result: :health/current is 75
+```
+
+**Rationale**: With frozen activations and deterministic rule ordering (salience → specificity → declaration order), the write order is predictable. Last-write-wins is simple and matches the mental model of "rules execute in order."
+
+**Debugging**: The provenance system tracks all writes, so `(why (get ?e :health/current))` shows the full write history, not just the final value.
+
+**Future consideration**: Per-field `:conflict :error` annotation may be added if use cases emerge where accidental overwrites need detection.
 
 ---
 
@@ -1356,6 +1445,35 @@ Tick 43 completed. Rules: 12, Entities changed: 8, Time: 234ms
 > (load! "checkpoint.lt")
 ```
 
+### 8.7 Provenance Model
+
+For `(why ...)` and debugging to work, the engine maintains an **effect log**:
+
+```
+EffectRecord = {
+  tick:        Int              ;; When this happened
+  entity:      EntityId         ;; What entity was affected
+  field:       Keyword          ;; Which component/field
+  old_value:   Value            ;; Previous value (or nil if new)
+  new_value:   Value            ;; New value (or nil if destroyed)
+  source:      EffectSource     ;; Who caused this
+  expression:  Option<ExprId>   ;; What expression (debug mode)
+  bindings:    Option<Map>      ;; Activation bindings (debug mode)
+}
+
+EffectSource = :rule/<name> | :constraint/<name> | :system | :external
+```
+
+**Storage policy:**
+
+| Mode | Stored | Use Case |
+|------|--------|----------|
+| Production | Last-writer index per field | Minimal overhead, basic `(why ...)` |
+| Development | Full effect log per tick | Complete history, rich debugging |
+| Debug | + expression IDs + bindings | Step-through, full provenance |
+
+The `(why ...)` function traverses the effect log to explain how a value was computed, including intermediate writes that were later overwritten.
+
 ---
 
 ## 9. Implementation Notes
@@ -1407,13 +1525,18 @@ Tick 43 completed. Rules: 12, Entities changed: 8, Time: 234ms
 
 ### 9.2 Pattern Matching Implementation
 
-For v0.1, pattern matching uses **indices + join planning**:
+The engine computes activation sets using indexed pattern matching:
 
-1. **Component indices**: `ComponentType → Set<EntityId>`
+1. **Component indices**: `ComponentType → Set<EntityId>` enables O(1) lookup
 2. **Join order optimization**: Start with most selective pattern
-3. **Filter application**: Apply guards after structural matching
+3. **Archetype pruning**: Skip entity groups that cannot match
+4. **Filter application**: Apply guards after structural matching
 
-Full RETE network implementation may be added in future versions for incremental matching across ticks.
+**Incremental optimization**: The engine MAY cache partial match results across ticks and update them incrementally based on world diffs. This is semantically equivalent to full re-evaluation but more efficient for large worlds with small per-tick changes.
+
+The specification does not mandate a particular matching algorithm. Implementations must produce identical activation sets regardless of strategy used.
+
+**Implementation roadmap**: The initial implementation uses snapshot re-evaluation each tick. Full incremental match maintenance (RETE-style) is a priority goal to be implemented as soon as the core system is functioning correctly. This optimization does not change observable behavior—only performance characteristics.
 
 ### 9.3 Bytecode VM
 
@@ -1489,7 +1612,6 @@ pub enum Value {
     EntityRef(EntityId),
     Vec(Arc<Vector<Value>>), Set(Arc<HashSet<Value>>),
     Map(Arc<HashMap<Value, Value>>),
-    Option(Option<Box<Value>>),
 }
 
 impl World {
@@ -1690,4 +1812,4 @@ nil true false none
 
 ---
 
-*End of Specification v0.3*
+*End of Specification v0.4*
