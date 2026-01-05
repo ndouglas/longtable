@@ -1,4 +1,4 @@
-# Longtable Specification v0.4
+# Longtable Specification v0.5
 
 ## 1. Overview & Goals
 
@@ -139,6 +139,20 @@ Entities are created with `spawn!` and destroyed with `destroy!`:
 (destroy! some-entity)
 ```
 
+**Stale reference behavior**: Accessing a destroyed entity (or one from a different generation) is a **runtime error**:
+
+```clojure
+(let [enemy (spawn! {:tag/enemy true})]
+  (destroy! enemy)
+  (get enemy :tag/enemy))  ;; ERROR: stale entity reference
+
+;; Use get? for safe access (returns nil if stale or missing)
+(get? enemy :tag/enemy)    ;; => nil
+(entity-exists? enemy)     ;; => false
+```
+
+This strict behavior catches bugs where entity references outlive their targets. Use `get?` and `entity-exists?` when references may be stale.
+
 ### 2.4 Component
 
 A **Component** is a named, typed data structure attached to an entity. Components are declared with schemas:
@@ -215,20 +229,32 @@ A **Relationship** is a typed, directional connection between entities. Each rel
 | `:field` | Simple connections, no extra data | `:follows`, `:parent`, `:in-room` |
 | `:entity` | Relationships need attributes | `:employment`, `:friendship-with-history` |
 
-**Cardinality and Storage Mapping:**
+**Cardinality as Outgoing/Incoming Limits:**
 
-| Cardinality | `:field` Storage | `:entity` Storage |
-|-------------|------------------|-------------------|
-| `:one-to-one` | Source component holds single EntityRef | One relationship entity per pair |
-| `:one-to-many` | Source component holds `Vec<EntityRef>` | One relationship entity per pair |
-| `:many-to-one` | Source component holds single EntityRef | One relationship entity per pair |
-| `:many-to-many` | Source component holds `Vec<EntityRef>` | One relationship entity per pair |
+| Cardinality | Max Outgoing (source→) | Max Incoming (→target) | `:field` Storage |
+|-------------|------------------------|------------------------|------------------|
+| `:one-to-one` | 1 | 1 | Single `EntityRef` |
+| `:one-to-many` | many | 1 | `Vec<EntityRef>` |
+| `:many-to-one` | 1 | many | Single `EntityRef` |
+| `:many-to-many` | many | many | `Vec<EntityRef>` |
 
 **Cardinality enforcement:**
-- `:one-to-one` - `link!` errors if source already has a target
-- `:one-to-many` - No restrictions on source→target
-- `:many-to-one` - No restrictions on source→target
-- `:many-to-many` - No restrictions
+
+| Violation | Default Behavior | With `:on-violation :replace` |
+|-----------|------------------|-------------------------------|
+| Exceeds max outgoing | Error | Unlink old, link new |
+| Exceeds max incoming | Error | Unlink old, link new |
+
+```clojure
+;; Default: error if player already in a room
+(relationship: in-room
+  :cardinality :many-to-one)
+
+;; Replace mode: automatically move player to new room
+(relationship: in-room
+  :cardinality :many-to-one
+  :on-violation :replace)
+```
 
 **On-target-delete behaviors:**
 - `:remove` - Remove the relationship when target is destroyed
@@ -247,7 +273,7 @@ Relationships are manipulated with `link!` and `unlink!`:
 | Operation | Behavior |
 |-----------|----------|
 | `link!` existing edge | No-op (idempotent, no duplicate) |
-| `link!` violating `:one-to-one` | Error |
+| `link!` violating cardinality | Error (or replace if `:on-violation :replace`) |
 | `unlink!` missing edge | No-op (no error) |
 
 **Ordering**: For `:one-to-many` and `:many-to-many` relationships using `:field` storage, the `Vec<EntityRef>` maintains stable insertion order. This order is deterministic but not semantically meaningful—do not rely on it for game logic.
@@ -297,6 +323,28 @@ Derived components:
 - Can be used in rule patterns and queries
 - Track dependencies automatically
 
+**Dependency tracking and invalidation**:
+
+Derived values track dependencies at a coarse granularity:
+- **Field dependencies**: Any component/field read during evaluation
+- **Query membership**: The set of entities matching `:where` patterns
+- **Other derived values**: Transitive dependencies through derived→derived references
+
+A derived cache invalidates when:
+- Any tracked field changes on any tracked entity
+- An entity enters or leaves a tracked query's match set
+- Any upstream derived value invalidates
+
+**Evaluation context** (activation vs execution view):
+
+| Context | Derived sees | Use case |
+|---------|--------------|----------|
+| Rule `:where` (activation) | Base snapshot only | Deterministic activation |
+| Rule `:then` (execution) | Overlay | React to in-tick changes |
+| Query (outside tick) | Committed world | REPL inspection |
+
+Derived values used in rule activation are computed once from the base snapshot and cached for that tick. This ensures deterministic matching regardless of rule execution order.
+
 **Cycle Detection**:
 - **Static**: The compiler detects cycles in explicit derived→derived references (derived A references derived B by name)
 - **Runtime**: A guard stack detects evaluation recursion within a tick (guaranteed to catch all cycles)
@@ -308,9 +356,10 @@ A **Constraint** is an invariant checked after rule execution:
 
 ```clojure
 (constraint: health-bounds
-  :where       [[?e :health/current ?hp]
-                [?e :health/max ?max]]
-  :check       [(>= ?hp 0) (<= ?hp ?max)]
+  :salience     10                         ;; Higher = checked first
+  :where        [[?e :health/current ?hp]
+                 [?e :health/max ?max]]
+  :check        [(>= ?hp 0) (<= ?hp ?max)]
   :on-violation :clamp)
 ```
 
@@ -321,9 +370,76 @@ A **Constraint** is an invariant checked after rule execution:
 
 When `:clamp` is triggered, the adjustment is recorded as a **system-generated effect** in the trace, showing which constraint fired and what it changed.
 
-**Constraint iteration**: Constraints run in a **single pass**. Clamps do not trigger re-evaluation of other constraints. If clamping constraint A causes constraint B to be violated, constraint B will `:rollback` or `:warn` as configured—clamps do not cascade.
+**Constraint ordering**: Constraints are evaluated in order by:
+1. **Salience** (higher first, default 0)
+2. **Declaration order** (earlier first)
 
-**Design implication**: Users must design constraints to be non-conflicting. For example, if you have both `health >= 0` and `health <= max`, clamping one should not violate the other.
+This ordering matters because clamps modify state that later constraints see.
+
+**Constraint iteration**: Constraints run in a **single pass**. Clamps do not trigger re-evaluation of earlier constraints. If clamping constraint A causes constraint B (which already ran) to be violated, this is not detected.
+
+**Design implication**: Users must design constraints to be non-conflicting and order-aware. For example, if you have both `health >= 0` and `health <= max`, put them in the same constraint or ensure clamping one doesn't violate the other.
+
+### 2.10 Meta-Entities (Everything Is An Entity)
+
+Longtable commits to the principle that **engine concepts are queryable entities**. This enables powerful introspection and meta-programming.
+
+**Schema entities**: Each `component:` or `relationship:` declaration creates an entity:
+
+```clojure
+;; Query all component schemas
+(query
+  :where [[?schema :meta/type :component]
+          [?schema :meta/name ?name]]
+  :return ?name)
+;; => [:health, :position, :tag/player, ...]
+
+;; Inspect a schema's fields
+(query
+  :where [[?schema :meta/name :health]
+          [?schema :meta/fields ?fields]]
+  :return ?fields)
+;; => [{:name :current, :type :int, :default nil}
+;;     {:name :max, :type :int, :default 100}
+;;     {:name :regen-rate, :type :float, :default 0.0}]
+```
+
+**Rule entities**: Each `rule:` declaration creates an entity (as already mentioned in Section 2.7):
+
+```clojure
+;; Find all rules matching a pattern
+(query
+  :where [[?rule :meta/type :rule]
+          [?rule :meta/patterns ?patterns]]
+  :guard [(some #(mentions? % :health) ?patterns)]
+  :return ?rule)
+
+;; Disable a rule dynamically
+(disable-rule! (query-one :where [[?r :meta/name :apply-damage]] :return ?r))
+```
+
+**Constraint and derived entities**: Similarly queryable:
+
+```clojure
+(query :where [[?c :meta/type :constraint]] :return ?c)
+(query :where [[?d :meta/type :derived]] :return ?d)
+```
+
+**Meta-entity components** (read-only, in `:meta/*` namespace):
+
+| Component | Description |
+|-----------|-------------|
+| `:meta/type` | `:component`, `:relationship`, `:rule`, `:constraint`, `:derived` |
+| `:meta/name` | The declared name (keyword) |
+| `:meta/namespace` | Defining namespace |
+| `:meta/source-location` | File and line number |
+| `:meta/enabled` | For rules: currently enabled? |
+| `:meta/salience` | For rules/constraints: priority |
+| `:meta/patterns` | For rules: the `:where` patterns |
+| `:meta/fields` | For components: field definitions |
+| `:meta/cardinality` | For relationships: cardinality info |
+
+This makes Longtable self-describing and enables tooling like schema browsers, rule visualizers, and dynamic rule management.
 
 ---
 
@@ -443,6 +559,32 @@ For collections, indices, and deduplication, equality and hashing follow these r
 - Must be consistent with equality
 - Floats: hash based on bit representation (NaN hashes to fixed value)
 - Collections: combine element hashes
+
+### 3.6 Deterministic Iteration Order
+
+For simulation determinism, all collections have **defined, stable iteration order**:
+
+| Collection | Iteration Order |
+|------------|-----------------|
+| `:vec` | Index order (0, 1, 2, ...) |
+| `:set` | Sorted by value (using total ordering) |
+| `:map` | Sorted by key (using total ordering) |
+
+**Total ordering** for sorting:
+1. By type: `nil` < `bool` < `int` < `float` < `string` < `symbol` < `keyword` < `entity-ref` < `vec` < `set` < `map`
+2. Within type: natural ordering (numeric, lexicographic, etc.)
+3. Collections: lexicographic comparison of elements
+
+This guarantees that `(collect ...)`, `(keys ...)`, `(vals ...)`, and iteration-based operations produce identical results across runs, platforms, and implementations.
+
+```clojure
+;; Always deterministic, no order-by needed for reproducibility
+(query
+  :where [[?e :tag/enemy]]
+  :return (collect ?e))  ;; Sorted by entity-id
+```
+
+**Performance note**: Sorted iteration may use ordered persistent structures (like `OrdMap`) or sort-on-iterate. The spec guarantees behavior, not implementation strategy.
 
 ---
 
@@ -764,6 +906,40 @@ Aggregates ignore `nil` values by default. To error on `nil`, use explicit guard
 (load "path/to/directory")
 ```
 
+**Compilation pipeline**:
+
+```
+1. READ PHASE
+   • Parse source text into forms
+   • Expand tagged literals (require pre-declared readers)
+   • Process (load ...) directives recursively
+
+2. MACRO EXPANSION PHASE
+   • Expand user macros
+   • Expand standard macros (when, cond, ->, etc.)
+
+3. DECLARATION COMPILATION
+   • Compile component schemas
+   • Compile relationship declarations
+   • Compile derived component definitions
+   • Compile constraint definitions
+   • Compile rule definitions
+
+4. EXPRESSION COMPILATION
+   • Compile function bodies to bytecode
+   • Compile rule :then bodies to bytecode
+   • Compile derived :value expressions to bytecode
+
+5. INSTALLATION
+   • Register schemas with world
+   • Create rule/constraint entities
+   • Populate indices
+```
+
+**Load order**: Files are loaded in declaration order. Cyclic loads (A loads B loads A) are a **compile-time error**. All dependencies must form a DAG.
+
+**Tagged literal constraint**: Tagged literals (like `#pos[10 20]`) must be defined before first use. This may require careful file ordering or putting literals in a shared prelude.
+
 ### 4.9 Macros
 
 User-defined macros expand at compile time:
@@ -934,6 +1110,23 @@ pi e
 
 ## 5. Rule Engine
 
+### 5.0 Tick Start Reality (Design Principle)
+
+All rule activation decisions are made from a **frozen snapshot** of the world at tick start. This is the core design principle of Longtable's rule engine.
+
+**What this means:**
+- All `:where` patterns are evaluated against the same frozen world
+- All negations see the same frozen world
+- All guards see the same frozen world
+- Rule execution order does not affect which rules activate
+
+**Why this matters:**
+- If rule A runs before rule B and creates an entity that would satisfy B's conditions, B still doesn't fire this tick
+- If rule A destroys an entity that B matched, B still fires with its frozen bindings
+- "Lonely entity" rules don't suddenly stop firing because an earlier rule linked a follower
+
+This makes the activation set a pure function of the tick-start world state, independent of rule ordering. The only ordering dependency is in effect visibility during `:then` execution.
+
 ### 5.1 Pattern Syntax
 
 Patterns match entities and bind variables:
@@ -1061,6 +1254,18 @@ When multiple rules can fire, they are ordered by:
 - **Frozen bindings**: Pattern match bindings come from base snapshot
 - **Atomic rollback**: Any error discards overlay, world unchanged
 
+**This is NOT reactive rule-chaining (RETE-style)**:
+
+> Rules never chain within a tick. If rule A creates a fact that would satisfy rule B's conditions, rule B does NOT fire this tick—it will be considered for activation next tick.
+
+This is a deliberate design choice:
+- Eliminates infinite loop concerns
+- Makes debugging tractable (one activation set per tick)
+- Guarantees termination
+- Simplifies reasoning about rule interactions
+
+For within-tick reactivity, use the **event log pattern** (see Section 8.8).
+
 ### 5.6 Group-By Semantics in Rules
 
 When `:group-by` is present, `:then` executes **once per group**:
@@ -1105,6 +1310,18 @@ Effects modify the overlay (visible immediately within the tick):
 (enable-rule! rule-entity)
 (disable-rule! rule-entity)
 ```
+
+**Frozen bindings vs overlay reads**: Bindings captured during activation are immutable. To see current overlay state, use explicit reads:
+
+```clojure
+(rule: example
+  :where [[?e :hp ?hp]]           ;; ?hp is frozen from activation
+  :then [(set! ?e :hp 0)
+         (print! ?hp)             ;; Prints OLD hp (frozen binding)
+         (print! (get ?e :hp))])  ;; Prints 0 (current overlay value)
+```
+
+This distinction matters when rule logic depends on intermediate state. Bindings reflect "why the rule fired"; `get`/`query` reflect "what's true now."
 
 ### 5.8 Write Conflict Semantics
 
@@ -1474,6 +1691,67 @@ EffectSource = :rule/<name> | :constraint/<name> | :system | :external
 
 The `(why ...)` function traverses the effect log to explain how a value was computed, including intermediate writes that were later overwritten.
 
+### 8.8 Event Log Pattern (Recommended Idiom)
+
+Since rules don't chain within a tick, how do you model causality and reactive behavior? Use **explicit event entities**.
+
+**The pattern:**
+
+```clojure
+;; 1. Define event components
+(component: event/type :keyword)
+(component: event/tick :int)
+(component: event/source :entity-ref)
+(component: event/data :map)
+
+;; 2. Rules emit events instead of directly causing effects
+(rule: detect-death
+  :salience 50
+  :where [[?e :health/current ?hp]]
+  :guard [(<= ?hp 0)]
+  :then [(spawn! {:event/type :entity-died
+                  :event/tick (tick)
+                  :event/source ?e
+                  :event/data {:final-hp ?hp}})])
+
+;; 3. Other rules react to events (same tick, via overlay queries)
+(rule: on-death-drop-loot
+  :salience 40
+  :where [[?event :event/type :entity-died]
+          [?event :event/source ?corpse]
+          [?corpse :inventory ?items]]
+  :then [(doseq [item ?items]
+           (spawn! {:item/type item
+                    :position (get ?corpse :position)}))
+         (destroy! ?event)])
+
+;; 4. Cleanup rule destroys unprocessed events
+(rule: cleanup-events
+  :salience -1000
+  :where [[?event :event/type _]]
+  :then [(destroy! ?event)])
+```
+
+**Why this works:**
+- Events created in `:then` are visible to later rules via overlay queries
+- Salience controls processing order (higher = earlier)
+- Events are debuggable entities with full provenance
+- The cleanup rule prevents event accumulation
+
+**Cross-tick events**: For events that should persist to next tick (e.g., "damage over time"), don't destroy them immediately:
+
+```clojure
+(component: event/expires-at :int)
+
+(rule: expire-events
+  :salience -1000
+  :where [[?event :event/expires-at ?expires]]
+  :guard [(<= ?expires (tick))]
+  :then [(destroy! ?event)])
+```
+
+This pattern gives you "reactive feel" without RETE-style chaining, and events become a powerful debugging tool—you can query what happened and why.
+
 ---
 
 ## 9. Implementation Notes
@@ -1678,7 +1956,9 @@ comment     = ";" [^\n]* "\n" | "#_" form ;
 
 ---
 
-## Appendix B: Reserved Symbols
+## Appendix B: Reserved Symbols and Namespaces
+
+### Reserved Symbols
 
 ```
 ;; Special forms
@@ -1698,6 +1978,21 @@ nil true false none
 :for :return :then :value :check :on-violation
 :salience :enabled :storage :cardinality :required :attributes
 ```
+
+### Reserved Namespaces
+
+The following keyword namespaces are reserved for engine use. User code **cannot** declare components, relationships, or other entities in these namespaces:
+
+| Namespace | Purpose | Example |
+|-----------|---------|---------|
+| `:runtime/*` | Engine runtime values | `:runtime/tick`, `:runtime/seed` |
+| `:system/*` | System-generated effects | `:system/clamp`, `:system/error` |
+| `:meta/*` | Entity metadata | `:meta/rule`, `:meta/component` |
+| `:internal/*` | Implementation details | `:internal/archetype-id` |
+
+Attempting to `(set! entity :runtime/tick 42)` is a compile-time or load-time error.
+
+User-defined namespaces should use project-specific prefixes (e.g., `:game/*`, `:myproject/*`).
 
 ---
 
@@ -1812,4 +2107,4 @@ nil true false none
 
 ---
 
-*End of Specification v0.4*
+*End of Specification v0.5*
