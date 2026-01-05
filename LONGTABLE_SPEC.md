@@ -1,4 +1,4 @@
-# Longtable Specification v0.1
+# Longtable Specification v0.2
 
 ## 1. Overview & Goals
 
@@ -14,15 +14,17 @@ Longtable is a rule-based simulation engine combining:
 
 ### 1.2 Design Philosophy
 
-1. **Everything Is An Entity** - Rules, components schemas, relationships, and even the world itself are entities that can be queried and manipulated.
+1. **Everything Is An Entity** - Rules, component schemas, relationships, and even the world itself are entities that can be queried and manipulated.
 
 2. **World As Value** - The world state is immutable. Each tick produces a new world. This enables rollback, time-travel debugging, and "what-if" exploration.
 
-3. **Effects, Not Mutations** - Rules don't mutate state directly. They produce effects that are collected, validated, and applied atomically.
+3. **Effects, Not Mutations** - Rules don't mutate state directly. They produce effects that are applied to a transaction overlay, then committed atomically.
 
-4. **Explicit Over Implicit** - Strong typing (nil ≠ false), explicit optionality, declared component schemas.
+4. **Explicit Over Implicit** - Strong typing (`nil ≠ false`), explicit optionality, declared component schemas.
 
 5. **Observability From The Start** - Change tracking, rule tracing, and debugging primitives are core features, not afterthoughts.
+
+6. **Internal Consistency** - One unified syntax for pattern matching across rules, queries, derived components, and constraints.
 
 ### 1.3 Target Use Cases
 
@@ -62,7 +64,46 @@ A world is **never mutated**. The `tick` function takes a world and inputs, retu
 tick : (World, Vec<Input>) -> Result<World, RollbackError>
 ```
 
-### 2.2 Entity
+### 2.2 Tick Overlay (Transaction Model)
+
+During tick execution, an **Overlay** acts as a mutable transaction buffer on top of the immutable base world:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     TICK EXECUTION                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│   Base World (immutable)                                     │
+│   ════════════════════════                                   │
+│   • The committed world state from end of previous tick      │
+│   • Used for: rule activation, pattern matching, `prev`      │
+│   • Never modified during tick execution                     │
+│                                                              │
+│   Overlay (mutable transaction buffer)                       │
+│   ════════════════════════════════════                       │
+│   • Collects all effects from rule execution                 │
+│   • Reads: check overlay first, fall back to base world      │
+│   • Writes: always go to overlay                             │
+│                                                              │
+│   On Commit                                                  │
+│   ═════════                                                  │
+│   • Materialize new World = Base + Overlay diffs             │
+│   • New world becomes base for next tick                     │
+│   • On error: discard overlay, world unchanged               │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Read semantics during tick:**
+- `(get entity :component)` reads from overlay if present, else base world
+- `(prev entity :component)` always reads from previous tick's committed world
+
+**Write semantics during tick:**
+- All effects (`set!`, `spawn!`, `destroy!`, etc.) write to overlay
+- Effects are immediately visible to subsequent expressions in the same rule
+- Effects are immediately visible to subsequent rules in execution order
+
+### 2.3 Entity
 
 An **Entity** is a unique identity that can have components attached. Entities have no inherent data—they are pure identity.
 
@@ -82,7 +123,7 @@ Entities are created with `spawn!` and destroyed with `destroy!`:
 (destroy! some-entity)
 ```
 
-### 2.3 Component
+### 2.4 Component
 
 A **Component** is a named, typed data structure attached to an entity. Components are declared with schemas:
 
@@ -97,7 +138,7 @@ A **Component** is a named, typed data structure attached to an entity. Componen
   :y :float
   :z :float :default 0.0)
 
-;; Boolean "tag" components
+;; Boolean "tag" components (single-field shorthand)
 (component: tag/player :bool :default true)
 (component: tag/enemy :bool :default true)
 ```
@@ -112,7 +153,7 @@ Components are accessed and modified through entities:
 (update! entity :health/current inc)   ;; Apply function to field
 ```
 
-### 2.4 Archetype
+### 2.5 Archetype
 
 An **Archetype** is the set of component types an entity has. Archetypes emerge implicitly from entity composition—they are not declared.
 
@@ -122,36 +163,52 @@ Entity B has: [Position, Velocity, Health]  -> Archetype 1 (same)
 Entity C has: [Position, Health]            -> Archetype 2 (different)
 ```
 
-Entities with the same archetype are stored together in Structure-of-Arrays (SoA) layout for cache efficiency:
+When querying `[?e :position _] [?e :velocity _]`:
+- Entities A and B match (both have Position AND Velocity)
+- Entity C does not match (has Position but no Velocity)
 
-```
-Archetype 1:
-  entity_ids:  [A, B, ...]
-  positions:   [{x:0,y:0}, {x:5,y:3}, ...]
-  velocities:  [{dx:1,dy:0}, {dx:0,dy:1}, ...]
-  healths:     [{cur:100,max:100}, {cur:80,max:100}, ...]
-```
+The engine can skip entire archetypes that lack required components, making queries efficient.
 
-When an entity gains or loses components, it moves to a different archetype.
+**Implementation Note**: The engine may use Structure-of-Arrays (SoA) layout for cache efficiency, but this is an implementation detail not guaranteed by the spec.
 
-### 2.5 Relationship
+### 2.6 Relationship
 
-A **Relationship** is a typed, directional connection between entities. Relationships are declared with cardinality and cascade behavior:
+A **Relationship** is a typed, directional connection between entities. Each relationship declaration specifies **one canonical storage strategy**:
 
 ```clojure
+;; Field-based relationship (lightweight, stored as component)
 (relationship: follows
+  :storage :field
   :cardinality :many-to-many
   :on-target-delete :remove)
 
-(relationship: parent
-  :cardinality :one-to-many
-  :on-target-delete :cascade)   ;; Destroying parent destroys children
-
-(relationship: spouse
-  :cardinality :one-to-one
-  :on-target-delete :nullify
-  :required false)              ;; Can be nil
+;; Entity-based relationship (heavyweight, can have attributes)
+(relationship: employment
+  :storage :entity
+  :cardinality :many-to-one
+  :on-target-delete :cascade
+  :attributes [:start-date :int
+               :salary :int
+               :title :string])
 ```
+
+**Storage strategies:**
+
+| Strategy | Use When | Example |
+|----------|----------|---------|
+| `:field` | Simple connections, no extra data | `:follows`, `:parent`, `:in-room` |
+| `:entity` | Relationships need attributes | `:employment`, `:friendship-with-history` |
+
+**Cardinality:**
+- `:one-to-one` - Each source has at most one target; error on duplicate
+- `:one-to-many` - Each source can have many targets
+- `:many-to-one` - Many sources can point to one target
+- `:many-to-many` - No restrictions
+
+**On-target-delete behaviors:**
+- `:remove` - Remove the relationship when target is destroyed
+- `:cascade` - Destroy the source entity when target is destroyed
+- `:nullify` - Set to `none` (only valid if `:required false`)
 
 Relationships are manipulated with `link!` and `unlink!`:
 
@@ -160,70 +217,43 @@ Relationships are manipulated with `link!` and `unlink!`:
 (unlink! alice :follows bob)
 ```
 
-**Relationship-as-Component**: Simple relationships are stored as component fields:
+The system maintains bidirectional indices automatically for O(1) traversal in both directions.
 
-```clojure
-[alice :follows bob]  ;; alice has a :follows component pointing to bob
-```
+### 2.7 Rule
 
-**Relationship-as-Entity**: Complex relationships with attributes are full entities:
-
-```clojure
-(spawn! {:edge/follows true
-         :edge/from alice
-         :edge/to bob
-         :follow/distance 5
-         :follow/since tick-42})
-```
-
-The system maintains bidirectional indices automatically, so both forward traversal (`who does alice follow?`) and reverse traversal (`who follows bob?`) are O(1).
-
-### 2.6 Rule
-
-A **Rule** is a reactive unit of logic: a pattern (conditions) and a body (effects).
+A **Rule** is a reactive unit of logic with a unified query-like syntax:
 
 ```clojure
 (rule: apply-damage
-  :salience 50                         ;; Priority (higher = earlier)
-  ;; Pattern: match entities with these components
-  [?target :health/current ?hp]
-  [?target :incoming-damage ?dmg]
-  ;; Guards: additional conditions
-  [(> ?dmg 0)]
-  =>
-  ;; Body: effects to apply
-  (set! ?target :health/current (- ?hp ?dmg))
-  (destroy! (query-one [?d :incoming-damage ?dmg]
-                       [?d :damage/target ?target]
-                       => ?d)))
+  :salience   50
+  :where      [[?target :health/current ?hp]
+               [?target :incoming-damage ?dmg]]
+  :guard      [(> ?dmg 0)]
+  :then       [(set! ?target :health/current (- ?hp ?dmg))
+               (destroy! ?dmg-source)])
 ```
 
-Rules are themselves entities with components:
+Rules are themselves entities with components, meaning they can be queried, enabled/disabled, and even created by other rules (changes take effect next tick).
+
+### 2.8 Derived Component
+
+A **Derived Component** is a computed value that behaves like a component but is calculated from other data:
 
 ```clojure
-[rule-entity :rule/name "apply-damage"]
-[rule-entity :rule/salience 50]
-[rule-entity :rule/enabled true]
-[rule-entity :rule/pattern <compiled-pattern>]
-[rule-entity :rule/body <compiled-body>]
-```
-
-This means rules can be queried, enabled/disabled, and even created by other rules.
-
-### 2.7 Derived Component
-
-A **Derived Component** is a computed value that behaves like a component but is calculated from other components. Derived components are lazily evaluated and aggressively cached.
-
-```clojure
-(derived: combat/effective-damage
-  [?e :combat/base-damage ?base]
-  [?e :combat/damage-multiplier ?mult]
-  => (* ?base ?mult))
-
 (derived: health/percent
-  [?e :health/current ?curr]
-  [?e :health/max ?max]
-  => (/ (* ?curr 100) ?max))
+  :for   ?self
+  :where [[?self :health/current ?curr]
+          [?self :health/max ?max]]
+  :value (/ (* ?curr 100) ?max))
+
+;; With aggregation across entities
+(derived: faction/total-power
+  :for       ?faction
+  :where     [[?faction :tag/faction]
+              [?member :faction ?faction]
+              [?member :power ?p]]
+  :aggregate {:total (sum ?p)}
+  :value     ?total)
 ```
 
 Derived components:
@@ -232,29 +262,26 @@ Derived components:
 - Can be used in rule patterns and queries
 - Track dependencies automatically
 
-**Cycle Detection**: Cycles in derived component dependencies within a single tick are compile-time errors. Feedback loops across ticks (via regular components and rules) are allowed and powerful.
+**Cycle Detection**: Cycles in derived component dependencies within a single tick are compile-time errors. Feedback loops across ticks (via regular components and rules) are allowed.
 
-### 2.8 Constraint
+### 2.9 Constraint
 
-A **Constraint** is an invariant that is checked after effects are applied. Violations trigger specified behaviors.
+A **Constraint** is an invariant checked after rule execution:
 
 ```clojure
-(constraint: health-non-negative
-  [?e :health/current ?hp]
-  [(>= ?hp 0)]
-  :on-violation :rollback)
-
-(constraint: health-capped
-  [?e :health/current ?hp]
-  [?e :health/max ?max]
-  [(<= ?hp ?max)]
-  :on-violation :clamp)        ;; Automatically fix
-
-(constraint: inventory-limit
-  [?e :inventory/count ?c]
-  [(<= ?c 100)]
-  :on-violation :warn)         ;; Log warning, allow
+(constraint: health-bounds
+  :where       [[?e :health/current ?hp]
+                [?e :health/max ?max]]
+  :check       [(>= ?hp 0) (<= ?hp ?max)]
+  :on-violation :clamp)
 ```
+
+**Violation behaviors:**
+- `:rollback` - Entire tick fails, world unchanged
+- `:clamp` - Automatically adjust to satisfy constraint (traced as system effect)
+- `:warn` - Log warning, allow violation
+
+When `:clamp` is triggered, the adjustment is recorded as a **system-generated effect** in the trace, showing which constraint fired and what it changed.
 
 ---
 
@@ -300,7 +327,7 @@ A **Constraint** is an invariant that is checked after effects are applied. Viol
 Longtable is **statically typed at the schema level**:
 - Component field types are declared and enforced
 - Function parameter/return types can be annotated (optional)
-- Rule patterns are type-checked against component schemas
+- Patterns are type-checked against component schemas
 
 ```clojure
 (fn: add-ints :- :int [a :- :int, b :- :int]
@@ -308,6 +335,30 @@ Longtable is **statically typed at the schema level**:
 ```
 
 Type errors are caught at load time, not runtime.
+
+### 3.5 Equality and Hashing
+
+For collections, indices, and deduplication, equality and hashing follow these rules:
+
+**Primitives:**
+- `nil`, `true`, `false` - identity equality
+- `:int` - numeric equality
+- `:float` - IEEE equality with exceptions:
+  - `NaN ≠ NaN` (IEEE behavior)
+  - `-0.0 = +0.0`
+  - For hashing: all NaN values hash identically
+- `:string` - byte-wise equality
+- `:symbol`, `:keyword` - interned identity comparison (fast)
+- `:entity-ref` - equality by `(index, generation)` pair
+
+**Composites:**
+- `:vec`, `:set`, `:map` - deep structural equality
+- Order matters for `:vec`, not for `:set` or `:map`
+
+**Hashing:**
+- Must be consistent with equality
+- Floats: hash based on bit representation (NaN hashes to fixed value)
+- Collections: combine element hashes
 
 ---
 
@@ -348,15 +399,42 @@ symbol              ;; symbol (evaluated as variable reference)
 #entity[42.3]       ;; entity reference (index.generation)
 ```
 
-#### Tagged Literals (Extensible)
+#### Tagged Literals
+
+Tagged literals provide custom syntax that expands at read time:
 
 ```clojure
-#pos[10 20]         ;; Custom: expands to position
-#rgb[255 128 0]     ;; Custom: expands to color
-#dice"2d6+3"        ;; Custom: expands to dice roll spec
+;; Built-in
+#entity[42.3]       ;; Entity reference
+
+;; User-defined (must be declared before use)
+#pos[10 20]         ;; Custom position literal
+#rgb[255 128 0]     ;; Custom color literal
 ```
 
-### 4.2 Special Forms
+### 4.2 Tagged Literal Definitions
+
+Define custom tagged literals with `literal:`:
+
+```clojure
+(literal: pos [x :- :int, y :- :int]
+  {:x x :y y})
+
+(literal: rgb [r :- :int, g :- :int, b :- :int]
+  {:r r :g g :b b :a 255})
+
+(literal: dice [spec :- :string]
+  (parse-dice-notation spec))
+
+;; Usage (after definition):
+#pos[10 20]         ;; => {:x 10 :y 20}
+#rgb[255 128 0]     ;; => {:r 255 :g 128 :b 0 :a 255}
+#dice"2d6+3"        ;; => {:count 2 :sides 6 :modifier 3}
+```
+
+Tagged literals are expanded at **read time** (before compilation), so they must be defined in a file that loads before first use.
+
+### 4.3 Special Forms
 
 Special forms are built into the compiler and cannot be implemented as functions.
 
@@ -371,7 +449,7 @@ Special forms are built into the compiler and cannot be implemented as functions
 (fn: ^:private helper [x] ...)      ;; Private function
 
 (let [name value ...] body...)      ;; Local bindings
-(let [{:keys [a b]} map] ...)       ;; Destructuring
+(let [{:keys [a b]} map] ...)       ;; Map destructuring
 (let [[x & rest] vec] ...)          ;; Sequence destructuring
 ```
 
@@ -390,8 +468,8 @@ Special forms are built into the compiler and cannot be implemented as functions
 (recur new-val ...)                 ;; Tail-recursive jump to loop
 
 (try expr
-  success-handler                   ;; (fn [result] ...)
-  error-handler)                    ;; (fn [error] ...)
+  (fn: [result] success-body)       ;; Called on success
+  (fn: [error] error-body))         ;; Called on error
 ```
 
 #### Quoting
@@ -402,105 +480,275 @@ Special forms are built into the compiler and cannot be implemented as functions
 `(a ~b ~@c)         ;; Syntax-quote with unquote/unquote-splicing
 ```
 
-### 4.3 Declaration Forms
+### 4.4 Pattern Matching (`match`)
 
-These declare structural elements of the world:
+The `match` form provides structural pattern matching on values:
 
 ```clojure
-;; World metadata
+(match value
+  ;; Literal patterns
+  nil "was nil"
+  42 "was forty-two"
+  :keyword "was keyword"
+
+  ;; Variable binding
+  ?x (str "bound to " ?x)
+
+  ;; Wildcard
+  _ "matched anything"
+
+  ;; Vector patterns
+  [] "empty vector"
+  [?head & ?tail] (str "head: " ?head)
+  [?a ?b ?c] (str "three elements")
+
+  ;; Map patterns
+  {:type :point :x ?x :y ?y} (str "point at " ?x "," ?y)
+  {:keys [name age]} (str name " is " age)
+
+  ;; With guard
+  (?n :when (> ?n 0)) "positive number"
+
+  ;; Or pattern
+  (:or :yes :true 1) "truthy value")
+```
+
+**Pattern semantics:**
+- First matching pattern wins
+- A binding name appearing multiple times must unify (equal values)
+- Map patterns ignore unspecified keys (open matching)
+- Guards (`:when`) evaluate after structural match
+
+### 4.5 Declaration Forms (Unified Syntax)
+
+All declaration forms share a common pattern-matching syntax with `:where` clauses.
+
+#### World Metadata
+
+```clojure
 (world:
   :seed 12345
   :name "My Simulation")
+```
 
-;; Component schema
+#### Component Schema
+
+```clojure
 (component: name
   :field1 :type1
   :field2 :type2 :default value
   ...)
 
-;; Relationship declaration
+;; Single-field shorthand for tags
+(component: tag/player :bool :default true)
+```
+
+#### Relationship Declaration
+
+```clojure
 (relationship: name
-  :cardinality :one-to-one|:one-to-many|:many-to-many
+  :storage :field|:entity
+  :cardinality :one-to-one|:one-to-many|:many-to-one|:many-to-many
   :on-target-delete :remove|:cascade|:nullify
-  :required true|false)
+  :required true|false
+  :attributes [...])  ;; Only for :entity storage
+```
 
-;; Rule declaration
+#### Rule Declaration
+
+```clojure
 (rule: name
-  :salience number              ;; Optional, default 0
-  :enabled true|false           ;; Optional, default true
-  [pattern-clause...]           ;; Conditions
-  [(guard-expression)]          ;; Guards
-  =>
-  effect-expressions...)        ;; Body
+  ;; Metadata
+  :salience   number              ;; Priority, default 0
+  :enabled    true|false          ;; Default true
 
-;; Derived component
+  ;; Query pipeline
+  :where      [[?e :component ?val] ...]
+  :let        [computed (expr) ...]
+  :aggregate  {:name (agg-fn ?var) ...}
+  :group-by   [?var ...]
+  :guard      [(condition) ...]
+  :order-by   [[?var :asc|:desc] ...]
+  :limit      n
+
+  ;; Effects
+  :then       [(effect!) ...])
+```
+
+#### Query
+
+```clojure
+(query
+  :where      [[?e :component ?val] ...]
+  :let        [computed (expr) ...]
+  :aggregate  {:name (agg-fn ?var) ...}
+  :group-by   [?var ...]
+  :guard      [(condition) ...]
+  :order-by   [[?var :asc|:desc] ...]
+  :limit      n
+  :return     expr)
+```
+
+#### Derived Component
+
+```clojure
 (derived: name
-  [pattern-clause...]
-  => computation-expression)
+  :for        ?self              ;; Entity this is computed for
+  :where      [[?self :dep ?val] ...]
+  :let        [...]
+  :aggregate  {...}
+  :value      expr)
+```
 
-;; Constraint
+#### Constraint
+
+```clojure
 (constraint: name
-  [pattern-clause...]
-  [(guard-expression)]
+  :where        [[?e :component ?val] ...]
+  :let          [...]
+  :aggregate    {...}
+  :guard        [...]
+  :check        [(invariant) ...]
   :on-violation :rollback|:clamp|:warn)
 ```
 
-### 4.4 Module System
+### 4.6 Query Clause Reference
+
+All query-like forms (rules, queries, derived, constraints) support these clauses:
+
+| Clause | Purpose | Available In |
+|--------|---------|--------------|
+| `:where` | Pattern matching | All |
+| `:let` | Per-match computed values | All |
+| `:aggregate` | Aggregate functions | All |
+| `:group-by` | Partition results | Rule, Query, Constraint |
+| `:guard` | Filter on computed/aggregate values | All |
+| `:order-by` | Sort results | Rule, Query |
+| `:limit` | Cap result count | Rule, Query |
+| `:for` | Entity being computed | Derived only |
+| `:return` | Output shape | Query only |
+| `:then` | Effects to execute | Rule only |
+| `:value` | Computed value | Derived only |
+| `:check` | Invariant conditions | Constraint only |
+
+**Execution order:**
+
+```
+:where      → Find all pattern matches against base snapshot
+:let        → Compute per-match values
+:aggregate  → Compute aggregates (creates new bindings)
+:group-by   → Partition by grouping variables
+:guard      → Filter based on aggregates/computed values
+:order-by   → Sort within groups (or overall)
+:limit      → Cap count per group (or overall)
+:return/:then/:value/:check → Terminal action
+```
+
+### 4.7 Aggregate Functions
+
+Available in `:aggregate` clauses:
 
 ```clojure
-;; File: game/combat.lt
+:aggregate {
+  :cnt      (count ?var)          ;; Count of matches
+  :total    (sum ?var)            ;; Sum of values
+  :minimum  (min ?var)            ;; Minimum value
+  :maximum  (max ?var)            ;; Maximum value
+  :average  (avg ?var)            ;; Average value
+  :smallest (min-by ?sort ?ret)   ;; Entity with minimum sort value
+  :largest  (max-by ?sort ?ret)   ;; Entity with maximum sort value
+  :all      (collect ?var)        ;; Vector of all values
+  :unique   (collect-set ?var)    ;; Set of unique values
+}
+```
+
+Aggregates ignore `nil` values by default. To error on `nil`, use explicit guards.
+
+### 4.8 Module System
+
+```clojure
+;; Declare namespace at top of file
 (namespace game.combat
   (:require [game.core :as core]
             [game.utils :refer [distance clamp]]
             [game.items]))
 
-;; Load from file
+;; Load another file
 (load "path/to/file.lt")
 
-;; Load from directory (loads _.lt)
+;; Load from directory (loads _.lt as entry point)
 (load "path/to/directory")
 ```
 
-### 4.5 Standard Macros
+### 4.9 Macros
 
-Implemented in Longtable itself, shipped with stdlib:
+User-defined macros expand at compile time:
+
+```clojure
+(defmacro name [args...] body...)
+```
+
+**Hygiene model** (Clojure-style):
+
+1. **Locals introduced by macros are hygienic** - automatically renamed to avoid capture
+2. **Syntax-quote (`) qualifies symbols** to the macro's namespace
+3. **Unquote (~) and unquote-splicing (~@)** splice caller expressions
+4. **Gensym (#)** creates unique symbols: `x#`
+
+```clojure
+(defmacro when [pred & body]
+  `(if ~pred (do ~@body) nil))
+
+(defmacro with-retry [n & body]
+  (let [attempts# (gensym "attempts")]
+    `(loop [~attempts# ~n]
+       (try (do ~@body)
+         (fn: [result] result)
+         (fn: [error]
+           (if (> ~attempts# 1)
+             (recur (dec ~attempts#))
+             (throw error)))))))
+```
+
+### 4.10 Standard Macros
+
+Shipped with stdlib:
 
 ```clojure
 ;; Conditionals
-(when condition body...)            ;; if without else
+(when condition body...)
 (when-not condition body...)
-(when-let [name expr] body...)      ;; bind + conditional
+(when-let [name expr] body...)
 (if-let [name expr] then else)
 (cond clause1 result1 clause2 result2 ... :else default)
 (condp pred expr clause1 result1 ...)
 (case expr val1 result1 val2 result2 ... default)
 
-;; Boolean
-(and a b c ...)                     ;; Short-circuiting
+;; Boolean (short-circuiting)
+(and a b c ...)
 (or a b c ...)
 (not x)
 
 ;; Threading
-(-> x (f a) (g b) (h))              ;; Thread first: (h (g (f x a) b))
-(->> x (f a) (g b) (h))             ;; Thread last:  (h (g (f a (f a x)) b))
-(as-> x $ (f $ a) (g b $))          ;; Thread with placeholder
-(some-> x f g h)                    ;; Thread, short-circuit on nil
+(-> x (f a) (g b) (h))
+(->> x (f a) (g b) (h))
+(as-> x $ (f $ a) (g b $))
+(some-> x f g h)
 (some->> x f g h)
-(cond-> x c1 f1 c2 f2)              ;; Conditional threading
+(cond-> x c1 f1 c2 f2)
 
 ;; Iteration
-(for [x coll, y other-coll, :when (pred x y)] body)  ;; List comprehension
-(doseq [x coll] side-effect-body)   ;; Side-effecting iteration
+(for [x coll, y other :when (pred x y)] body)
+(doseq [x coll] side-effect-body)
 ```
 
-### 4.6 Standard Library Functions
+### 4.11 Standard Library Functions
 
 #### Collections
 
 ```clojure
 ;; Basics
-(count coll)
-(empty? coll)
+(count coll) (empty? coll)
 (first coll) (rest coll) (last coll)
 (nth coll index) (nth coll index default)
 (get coll key) (get coll key default)
@@ -510,48 +758,30 @@ Implemented in Longtable itself, shipped with stdlib:
 (merge map1 map2)
 
 ;; Transformations
-(map f coll)
-(filter pred coll)
-(remove pred coll)
-(reduce f init coll)
-(reduce f coll)                     ;; First element as init
-(fold f init coll)                  ;; Alias for reduce
+(map f coll) (filter pred coll) (remove pred coll)
+(reduce f init coll) (reduce f coll)
+(fold f init coll)
 
 ;; Advanced
-(take n coll)
-(drop n coll)
-(take-while pred coll)
-(drop-while pred coll)
-(partition n coll)
-(partition-by f coll)
+(take n coll) (drop n coll)
+(take-while pred coll) (drop-while pred coll)
+(partition n coll) (partition-by f coll)
 (group-by f coll)
-(sort coll)
-(sort-by f coll)
-(reverse coll)
-(flatten coll)
-(distinct coll)
-(dedupe coll)
-(interleave coll1 coll2)
-(interpose sep coll)
-(zip coll1 coll2)
-(zip-with f coll1 coll2)
+(sort coll) (sort-by f coll)
+(reverse coll) (flatten coll)
+(distinct coll) (dedupe coll)
+(interleave coll1 coll2) (interpose sep coll)
+(zip coll1 coll2) (zip-with f coll1 coll2)
 (concat coll1 coll2 ...)
 
 ;; Predicates
-(every? pred coll)
-(some pred coll)
-(not-any? pred coll)
-(not-every? pred coll)
+(every? pred coll) (some pred coll)
+(not-any? pred coll) (not-every? pred coll)
 
 ;; Construction
-(range end)
-(range start end)
-(range start end step)
-(repeat n x)
-(repeatedly n f)
-(vec coll)
-(set coll)
-(into to-coll from-coll)
+(range end) (range start end) (range start end step)
+(repeat n x) (repeatedly n f)
+(vec coll) (set coll) (into to from)
 ```
 
 #### Math
@@ -560,14 +790,12 @@ Implemented in Longtable itself, shipped with stdlib:
 ;; Arithmetic
 (+ a b ...) (- a b ...) (* a b ...) (/ a b ...)
 (mod a b) (rem a b)
-(inc x) (dec x)
-(abs x) (neg x)
+(inc x) (dec x) (abs x) (neg x)
 
 ;; Comparison
 (< a b ...) (<= a b ...) (> a b ...) (>= a b ...)
 (= a b ...) (!= a b)
-(min a b ...) (max a b ...)
-(clamp x low high)
+(min a b ...) (max a b ...) (clamp x low high)
 
 ;; Rounding
 (floor x) (ceil x) (round x) (trunc x)
@@ -584,33 +812,26 @@ Implemented in Longtable itself, shipped with stdlib:
 ;; Constants
 pi e
 
-;; Vector Math (2D/3D)
+;; Vector Math
 (vec+ v1 v2) (vec- v1 v2)
 (vec* v scalar) (vec-scale v scalar)
-(vec-dot v1 v2)
-(vec-cross v1 v2)               ;; 3D only
+(vec-dot v1 v2) (vec-cross v1 v2)
 (vec-length v) (vec-length-sq v)
-(vec-normalize v)
-(vec-distance v1 v2)
-(vec-lerp v1 v2 t)
-(vec-angle v1 v2)
+(vec-normalize v) (vec-distance v1 v2)
+(vec-lerp v1 v2 t) (vec-angle v1 v2)
 ```
 
 #### Strings
 
 ```clojure
-(str a b c ...)                 ;; Concatenation
-(str/length s)
-(str/substring s start end)
-(str/split s delimiter)
-(str/join delimiter coll)
+(str a b c ...)
+(str/length s) (str/substring s start end)
+(str/split s delimiter) (str/join delimiter coll)
 (str/trim s) (str/trim-left s) (str/trim-right s)
 (str/lower s) (str/upper s)
-(str/starts-with? s prefix)
-(str/ends-with? s suffix)
+(str/starts-with? s prefix) (str/ends-with? s suffix)
 (str/contains? s substring)
-(str/replace s old new)
-(str/replace-all s old new)
+(str/replace s old new) (str/replace-all s old new)
 (str/blank? s)
 (format "template {} {}" arg1 arg2)
 ```
@@ -618,12 +839,11 @@ pi e
 #### Predicates
 
 ```clojure
-(nil? x) (some? x)              ;; nil checks
+(nil? x) (some? x)
 (bool? x) (int? x) (float? x) (number? x)
 (string? x) (keyword? x) (symbol? x)
 (vec? x) (set? x) (map? x) (coll? x)
-(fn? x)
-(entity? x)
+(fn? x) (entity? x)
 ```
 
 ---
@@ -635,137 +855,130 @@ pi e
 Patterns match entities and bind variables:
 
 ```clojure
-;; Basic: entity has component
+;; Basic: entity has component with value bound to variable
 [?e :health/current ?hp]
 
-;; Specific value
+;; Specific value required
 [?e :tag/player true]
 
-;; Wildcard (match any value)
+;; Wildcard (match any value, don't bind)
 [?e :position _]
 
-;; Multiple patterns (implicit join on ?e)
+;; Multiple patterns (implicit join on shared variables)
 [?e :position ?pos]
 [?e :velocity ?vel]
-[?e :health/current ?hp]
 
 ;; Cross-entity patterns
 [?a :follows ?b]
 [?b :name ?name]
-
-;; Collection into variable (all matches)
-[?enemies <- (collect [?e :tag/enemy])]
-
-;; Aggregation
-[(count [?e :tag/enemy]) ?enemy-count]
-[(sum [?e :damage/amount]) ?total-damage]
 ```
 
-### 5.2 Guards
+### 5.2 Negation
 
-Guards are arbitrary boolean expressions:
-
-```clojure
-(rule: low-health-warning
-  [?e :health/current ?hp]
-  [?e :health/max ?max]
-  [(< ?hp (* max 0.2))]         ;; hp < 20% of max
-  [(not (get ?e :warned))]      ;; not already warned
-  =>
-  ...)
-```
-
-### 5.3 Negation
-
-Match on absence of components or patterns:
+Match on absence of patterns:
 
 ```clojure
 (rule: stationary-entities
-  [?e :position _]
-  (not [?e :velocity _])        ;; Has position but NOT velocity
-  =>
-  ...)
+  :where [[?e :position _]
+          (not [?e :velocity _])]     ;; Has position but NOT velocity
+  :then  [...])
 
 (rule: lonely-entities
-  [?e :social true]
-  (not [?other :follows ?e])    ;; Nobody follows this entity
-  =>
-  ...)
+  :where [[?e :social true]
+          (not [?other :follows ?e])] ;; Nobody follows this entity
+  :then  [...])
 ```
 
-### 5.4 Previous Tick Access
+**Negation semantics**: Evaluated against the **base snapshot** (not the overlay). This ensures deterministic, order-independent evaluation.
 
-Access values from the previous tick:
+### 5.3 Previous Tick Access
+
+Access values from the committed previous tick:
 
 ```clojure
 (rule: detect-damage
-  [?e :health/current ?hp]
-  [(< ?hp (prev ?e :health/current))]  ;; Health decreased
-  =>
-  (emit! {:event/type :damage-taken
-          :event/entity ?e
-          :event/amount (- (prev ?e :health/current) ?hp)}))
+  :where [[?e :health/current ?hp]]
+  :let   [prev-hp (prev ?e :health/current)
+          damage (- prev-hp ?hp)]
+  :guard [(< ?hp prev-hp)]
+  :then  [(spawn! {:event/type :damage-taken
+                   :event/entity ?e
+                   :event/amount damage})])
 ```
 
-### 5.5 Conflict Resolution
+### 5.4 Conflict Resolution
 
 When multiple rules can fire, they are ordered by:
 
 1. **Salience** (higher fires first)
-2. **Specificity** (more conditions = more specific)
+2. **Specificity** (more pattern clauses = more specific)
 3. **Declaration order** (earlier in source fires first)
 
-```clojure
-(rule: generic-damage
-  :salience 0
-  [?e :incoming-damage ?d]
-  => ...)
-
-(rule: critical-damage
-  :salience 10                  ;; Fires before generic
-  [?e :incoming-damage ?d]
-  [(> ?d 50)]                   ;; More specific
-  => ...)
-```
-
-### 5.6 Activation & Execution Model
-
-Each tick follows this model:
+### 5.5 Activation & Execution Model (Snapshot Agenda)
 
 ```
-TICK N
-├── 1. ACTIVATION PHASE
-│   ├── Evaluate all enabled rules against current world state
-│   └── Build "activation set" of rules that match
-│
-├── 2. EXECUTION PHASE (in priority order)
-│   ├── For each rule in activation set:
-│   │   ├── Re-query matches (sees changes from earlier rules)
-│   │   ├── Execute rule body with all current matches
-│   │   └── Apply effects to world state immediately
-│   │
-│   └── Rules NOT in original activation set don't fire,
-│       even if changes would now make them match
-│
-├── 3. CONSTRAINT CHECK
-│   ├── Evaluate all constraints
-│   └── Handle violations (rollback/clamp/warn)
-│
-└── 4. COMMIT PHASE
-    ├── Flush output buffer
-    ├── world_previous = world_current
-    └── tick++
+┌─────────────────────────────────────────────────────────────┐
+│                         TICK N                               │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│ 1. ACTIVATION PHASE                                          │
+│    • Take snapshot of base world                             │
+│    • Evaluate all rule :where clauses against snapshot       │
+│    • Compute all (rule, bindings) pairs that match           │
+│    • This is the "activation set" - FROZEN for this tick     │
+│                                                              │
+│ 2. EXECUTION PHASE                                           │
+│    • Sort activations by salience/specificity/order          │
+│    • For each (rule, bindings) in sorted order:              │
+│      - Bindings are FROZEN from activation phase             │
+│      - Rule body CAN READ from overlay (sees earlier effects)│
+│      - Rule body WRITES to overlay                           │
+│    • Rules NOT in activation set do NOT fire this tick,      │
+│      even if overlay changes would now make them match       │
+│                                                              │
+│ 3. CONSTRAINT PHASE                                          │
+│    • Evaluate all constraints against overlay                │
+│    • :rollback → discard overlay, tick fails                 │
+│    • :clamp → apply fix, record as system effect             │
+│    • :warn → log warning, continue                           │
+│                                                              │
+│ 4. COMMIT PHASE                                              │
+│    • Materialize new World = base + overlay                  │
+│    • new_world.previous = base_world                         │
+│    • Flush output buffer                                     │
+│    • tick++                                                  │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-Key properties:
+**Key properties:**
 - **Deterministic**: Same inputs → same outputs
 - **No infinite loops**: Activation set is fixed at tick start
-- **Immediate visibility**: Effects visible to subsequent rules in same tick
-- **Atomic rollback**: Any error rolls back entire tick
+- **Immediate visibility**: Rule bodies see overlay changes from earlier rules
+- **Frozen bindings**: Pattern match bindings come from base snapshot
+- **Atomic rollback**: Any error discards overlay, world unchanged
+
+### 5.6 Group-By Semantics in Rules
+
+When `:group-by` is present, `:then` executes **once per group**:
+
+```clojure
+(rule: faction-bonus
+  :where     [[?e :faction ?f]
+              [?e :power ?p]]
+  :group-by  [?f]
+  :aggregate {:total-power (sum ?p)
+              :count (count ?e)}
+  :guard     [(> ?count 5)]
+  :then      [(print! (format "Faction {} has {} members with {} total power"
+                              ?f ?count ?total-power))])
+```
+
+This fires once per faction that has more than 5 members.
 
 ### 5.7 Effects
 
-Rules produce effects (they don't mutate directly):
+Effects modify the overlay (visible immediately within the tick):
 
 ```clojure
 ;; Entity lifecycle
@@ -784,21 +997,10 @@ Rules produce effects (they don't mutate directly):
 
 ;; Output (buffered until commit)
 (print! "message")
-(print! (format "Entity {} has {} hp" ?e ?hp))
 
 ;; Meta (take effect next tick)
 (enable-rule! rule-entity)
 (disable-rule! rule-entity)
-```
-
-Within a rule's body, effects apply immediately (visible to subsequent expressions):
-
-```clojure
-(rule: example
-  [?e :value ?v]
-  =>
-  (set! ?e :value (+ ?v 1))
-  (print! (get ?e :value)))     ;; Prints v+1, not v
 ```
 
 ---
@@ -810,71 +1012,97 @@ Within a rule's body, effects apply immediately (visible to subsequent expressio
 Queries use the same pattern syntax as rules:
 
 ```clojure
-;; Find all enemies with low health
+;; Basic query
 (query
-  [?e :tag/enemy]
-  [?e :health/current ?hp]
-  [(< ?hp 20)]
-  => {:entity ?e :hp ?hp})
+  :where  [[?e :tag/enemy]
+           [?e :health/current ?hp]]
+  :guard  [(< ?hp 20)]
+  :return {:entity ?e :hp ?hp})
 
-;; Find single result
-(query-one [?e :tag/player] => ?e)
+;; Shorthand queries
+(query-one
+  :where [[?e :tag/player]]
+  :return ?e)
 
-;; Count matches
-(query-count [?e :tag/enemy])
+(query-count
+  :where [[?e :tag/enemy]])
 
-;; Check existence
-(query-exists? [?e :tag/player])
+(query-exists?
+  :where [[?e :tag/player]])
 ```
 
-### 6.2 Relationship Traversal
+### 6.2 Query Evaluation Context
+
+**Queries always evaluate against the committed world**, not the in-progress overlay.
+
+- During tick execution: queries see base world (start-of-tick state)
+- Outside ticks (REPL, external): queries see latest committed world
+
+This ensures queries are deterministic and don't observe partial tick state.
+
+### 6.3 Aggregation Examples
+
+```clojure
+;; Total gold across all players
+(query
+  :where     [[?p :tag/player]
+              [?p :gold ?g]]
+  :aggregate {:total (sum ?g)}
+  :return    ?total)
+
+;; Per-faction statistics
+(query
+  :where     [[?e :faction ?f]
+              [?e :power ?p]]
+  :group-by  [?f]
+  :aggregate {:total-power (sum ?p)
+              :member-count (count ?e)
+              :avg-power (avg ?p)}
+  :return    {:faction ?f
+              :total ?total-power
+              :count ?member-count
+              :avg ?avg-power})
+
+;; Top 5 strongest enemies
+(query
+  :where    [[?e :tag/enemy]
+             [?e :power ?p]]
+  :order-by [[?p :desc]]
+  :limit    5
+  :return   ?e)
+```
+
+### 6.4 Relationship Traversal
 
 ```clojure
 ;; Forward: who does alice follow?
-(query [alice :follows ?target] => ?target)
+(query
+  :where [[alice :follows ?target]]
+  :return ?target)
 
 ;; Reverse: who follows alice?
-(query [?follower :follows alice] => ?follower)
+(query
+  :where [[?follower :follows alice]]
+  :return ?follower)
 
 ;; Multi-hop: friends of friends
 (query
-  [?me :tag/player]
-  [?me :follows ?friend]
-  [?friend :follows ?fof]
-  [(!= ?fof ?me)]
-  => ?fof)
+  :where [[?me :tag/player]
+          [?me :follows ?friend]
+          [?friend :follows ?fof]
+          (!= ?fof ?me)]
+  :return ?fof)
 ```
 
-### 6.3 Aggregations
-
-```clojure
-;; Count
-(query-count [?e :tag/enemy])
-
-;; Sum
-(query
-  [(sum [?e :value ?v]) ?total]
-  => ?total)
-
-;; Group by
-(query
-  [?e :faction ?f]
-  [?e :power ?p]
-  :group-by ?f
-  :aggregate {:total-power (sum ?p)
-              :count (count)}
-  => {:faction ?f :total-power ?total-power :count ?count})
-```
-
-### 6.4 Query Planning
+### 6.5 Query Planning
 
 The engine optimizes queries automatically:
 
 ```clojure
 (explain-query
-  [?e :tag/enemy]
-  [?e :position ?pos]
-  [(< (:x ?pos) 100)])
+  :where [[?e :tag/enemy]
+          [?e :position ?pos]]
+  :guard [(< (:x ?pos) 100)])
 
 ;; Output:
 ;; 1. Scan index :tag/enemy (est. 50 entities)
@@ -889,7 +1117,7 @@ The engine optimizes queries automatically:
 
 ### 7.1 Input Processing
 
-Inputs enter the world as entities with special components:
+Inputs enter the world as entities:
 
 ```clojure
 ;; Before tick, runtime creates:
@@ -902,32 +1130,16 @@ Rules process inputs like any other entity:
 
 ```clojure
 (rule: parse-command
-  :salience 100                 ;; Process early
-  [?input :input/raw ?text]
-  =>
-  (let [parsed (parse-command ?text)]
-    (spawn! {:command/type (:type parsed)
-             :command/args (:args parsed)
-             :command/source ?input})
-    (destroy! ?input)))
+  :salience 100
+  :where   [[?input :input/raw ?text]]
+  :then    [(let [parsed (parse-command ?text)]
+              (spawn! {:command/type (:type parsed)
+                       :command/args (:args parsed)
+                       :command/source ?input})
+              (destroy! ?input))])
 ```
 
-### 7.2 REPL Integration
-
-A low-salience "catch-all" rule can implement REPL evaluation:
-
-```clojure
-(rule: repl-eval
-  :salience -1000               ;; Very low priority
-  [?input :input/raw ?text]
-  [(str/starts-with? ?text "(")]  ;; Looks like S-expression
-  =>
-  (let [result (eval (read-string ?text))]
-    (print! (str "=> " result))
-    (destroy! ?input)))
-```
-
-### 7.3 World Singleton
+### 7.2 World Singleton
 
 A singleton entity holds global world state:
 
@@ -942,56 +1154,51 @@ A singleton entity holds global world state:
 [?world :game/difficulty :hard]
 ```
 
-### 7.4 Error Handling
+### 7.3 Error Handling
 
 ```clojure
 ;; Try/catch within rules
 (rule: safe-division
-  [?e :dividend ?a]
-  [?e :divisor ?b]
-  =>
-  (try
-    (set! ?e :result (/ ?a ?b))
-    (fn: [result] (print! (str "Result: " result)))
-    (fn: [error] (print! (str "Error: " error)))))
+  :where [[?e :dividend ?a]
+          [?e :divisor ?b]]
+  :then  [(try (/ ?a ?b)
+            (fn: [result] (set! ?e :result result))
+            (fn: [error] (print! (str "Error: " error))))])
 
-;; Uncaught errors roll back the tick
-(rule: dangerous-rule
-  [?e :value ?v]
-  =>
-  (/ ?v 0))   ;; Division by zero → tick rollback
+;; Uncaught errors roll back the entire tick
+(rule: dangerous
+  :where [[?e :value ?v]]
+  :then  [(/ ?v 0)])   ;; → tick rollback
 ```
 
 Error messages include full context:
 
 ```
 Error during tick 42:
-  Rule: dangerous-rule (defined at game/rules.lt:15)
-  Pattern match: {?e: Entity(123), ?v: 100}
+  Rule: dangerous (defined at game/rules.lt:15)
+  Activation bindings: {?e: Entity(123), ?v: 100}
   Expression: (/ ?v 0)
   Cause: Division by zero
 
   Stack trace:
     game/rules.lt:17 (/ ?v 0)
-    game/rules.lt:15 (rule: dangerous-rule ...)
+    game/rules.lt:15 (rule: dangerous ...)
 ```
 
-### 7.5 Constraint Enforcement
+### 7.4 Constraint Tracing
 
-After all rules execute, constraints are checked:
+When constraints apply `:clamp` fixes, they are traced as system effects:
 
-```clojure
-(constraint: health-bounds
-  [?e :health/current ?hp]
-  [?e :health/max ?max]
-  [(and (>= ?hp 0) (<= ?hp ?max))]
-  :on-violation :clamp)         ;; Auto-fix: clamp to [0, max]
+```
+Tick 42 constraint enforcement:
+  Constraint: health-bounds
+  Entity: Entity(42)
+  Violation: :health/current was -5, must be >= 0
+  Action: clamped to 0
+  Traced as: (system-effect :clamp Entity(42) :health/current -5 0)
 ```
 
-Violation behaviors:
-- `:rollback` - Entire tick fails, world unchanged
-- `:clamp` - Automatically adjust to satisfy constraint
-- `:warn` - Log warning, allow violation
+This allows debugging and `(why ...)` to explain constraint-applied changes.
 
 ---
 
@@ -1002,92 +1209,70 @@ Violation behaviors:
 Changes are tracked at component-field granularity:
 
 ```clojure
-;; Query what changed
 (query-changes :health/current)
-;; => [{:entity E1 :old 100 :new 75} {:entity E2 :old 50 :new 0}]
+;; => [{:entity E1 :old 100 :new 75 :source :rule/apply-damage}
+;;     {:entity E2 :old 50 :new 0 :source :rule/apply-damage}]
 
 ;; Meaningful change detection: $45 → $45 is NOT a change
-;; even if recalculated through complex logic
 ```
 
 ### 8.2 Tracing
 
 ```clojure
-;; Trace rule firings
 (trace :rule/apply-damage)
 ;; Tick 42: apply-damage fired
-;;   Matches: [{?e: Entity(5), ?dmg: 25}]
+;;   Bindings: {?target: Entity(5), ?hp: 100, ?dmg: 25}
 ;;   Effects: (set! Entity(5) :health/current 75)
 
-;; Trace entity changes
 (trace-entity entity-42)
-;; Tick 42: Entity(42) :position changed {x:0,y:0} → {x:1,y:0}
-;; Tick 42: Entity(42) :velocity unchanged
-
 (untrace :rule/apply-damage)
 ```
 
 ### 8.3 Explain
 
 ```clojure
-;; Explain how a value was computed
 (why (get entity-42 :health/current))
 ;; Value: 75
-;; Computed by: rule apply-damage at tick 42
-;; Inputs:
-;;   :health/current was 100
-;;   :incoming-damage was 25
-;; Expression: (- ?hp ?dmg) = (- 100 25) = 75
+;; Set by: rule apply-damage at tick 42
+;; Expression: (- ?hp ?dmg) where ?hp=100, ?dmg=25
 
-;; Explain derived component
-(why (get entity-42 :combat/effective-damage))
-;; Value: 50
-;; Derived from:
-;;   :combat/base-damage = 25
-;;   :combat/damage-multiplier = 2.0
-;; Expression: (* ?base ?mult) = (* 25 2.0) = 50
+(why (get entity-42 :health/percent))
+;; Value: 75
+;; Derived component: health/percent
+;; Dependencies: :health/current=75, :health/max=100
+;; Expression: (/ (* ?curr 100) ?max)
 ```
 
 ### 8.4 Breakpoints
 
 ```clojure
-;; Break when rule fires
 (break-on :rule/apply-damage)
-
-;; Break when component changes
 (break-on :health/current)
-
-;; Break when entity changes
 (break-on entity-42)
-
-;; Conditional breakpoint
 (break-on :health/current :when (fn: [old new] (= new 0)))
 
-;; In debugger:
-(step)          ;; Execute one rule
-(continue)      ;; Run to next breakpoint or tick end
-(inspect ?e)    ;; Show entity state
-(locals)        ;; Show rule bindings
+;; Debugger commands:
+(step)        ;; Execute one rule
+(continue)    ;; Run to next breakpoint
+(inspect ?e)  ;; Show entity
+(locals)      ;; Show bindings
 ```
 
 ### 8.5 Time Travel
 
 ```clojure
-;; Navigate history
 (rollback! 5)           ;; Go back 5 ticks
-(advance! 3)            ;; Go forward 3 ticks (if in history)
+(advance! 3)            ;; Forward 3 ticks (if in history)
 (goto-tick! 42)         ;; Jump to specific tick
 
 ;; Explore alternatives
-(let [alt-world (-> (current-world)
-                    (with-hypothetical {:entity-5 :health/current 200})
-                    (tick []))]
-  (compare-worlds (current-world) alt-world))
+(let [alt (-> (current-world)
+              (with-hypothetical {:entity-5 :health/current 200})
+              (tick []))]
+  (compare-worlds (current-world) alt))
 
-;; Timeline branching
-(branch! "what-if-no-damage")
-;; Now on branch "what-if-no-damage"
-;; Changes don't affect main timeline
+;; Branching
+(branch! "what-if")
 (switch-branch! "main")
 ```
 
@@ -1096,28 +1281,15 @@ Changes are tracked at component-field granularity:
 ```
 > (inspect entity-42)
 Entity(42) [Archetype: Position, Velocity, Health]
-  :position {:x 10.0 :y 20.0 :z 0.0}
-  :velocity {:dx 1.0 :dy 0.0 :dz 0.0}
-  :health {:current 75 :max 100 :regen-rate 0.5}
-
-> (inspect :rule/apply-damage)
-Rule: apply-damage
-  Salience: 50
-  Enabled: true
-  Pattern: [?target :health/current ?hp] [?target :incoming-damage ?dmg]
-  Last fired: tick 42 (3 times)
+  :position {:x 10.0 :y 20.0}
+  :velocity {:dx 1.0 :dy 0.0}
+  :health {:current 75 :max 100}
 
 > (tick!)
-Tick 43 completed.
-  Rules fired: 12
-  Entities changed: 8
-  Time: 234ms
+Tick 43 completed. Rules: 12, Entities changed: 8, Time: 234ms
 
 > (save! "checkpoint.lt")
-World saved to checkpoint.lt
-
 > (load! "checkpoint.lt")
-World loaded from checkpoint.lt (tick 43)
 ```
 
 ---
@@ -1135,40 +1307,30 @@ World loaded from checkpoint.lt (tick 43)
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                     Tick Executor                            │
-│  - Input ingestion                                           │
-│  - Activation set computation                                │
-│  - Rule execution orchestration                              │
-│  - Effect application                                        │
-│  - Constraint checking                                       │
-│  - Output buffer flush                                       │
+│  • Input ingestion         • Constraint checking             │
+│  • Activation computation  • Output buffer flush             │
+│  • Rule orchestration      • Overlay commit                  │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                      Rule Engine                             │
 │  ┌─────────────┐  ┌──────────────┐  ┌───────────────────┐  │
-│  │ RETE Network│  │ Query Planner│  │ Derived Component │  │
-│  │  (matching) │  │  (optimize)  │  │    Evaluator      │  │
+│  │   Pattern   │  │    Query     │  │     Derived       │  │
+│  │   Matcher   │  │   Planner    │  │    Evaluator      │  │
 │  └──────┬──────┘  └──────┬───────┘  └────────┬──────────┘  │
-│         │                │                   │              │
 │         └────────────────┼───────────────────┘              │
 │                          ▼                                   │
 │              ┌───────────────────┐                          │
 │              │   Bytecode VM     │                          │
-│              │  (expressions)    │                          │
 │              └───────────────────┘                          │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                    World (Immutable)                         │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │                    Archetypes                           │ │
-│  │   [Position, Velocity]    [Position, Velocity, Health] │ │
-│  │    SoA storage             SoA storage                 │ │
-│  └────────────────────────────────────────────────────────┘ │
+│               World (Immutable) + Overlay                    │
 │  ┌─────────────────┐ ┌─────────────────┐ ┌───────────────┐ │
-│  │  Relationships  │ │     Indices     │ │ Derived Cache │ │
+│  │    Entities     │ │     Indices     │ │ Derived Cache │ │
 │  └─────────────────┘ └─────────────────┘ └───────────────┘ │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -1179,27 +1341,15 @@ World loaded from checkpoint.lt (tick 43)
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 9.2 RETE Network
+### 9.2 Pattern Matching Implementation
 
-The RETE algorithm provides incremental pattern matching:
+For v0.1, pattern matching uses **indices + join planning**:
 
-**Alpha Network**: Tests individual patterns
-- One alpha node per pattern clause
-- Filters entities matching the pattern
-- Stores matches in alpha memory
+1. **Component indices**: `ComponentType → Set<EntityId>`
+2. **Join order optimization**: Start with most selective pattern
+3. **Filter application**: Apply guards after structural matching
 
-**Beta Network**: Joins across patterns
-- Beta nodes combine results from alpha nodes
-- Performs variable unification
-- Stores partial matches in beta memory
-
-**Production Nodes**: Rule firing
-- Terminal nodes for complete matches
-- Trigger rule activation
-
-**Incremental Updates**:
-- When components change, only affected alpha/beta nodes update
-- Most ticks only touch a small fraction of the network
+Full RETE network implementation may be added in future versions for incremental matching across ticks.
 
 ### 9.3 Bytecode VM
 
@@ -1207,178 +1357,104 @@ The VM executes compiled expressions:
 
 **Compilation**: DSL → AST → Bytecode
 
-**Instruction Categories**:
-- Stack operations: `PUSH`, `POP`, `DUP`
+**Instruction categories**:
+- Stack: `PUSH`, `POP`, `DUP`
 - Arithmetic: `ADD`, `SUB`, `MUL`, `DIV`, `MOD`
 - Comparison: `LT`, `LE`, `GT`, `GE`, `EQ`, `NE`
-- Control flow: `JUMP`, `JUMP_IF`, `CALL`, `RETURN`
-- Data access: `GET_COMPONENT`, `GET_FIELD`, `GET_LOCAL`
+- Control: `JUMP`, `JUMP_IF`, `CALL`, `RETURN`
+- Data: `GET_COMPONENT`, `GET_FIELD`, `GET_LOCAL`
 - Effects: `SPAWN`, `DESTROY`, `SET`, `UPDATE`
-
-**Optimization**:
-- Constant folding
-- Dead code elimination
-- Inline caching for component access
 
 ### 9.4 Persistent Data Structures
 
-**HAMT (Hash Array Mapped Trie)**: For maps
-- O(log32 n) ≈ O(1) for practical sizes
-- Structural sharing on updates
-- Used for: entity→components, component→entities, world state
+**HAMT**: O(log32 n) maps with structural sharing
+**RRB-Vector**: O(log n) vectors with efficient slice/concat
 
-**RRB-Vector (Relaxed Radix Balanced)**: For sequences
-- O(log n) random access
-- O(1) amortized append
-- Efficient concatenation and slicing
-- Used for: entity lists in archetypes, event queues
+These enable cheap world snapshots for time travel.
 
-**Structural Sharing**:
-```
-world_tick_41 ──┬── entities ─── shared ───┐
-                │                          │
-world_tick_42 ──┴── entities ─── [new] ────┘
-                                   │
-                         (only changed entities)
-```
-
-### 9.5 Storage Layout
-
-**Archetype SoA Storage**:
-```
-Archetype [Position, Velocity, Health]:
-  entity_ids: [E1, E2, E3, E4, ...]      // Dense array
-  positions:  [P1, P2, P3, P4, ...]      // Parallel array
-  velocities: [V1, V2, V3, V4, ...]      // Parallel array
-  healths:    [H1, H2, H3, H4, ...]      // Parallel array
-```
-
-Benefits:
-- Cache-friendly iteration over single component type
-- Good for rules that process many entities with same components
-
-**Indices**:
-- `EntityId → ArchetypeId, row` (find entity's data)
-- `ComponentType → Set<EntityId>` (find entities with component)
-- `Relationship → (forward: Map, reverse: Map)` (bidirectional traversal)
-- Optional: field value → entities (for filtered queries)
-
-### 9.6 RNG Design
+### 9.5 RNG Design
 
 ```
 World Seed
-    │
-    ├── Tick N Seed = hash(world_seed, N)
-    │   │
-    │   ├── Rule "foo" Seed = hash(tick_seed, "foo")
-    │   │   │
-    │   │   └── Entity E Seed = hash(rule_seed, E.id)
-    │   │
-    │   └── Rule "bar" Seed = hash(tick_seed, "bar")
-    │
-    └── Tick N+1 Seed = hash(world_seed, N+1)
+├── Tick N Seed = hash(world_seed, N)
+│   ├── Rule "foo" Seed = hash(tick_seed, "foo")
+│   │   └── Entity E Seed = hash(rule_seed, E.id)
+│   └── Rule "bar" Seed = hash(tick_seed, "bar")
+└── Tick N+1 Seed = hash(world_seed, N+1)
 ```
 
-Properties:
-- Deterministic within a run
-- Rules don't affect each other's RNG
-- Replayable from any tick with same seed
+Deterministic within a run, independent per-rule.
+
+### 9.6 Native Function Registration
+
+Native functions (Rust-implemented, callable from DSL) declare metadata:
+
+```rust
+#[longtable::native_fn(
+    name = "math/pathfind",
+    signature = "(:vec<:int>, :vec<:int>) -> :vec<:vec<:int>>",
+    effect = "pure",           // pure | effectful
+    determinism = "deterministic"  // deterministic | nondeterministic
+)]
+fn pathfind(from: Value, to: Value) -> Result<Value, Error> {
+    // Implementation
+}
+```
+
+**Effect/determinism rules:**
+
+| Flags | Allowed In |
+|-------|-----------|
+| `pure` + `deterministic` | Everywhere (queries, guards, derived, rules) |
+| `pure` + `nondeterministic` | Rule `:then` only (must use provided RNG) |
+| `effectful` | Rule `:then` only |
+
+Pure/deterministic functions are optimizable; others are not.
 
 ### 9.7 Rust API
 
 ```rust
-/// Opaque world handle
-pub struct World { /* ... */ }
+pub struct World { /* opaque */ }
 
-/// Generational entity identifier
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
-pub struct EntityId {
-    index: u64,
-    generation: u32,
-}
+pub struct EntityId { index: u64, generation: u32 }
 
-/// Dynamic value type
 pub enum Value {
-    Nil,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(Arc<str>),
-    Symbol(SymbolId),
-    Keyword(KeywordId),
+    Nil, Bool(bool), Int(i64), Float(f64),
+    String(Arc<str>), Symbol(SymbolId), Keyword(KeywordId),
     EntityRef(EntityId),
-    Vec(Arc<Vector<Value>>),
-    Set(Arc<HashSet<Value>>),
+    Vec(Arc<Vector<Value>>), Set(Arc<HashSet<Value>>),
     Map(Arc<HashMap<Value, Value>>),
-    Option(Option<Box<Value>>),
-    Result(Result<Box<Value>, Box<Value>>),
+    Option(Option<Box<Value>>), Result(Result<Box<Value>, Box<Value>>),
 }
 
 impl World {
-    /// Create a new world with the given seed
     pub fn new(seed: u64) -> Result<World, Error>;
-
-    /// Load and execute DSL source code
     pub fn load(&mut self, source: &str) -> Result<(), Error>;
-
-    /// Load from file
     pub fn load_file(&mut self, path: &Path) -> Result<(), Error>;
-
-    /// Execute one tick with the given inputs
     pub fn tick(&self, inputs: Vec<Value>) -> Result<World, TickError>;
-
-    /// Execute a query, returning results
     pub fn query(&self, query: &str) -> Result<Vec<Value>, Error>;
-
-    /// Get a component value from an entity
     pub fn get(&self, entity: EntityId, component: &str) -> Result<Value, Error>;
-
-    /// Get current tick number
     pub fn current_tick(&self) -> u64;
-
-    /// Access previous world state (for time travel)
     pub fn previous(&self) -> Option<&World>;
-
-    /// Serialize world to bytes
     pub fn save(&self) -> Result<Vec<u8>, Error>;
-
-    /// Deserialize world from bytes
     pub fn restore(bytes: &[u8]) -> Result<World, Error>;
-}
-
-/// Register a native function callable from DSL
-#[longtable::native_fn]
-fn my_pathfind(from: Value, to: Value) -> Result<Value, Error> {
-    // Implementation
 }
 ```
 
 ### 9.8 File Format
 
-World saves use MessagePack with this structure:
+MessagePack with structure:
 
 ```
 {
-  "version": "0.1",
+  "version": "0.2",
   "tick": 42,
   "seed": 12345,
-  "entities": {
-    "42.3": {                    // EntityId as string
-      "position": {"x": 10.0, "y": 20.0},
-      "health": {"current": 75, "max": 100},
-      ...
-    },
-    ...
-  },
-  "relationships": {
-    "follows": {
-      "forward": {"42.3": ["55.1", "60.2"]},
-      "reverse": {"55.1": ["42.3"], "60.2": ["42.3"]}
-    },
-    ...
-  },
-  "rules": { ... },             // Serialized rule definitions
-  "world_entity": "1.1"         // ID of world singleton
+  "entities": { "42.3": { "position": {...}, ... }, ... },
+  "relationships": { "follows": { "forward": {...}, "reverse": {...} }, ... },
+  "rules": { ... },
+  "world_entity": "1.1"
 }
 ```
 
@@ -1389,14 +1465,7 @@ World saves use MessagePack with this structure:
 ```ebnf
 program     = form* ;
 
-form        = literal
-            | symbol
-            | keyword
-            | list
-            | vector
-            | set
-            | map
-            | tagged ;
+form        = literal | symbol | keyword | list | vector | set | map | tagged ;
 
 literal     = nil | bool | int | float | string ;
 nil         = "nil" ;
@@ -1418,22 +1487,19 @@ map         = "{" (form form)* "}" ;
 
 tagged      = "#" symbol form ;
 
-comment     = ";" [^\n]* "\n"
-            | "#_" form ;
+comment     = ";" [^\n]* "\n" | "#_" form ;
 ```
 
 ---
 
 ## Appendix B: Reserved Symbols
 
-The following symbols have special meaning and cannot be redefined:
-
 ```
 ;; Special forms
-def fn: let if do match loop recur try quote
+def fn: let if do match loop recur try quote defmacro
 
 ;; Declaration forms
-world: component: relationship: derived: rule: constraint:
+world: component: relationship: derived: rule: constraint: literal:
 
 ;; Module system
 namespace load
@@ -1441,8 +1507,10 @@ namespace load
 ;; Constants
 nil true false none
 
-;; Built-in operators
-=> <- _
+;; Query clauses
+:where :let :aggregate :group-by :guard :order-by :limit
+:for :return :then :value :check :on-violation
+:salience :enabled :storage :cardinality :required :attributes
 ```
 
 ---
@@ -1465,129 +1533,97 @@ nil true false none
 ;; === File: components.lt ===
 (namespace adventure.components)
 
-;; Core components
-(component: position
-  :x :int
-  :y :int)
+(component: position :x :int :y :int)
+(component: description :short :string :long :string :default "")
+(component: name :value :string)
 
-(component: description
-  :short :string
-  :long :string :default "")
-
-(component: name
-  :value :string)
-
-;; Tags
 (component: tag/player :bool :default true)
 (component: tag/room :bool :default true)
 (component: tag/item :bool :default true)
-(component: tag/npc :bool :default true)
 
-;; Relationships
 (relationship: in-room
+  :storage :field
   :cardinality :many-to-one
   :on-target-delete :cascade)
 
-(relationship: contains
-  :cardinality :one-to-many
-  :on-target-delete :remove)
-
-;; Game state
 (component: game/turns :int :default 0)
-(component: game/score :int :default 0)
 
 
 ;; === File: rules.lt ===
 (namespace adventure.rules
   (:require [adventure.components]))
 
-;; Process movement commands
 (rule: handle-go
   :salience 100
-  [?cmd :command/type :go]
-  [?cmd :command/direction ?dir]
-  [?player :tag/player]
-  [?player :in-room ?current-room]
-  [?current-room :exits ?exits]
-  =>
-  (if-let [next-room (get ?exits ?dir)]
-    (do
-      (unlink! ?player :in-room ?current-room)
-      (link! ?player :in-room next-room)
-      (print! (get next-room :description/short)))
-    (print! "You can't go that way."))
-  (destroy! ?cmd))
+  :where   [[?cmd :command/type :go]
+            [?cmd :command/direction ?dir]
+            [?player :tag/player]
+            [?player :in-room ?current-room]
+            [?current-room :exits ?exits]]
+  :then    [(if-let [next-room (get ?exits ?dir)]
+              (do
+                (unlink! ?player :in-room ?current-room)
+                (link! ?player :in-room next-room)
+                (print! (get next-room :description/short)))
+              (print! "You can't go that way."))
+            (destroy! ?cmd)])
 
-;; Look command
 (rule: handle-look
   :salience 100
-  [?cmd :command/type :look]
-  [?player :tag/player]
-  [?player :in-room ?room]
-  =>
-  (print! (get ?room :description/long))
-  (let [items (query [?i :tag/item] [?i :in-room ?room] => ?i)]
-    (when (not (empty? items))
-      (print! "You see:")
-      (doseq [item items]
-        (print! (str "  - " (get item :name/value))))))
-  (destroy! ?cmd))
+  :where   [[?cmd :command/type :look]
+            [?player :tag/player]
+            [?player :in-room ?room]]
+  :then    [(print! (get ?room :description/long))
+            (let [items (query
+                          :where [[?i :tag/item] [?i :in-room ?room]]
+                          :return ?i)]
+              (when (not (empty? items))
+                (print! "You see:")
+                (doseq [item items]
+                  (print! (str "  - " (get item :name/value))))))
+            (destroy! ?cmd)])
 
-;; Increment turn counter
 (rule: tick-turn
   :salience -100
-  [?world :game/turns ?t]
-  [_ :command/type _]           ;; Any command was processed
-  =>
-  (update! ?world :game/turns inc))
+  :where   [[?world :game/turns ?t]
+            [_ :command/type _]]
+  :then    [(update! ?world :game/turns inc)])
 
 
 ;; === File: data/initial-world.lt ===
 (namespace adventure.data)
 
-;; Bootstrap rule - runs once
 (rule: bootstrap
   :salience 1000
-  (not [_ :world/initialized])
-  =>
-  ;; Create rooms
-  (let [entrance (spawn! {:tag/room true
-                          :name/value "Cave Entrance"
-                          :description/short "A dark cave entrance."
-                          :description/long "You stand at the mouth of a dark cave. Cold air flows from within."
-                          :exits {:north nil}})  ;; Will link to next room
+  :where   [(not [_ :world/initialized])]
+  :then    [(let [entrance (spawn! {:tag/room true
+                                    :name/value "Cave Entrance"
+                                    :description/short "A dark cave entrance."
+                                    :description/long "You stand at the mouth of a dark cave."
+                                    :exits {:north nil}})
+                  main-hall (spawn! {:tag/room true
+                                     :name/value "Main Hall"
+                                     :description/short "A vast underground hall."
+                                     :description/long "An enormous cavern stretches before you."
+                                     :exits {:south nil}})]
+              (set! entrance :exits {:north main-hall})
+              (set! main-hall :exits {:south entrance})
 
-        main-hall (spawn! {:tag/room true
-                           :name/value "Main Hall"
-                           :description/short "A vast underground hall."
-                           :description/long "An enormous cavern stretches before you. Stalactites hang from the ceiling."
-                           :exits {:south nil}})]
+              (let [player (spawn! {:tag/player true :name/value "Adventurer"})]
+                (link! player :in-room entrance))
 
-    ;; Link rooms
-    (set! entrance :exits {:north main-hall})
-    (set! main-hall :exits {:south entrance})
+              (let [lantern (spawn! {:tag/item true
+                                     :name/value "brass lantern"
+                                     :description/short "A battered brass lantern."})]
+                (link! lantern :in-room entrance))
 
-    ;; Create player
-    (let [player (spawn! {:tag/player true
-                          :name/value "Adventurer"})]
-      (link! player :in-room entrance))
+              (spawn! {:world/initialized true :game/turns 0})
 
-    ;; Create an item
-    (let [lantern (spawn! {:tag/item true
-                           :name/value "brass lantern"
-                           :description/short "A battered brass lantern."})]
-      (link! lantern :in-room entrance))
-
-    ;; Mark initialized
-    (spawn! {:world/initialized true
-             :game/turns 0
-             :game/score 0})
-
-    (print! "Welcome to THE DARK CAVE")
-    (print! "")
-    (print! (get entrance :description/long))))
+              (print! "Welcome to THE DARK CAVE")
+              (print! "")
+              (print! (get entrance :description/long)))])
 ```
 
 ---
 
-*End of Specification*
+*End of Specification v0.2*
