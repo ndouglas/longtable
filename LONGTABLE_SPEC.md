@@ -1,4 +1,4 @@
-# Longtable Specification v0.6
+# Longtable Specification v0.7
 
 ## 1. Overview & Goals
 
@@ -8,9 +8,11 @@ Longtable is a rule-based simulation engine combining:
 
 - **LISP-like DSL** for defining components, rules, queries, and logic
 - **Archetype-based Entity-Component-System (ECS)** for data organization
-- **RETE-style rule engine** for reactive, incremental pattern matching
+- **Pattern-matching rule engine** with incremental optimization
 - **Persistent/functional data structures** enabling time-travel debugging
 - **Tick-based discrete simulation** with transactional semantics
+
+> **Note on RETE**: While Longtable MAY use RETE-like data structures internally for efficient incremental pattern matching, it does NOT support RETE-style rule chaining. Rules activate based on tick-start state only; within-tick effects don't trigger new activations. See Section 5.5 for details.
 
 ### 1.2 Design Philosophy
 
@@ -356,29 +358,39 @@ A **Constraint** is an invariant checked after rule execution:
 
 ```clojure
 (constraint: health-bounds
-  :salience     10                         ;; Higher = checked first
   :where        [[?e :health/current ?hp]
                  [?e :health/max ?max]]
   :check        [(>= ?hp 0) (<= ?hp ?max)]
-  :on-violation :clamp)
+  :on-violation :rollback)
 ```
 
 **Violation behaviors:**
-- `:rollback` - Entire tick fails, world unchanged
-- `:clamp` - Automatically adjust to satisfy constraint (traced as system effect)
+- `:rollback` - Entire tick fails, world unchanged (default)
 - `:warn` - Log warning, allow violation
 
-When `:clamp` is triggered, the adjustment is recorded as a **system-generated effect** in the trace, showing which constraint fired and what it changed.
+**No automatic clamping**: Constraints detect violations but don't fix them. If you need boundary enforcement, write an explicit rule:
 
-**Constraint ordering**: Constraints are evaluated in order by:
+```clojure
+;; Instead of :clamp, use explicit rules for clarity
+(rule: clamp-health
+  :salience -100                          ;; Run after combat rules
+  :where [[?e :health/current ?hp]
+          [?e :health/max ?max]]
+  :then [(when (< ?hp 0)
+           (set! ?e :health/current 0))
+         (when (> ?hp ?max)
+           (set! ?e :health/current ?max))])
+```
+
+**Why no `:clamp`:**
+- Explicit rules are clearer and more debuggable
+- Rule effects appear in normal traces with provenance
+- No hidden complexity around constraint ordering or iteration
+- Users control exactly when and how clamping happens via salience
+
+**Constraint ordering**: When multiple constraints trigger violations, they are checked in order by:
 1. **Salience** (higher first, default 0)
 2. **Declaration order** (earlier first)
-
-This ordering matters because clamps modify state that later constraints see.
-
-**Constraint iteration**: Constraints run in a **single pass**. Clamps do not trigger re-evaluation of earlier constraints. If clamping constraint A causes constraint B (which already ran) to be violated, this is not detected.
-
-**Design implication**: Users must design constraints to be non-conflicting and order-aware. For example, if you have both `health >= 0` and `health <= max`, put them in the same constraint or ensure clamping one doesn't violate the other.
 
 ### 2.10 Meta-Entities (Everything Is An Entity)
 
@@ -441,6 +453,17 @@ Longtable commits to the principle that **engine concepts are queryable entities
 
 This makes Longtable self-describing and enables tooling like schema browsers, rule visualizers, and dynamic rule management.
 
+**Meta-entity phase boundary**: Changes to meta-entities take effect at **tick boundaries**, not during tick execution:
+
+| Operation | Effect Timing |
+|-----------|---------------|
+| `(disable-rule! r)` | Rule excluded from **next** tick's activation |
+| `(enable-rule! r)` | Rule included in **next** tick's activation |
+| `(set! rule :meta/salience n)` | New salience used **next** tick |
+| `(spawn! {:meta/type :rule ...})` | New rule activates **next** tick |
+
+This ensures the activation set is stable throughout a tick. A rule cannot disable itself mid-tick to prevent its own effects—once activated, it runs to completion.
+
 ---
 
 ## 3. Type System
@@ -487,7 +510,7 @@ Longtable uses `nil` directly for absent values—there is no wrapped Option typ
   :required-int :int                      ;; Must have a value, nil is error
   :optional-int :option<:int>             ;; Can be nil
   :defaulted-int :int :default 0          ;; Has default, never nil
-  :computed-default :int :default (tick)) ;; Default from expression
+  :computed-default :int :default (current-tick)) ;; Default from expression
 ```
 
 **Runtime behavior**: Values are either the value or `nil`. No unwrapping needed:
@@ -560,31 +583,44 @@ For collections, indices, and deduplication, equality and hashing follow these r
 - Floats: hash based on bit representation (NaN hashes to fixed value)
 - Collections: combine element hashes
 
-### 3.6 Deterministic Iteration Order
+### 3.6 Determinism
 
-For simulation determinism, all collections have **defined, stable iteration order**:
+Longtable guarantees **RNG determinism**: given the same world seed and inputs, random operations produce identical results.
+
+```clojure
+;; Deterministic: same seed → same random sequence
+(random)        ;; Seeded by world + tick + rule + entity
+(random-int n)  ;; Same
+```
+
+**Collection iteration order is NOT guaranteed** across runs, platforms, or implementations:
 
 | Collection | Iteration Order |
 |------------|-----------------|
-| `:vec` | Index order (0, 1, 2, ...) |
-| `:set` | Sorted by value (using total ordering) |
-| `:map` | Sorted by key (using total ordering) |
+| `:vec` | Index order (0, 1, 2, ...) — stable |
+| `:set` | Unspecified (implementation-defined) |
+| `:map` | Unspecified (implementation-defined) |
 
-**Total ordering** for sorting:
-1. By type: `nil` < `bool` < `int` < `float` < `string` < `symbol` < `keyword` < `entity-ref` < `vec` < `set` < `map`
-2. Within type: natural ordering (numeric, lexicographic, etc.)
-3. Collections: lexicographic comparison of elements
-
-This guarantees that `(collect ...)`, `(keys ...)`, `(vals ...)`, and iteration-based operations produce identical results across runs, platforms, and implementations.
+**Practical implications:**
 
 ```clojure
-;; Always deterministic, no order-by needed for reproducibility
+;; If order matters, sort explicitly:
 (query
   :where [[?e :tag/enemy]]
-  :return (collect ?e))  ;; Sorted by entity-id
+  :order-by [[?e :asc]]          ;; Explicit ordering
+  :return (collect ?e))
+
+;; Without order-by, result order is implementation-defined
+(query
+  :where [[?e :tag/enemy]]
+  :return (collect ?e))           ;; Order may vary between runs
 ```
 
-**Performance note**: Sorted iteration may use ordered persistent structures (like `OrdMap`) or sort-on-iterate. The spec guarantees behavior, not implementation strategy.
+**Why this simplification:**
+- Sorted iteration has significant runtime cost
+- Most game logic doesn't depend on iteration order
+- When order matters, explicit `:order-by` makes intent clear
+- RNG determinism (what players actually care about) is preserved
 
 ---
 
@@ -835,7 +871,7 @@ All declaration forms share a common pattern-matching syntax with `:where` claus
   :aggregate    {...}
   :guard        [...]
   :check        [(invariant) ...]
-  :on-violation :rollback|:clamp|:warn)
+  :on-violation :rollback|:warn)
 ```
 
 ### 4.6 Query Clause Reference
@@ -1204,9 +1240,39 @@ Access values from the committed previous tick:
 
 When multiple rules can fire, they are ordered by:
 
-1. **Salience** (higher fires first)
-2. **Specificity** (more pattern clauses = more specific)
+1. **Salience** (higher fires first, default 0)
+2. **Specificity** (more constraints = more specific)
 3. **Declaration order** (earlier in source fires first)
+
+**Specificity calculation:**
+- Each `:where` pattern clause adds 1
+- Each `:guard` condition adds 1
+- Negations (`not`) count as clauses
+- `:let` bindings don't count (they're computed values, not constraints)
+
+```clojure
+;; Specificity = 2 (two patterns)
+(rule: basic
+  :where [[?e :tag/enemy]
+          [?e :health ?hp]]
+  :then [...])
+
+;; Specificity = 3 (two patterns + one guard)
+(rule: more-specific
+  :where [[?e :tag/enemy]
+          [?e :health ?hp]]
+  :guard [(< ?hp 10)]
+  :then [...])
+
+;; Specificity = 3 (two patterns + one negation)
+(rule: also-specific
+  :where [[?e :tag/enemy]
+          [?e :health ?hp]
+          (not [?e :tag/boss])]
+  :then [...])
+```
+
+When salience and specificity are equal, declaration order (file position) is the final tiebreaker.
 
 ### 5.5 Activation & Execution Model (Snapshot Agenda)
 
@@ -1235,7 +1301,6 @@ When multiple rules can fire, they are ordered by:
 │ 3. CONSTRAINT PHASE                                          │
 │    • Evaluate all constraints against overlay                │
 │    • :rollback → discard overlay, tick fails                 │
-│    • :clamp → apply fix, record as system effect             │
 │    • :warn → log warning, continue                           │
 │                                                              │
 │ 4. COMMIT PHASE                                              │
@@ -1322,6 +1387,29 @@ Effects modify the overlay (visible immediately within the tick):
 ```
 
 This distinction matters when rule logic depends on intermediate state. Bindings reflect "why the rule fired"; `get`/`query` reflect "what's true now."
+
+**Stale bindings and destroyed entities**: When a rule's frozen binding references an entity that was destroyed earlier in the tick:
+
+```clojure
+(rule: example-stale
+  :where [[?e :tag/enemy] [?e :target ?victim]]
+  :then [(destroy! ?victim)                    ;; ?victim is now stale
+         (set! ?victim :hp 0)])               ;; ERROR: stale entity reference
+```
+
+- `destroy!` on the same entity multiple times is **idempotent** (no error)
+- `set!`/`update!`/`get` on a destroyed entity is a **runtime error**
+- Use `entity-exists?` or `get?` for safe conditional access:
+
+```clojure
+(rule: safe-example
+  :where [[?e :tag/enemy] [?e :target ?victim]]
+  :then [(when (entity-exists? ?victim)
+           (set! ?victim :hp 0))
+         (destroy! ?victim)])                  ;; Safe, idempotent
+```
+
+This strict behavior catches bugs where multiple rules might act on the same entity without coordination.
 
 ### 5.8 Write Conflict Semantics
 
@@ -1499,7 +1587,7 @@ A singleton entity holds **user-defined** global state. Runtime metadata is acce
 
 ```clojure
 ;; Runtime values via functions (NOT queryable components):
-(tick)          ;; => Current tick number
+(current-tick)  ;; => Current tick number
 (world-seed)    ;; => World RNG seed
 (random)        ;; => Random float in [0, 1)
 (random-int n)  ;; => Random int in [0, n)
@@ -1555,24 +1643,33 @@ Error during tick 42:
     game/rules.lt:15 (rule: dangerous ...)
 ```
 
-### 7.4 Constraint Tracing
+### 7.4 Constraint Violations
 
-When constraints apply `:clamp` fixes, they are traced as system effects:
+When constraints detect violations, they report them clearly:
 
 ```
-Tick 42 constraint enforcement:
+Tick 42 constraint violation:
   Constraint: health-bounds
   Entity: Entity(42)
-  Violation: :health/current was -5, must be >= 0
-  Action: clamped to 0
-  Traced as: (system-effect :clamp Entity(42) :health/current -5 0)
+  Check failed: (>= ?hp 0) where ?hp = -5
+  Action: rollback (tick discarded)
 ```
 
-This allows debugging and `(why ...)` to explain constraint-applied changes.
+For `:warn` constraints:
+
+```
+Tick 42 constraint warning:
+  Constraint: optional-bounds
+  Entity: Entity(42)
+  Check failed: (<= ?debt 1000) where ?debt = 1500
+  Action: warning logged, tick continues
+```
+
+This allows debugging and supports the `(why ...)` introspection when investigating failed ticks.
 
 ### 7.5 Speculative Execution & Planning
 
-Longtable's "world as value" design enables powerful AI planning. Since `tick` is a pure function and worlds are immutable, agents can simulate futures without affecting the real world.
+Longtable's "world as value" design enables powerful AI planning. Since `simulate` is a pure function and worlds are immutable, agents can simulate futures without affecting the real world.
 
 #### 7.5.1 Core API
 
@@ -1581,7 +1678,7 @@ Longtable's "world as value" design enables powerful AI planning. Since `tick` i
 (world-snapshot)  ;; => World value (the committed state before this tick)
 
 ;; Simulate a tick (pure function, no side effects escape)
-(tick world inputs)  ;; => New world value
+(simulate world inputs)  ;; => New world value
 
 ;; Query a world value (not the current overlay)
 (world-get world entity :component)
@@ -1605,7 +1702,7 @@ Longtable's "world as value" design enables powerful AI planning. Since `tick` i
   :then [(let [base (world-snapshot)
                scored (for [action ?actions]
                         {:action action
-                         :outcome (tick base [{:actor ?ai :action action}])})
+                         :outcome (simulate base [{:actor ?ai :action action}])})
                best (max-by #(evaluate (:outcome %) ?ai) scored)]
            (set! ?ai :chosen-action (:action best)))])
 ```
@@ -1620,7 +1717,7 @@ For complex AI that reasons about other agents' responses:
 
 (fn: evaluate-action [world actor action]
   (let [;; Simulate my action
-        after-my-action (tick world [{:actor actor :action action}])
+        after-my-action (simulate world [{:actor actor :action action}])
 
         ;; Simulate each other agent's response
         other-agents (world-query after-my-action
@@ -1631,7 +1728,7 @@ For complex AI that reasons about other agents' responses:
         after-responses (reduce
                           (fn [w other]
                             (let [their-action (predict-action w other)]
-                              (tick w [{:actor other :action their-action}])))
+                              (simulate w [{:actor other :action their-action}])))
                           after-my-action
                           other-agents)]
 
@@ -1643,7 +1740,7 @@ For complex AI that reasons about other agents' responses:
   ;; This is recursive - they might reason about me too!
   (let [their-options (world-get world agent :possible-actions)
         their-best (max-by #(score-world
-                              (tick world [{:actor agent :action %}])
+                              (simulate world [{:actor agent :action %}])
                               agent)
                            their-options)]
     their-best))
@@ -1696,7 +1793,7 @@ Goal-Oriented Action Planning searches for action sequences:
             ;; Expand this node
             :else
             (let [children (for [action actions
-                                 :let [next-world (tick world [{:actor actor :action action}])
+                                 :let [next-world (simulate world [{:actor actor :action action}])
                                        action-cost (action-cost action)]
                                  :when (valid-action? world actor action)]
                              {:world next-world
@@ -1740,16 +1837,16 @@ Goal-Oriented Action Planning searches for action sequences:
         guard (world-query-one world :where [[?g :blocking door]] :return ?g)
 
         ;; Plan A: Go for door
-        door-plan [(tick world [{:actor intruder :action :approach :target door}])]
+        door-plan [(simulate world [{:actor intruder :action :approach :target door}])]
         ;; Simulate guard's response
         door-after-guard (if guard
-                           (tick (first door-plan)
+                           (simulate (first door-plan)
                                  [{:actor guard :action :close :target door}])
                            (first door-plan))
         door-success? (world-get door-after-guard door :open)
 
         ;; Plan B: Go for window
-        window-plan [(tick world [{:actor intruder :action :break :target window}])]
+        window-plan [(simulate world [{:actor intruder :action :break :target window}])]
         window-success? true  ;; Windows can't be blocked
         window-cost 10]       ;; But it's noisy/costly
 
@@ -1777,7 +1874,7 @@ Speculative ticks buffer their outputs:
 
 ```clojure
 ;; Inspect what a speculative tick would have printed
-(let [future (tick (world-snapshot) [{:action :attack}])]
+(let [future (simulate (world-snapshot) [{:action :attack}])]
   (world-get future :runtime/output-buffer))
 ;; => ["You attack the goblin!" "The goblin dies!"]
 ```
@@ -1952,7 +2049,7 @@ Since rules don't chain within a tick, how do you model causality and reactive b
   :where [[?e :health/current ?hp]]
   :guard [(<= ?hp 0)]
   :then [(spawn! {:event/type :entity-died
-                  :event/tick (tick)
+                  :event/tick (current-tick)
                   :event/source ?e
                   :event/data {:final-hp ?hp}})])
 
@@ -1988,7 +2085,7 @@ Since rules don't chain within a tick, how do you model causality and reactive b
 (rule: expire-events
   :salience -1000
   :where [[?event :event/expires-at ?expires]]
-  :guard [(<= ?expires (tick))]
+  :guard [(<= ?expires (current-tick))]
   :then [(destroy! ?event)])
 ```
 
@@ -2148,9 +2245,23 @@ impl World {
 }
 ```
 
-### 9.8 File Format
+### 9.8 File Format & Serialization
 
-MessagePack with structure:
+**What gets saved:**
+
+| Content | Saved? | Notes |
+|---------|--------|-------|
+| Entity data | Yes | All components, relationships |
+| World metadata | Yes | Tick, seed, world entity |
+| Rule activations | No | Recomputed on load |
+| Derived caches | No | Recomputed on demand |
+| Bytecode | No | Recompiled from source |
+
+**Save/restore serializes world state, not compiled code**. Rules and constraints are stored as their meta-entity data, not bytecode. On restore, the engine recompiles from the original source files.
+
+**Implication**: Save files are **not portable** across DSL versions that change compilation. The saved world assumes the same source files are available at restore time.
+
+**Format**: MessagePack with structure:
 
 ```
 {
@@ -2159,10 +2270,16 @@ MessagePack with structure:
   "seed": 12345,
   "entities": { "42.3": { "position": {...}, ... }, ... },
   "relationships": { "follows": { "forward": {...}, "reverse": {...} }, ... },
-  "rules": { ... },
+  "meta_entities": { "rule/apply-damage": {...}, ... },
   "world_entity": "1.1"
 }
 ```
+
+**Restore process:**
+1. Load entity data from save file
+2. Reload and recompile source DSL files
+3. Verify meta-entity consistency (warn if rules differ)
+4. Rebuild indices and derived caches
 
 ---
 
@@ -2228,7 +2345,7 @@ The following keyword namespaces are reserved for engine use. User code **cannot
 | Namespace | Purpose | Example |
 |-----------|---------|---------|
 | `:runtime/*` | Engine runtime values | `:runtime/tick`, `:runtime/seed` |
-| `:system/*` | System-generated effects | `:system/clamp`, `:system/error` |
+| `:system/*` | System-generated effects | `:system/rollback`, `:system/error` |
 | `:meta/*` | Entity metadata | `:meta/rule`, `:meta/component` |
 | `:internal/*` | Implementation details | `:internal/archetype-id` |
 
@@ -2349,4 +2466,4 @@ User-defined namespaces should use project-specific prefixes (e.g., `:game/*`, `
 
 ---
 
-*End of Specification v0.6*
+*End of Specification v0.7*
