@@ -1,4 +1,4 @@
-# Longtable Specification v0.2
+# Longtable Specification v0.3
 
 ## 1. Overview & Goals
 
@@ -103,6 +103,22 @@ During tick execution, an **Overlay** acts as a mutable transaction buffer on to
 - Effects are immediately visible to subsequent expressions in the same rule
 - Effects are immediately visible to subsequent rules in execution order
 
+### 2.2.1 Evaluation Context Table
+
+Different operations read from different views depending on context:
+
+| Operation | Activation Phase | Execution (`:then`) | Outside Tick (REPL) |
+|-----------|------------------|---------------------|---------------------|
+| `get` | base | overlay | committed |
+| `query` | base | overlay | committed |
+| `prev` | prev | prev | prev |
+| `get-base` | base | base | committed |
+| `query-base` | base | base | committed |
+| Pattern matching | base | N/A | committed |
+| Negation (`not`) | base | N/A | committed |
+
+**Key insight**: During activation, ALL query pipeline clauses (`:where`, `:let`, `:aggregate`, `:group-by`, `:guard`, `:order-by`, `:limit`) are evaluated against the **base snapshot** to produce a frozen activation record. Only `:then` runs during execution phase with access to the overlay.
+
 ### 2.3 Entity
 
 An **Entity** is a unique identity that can have components attached. Entities have no inherent data—they are pure identity.
@@ -199,10 +215,19 @@ A **Relationship** is a typed, directional connection between entities. Each rel
 | `:field` | Simple connections, no extra data | `:follows`, `:parent`, `:in-room` |
 | `:entity` | Relationships need attributes | `:employment`, `:friendship-with-history` |
 
-**Cardinality:**
-- `:one-to-one` - Each source has at most one target; error on duplicate
-- `:one-to-many` - Each source can have many targets
-- `:many-to-one` - Many sources can point to one target
+**Cardinality and Storage Mapping:**
+
+| Cardinality | `:field` Storage | `:entity` Storage |
+|-------------|------------------|-------------------|
+| `:one-to-one` | Source component holds single EntityRef | One relationship entity per pair |
+| `:one-to-many` | Source component holds `Vec<EntityRef>` | One relationship entity per pair |
+| `:many-to-one` | Source component holds single EntityRef | One relationship entity per pair |
+| `:many-to-many` | Source component holds `Vec<EntityRef>` | One relationship entity per pair |
+
+**Cardinality enforcement:**
+- `:one-to-one` - `link!` errors if source already has a target
+- `:one-to-many` - No restrictions on source→target
+- `:many-to-one` - No restrictions on source→target
 - `:many-to-many` - No restrictions
 
 **On-target-delete behaviors:**
@@ -302,6 +327,14 @@ When `:clamp` is triggered, the adjustment is recorded as a **system-generated e
 
 **Important**: `nil ≠ false`. They are distinct values of distinct types.
 
+**NaN Debug Mode**: Float operations can produce NaN, which propagates silently. For debugging, enable NaN detection:
+
+```clojure
+(set-option! :fail-on-nan true)  ;; Any operation producing NaN throws an error
+```
+
+When enabled, operations like `(/ 0.0 0.0)` or `(sqrt -1.0)` will throw an error with a stack trace, making it easier to find the source of NaN propagation.
+
 ### 3.2 Composite Types
 
 | Type           | Description                   | Literal Examples            |
@@ -310,7 +343,6 @@ When `:clamp` is triggered, the adjustment is recorded as a **system-generated e
 | `:set<T>`      | Unordered unique collection   | `#{1 2 3}`                  |
 | `:map<K,V>`    | Key-value mapping             | `{:a 1 :b 2}`               |
 | `:option<T>`   | Optional value (Some or None) | `(some 42)`, `none`         |
-| `:result<T,E>` | Success or error              | `(ok 42)`, `(err "failed")` |
 
 ### 3.3 Type Modifiers in Component Schemas
 
@@ -923,9 +955,11 @@ When multiple rules can fire, they are ordered by:
 │                                                              │
 │ 1. ACTIVATION PHASE                                          │
 │    • Take snapshot of base world                             │
-│    • Evaluate all rule :where clauses against snapshot       │
-│    • Compute all (rule, bindings) pairs that match           │
-│    • This is the "activation set" - FROZEN for this tick     │
+│    • For each rule, evaluate ALL query pipeline clauses:     │
+│      :where → :let → :aggregate → :group-by → :guard →       │
+│      :order-by → :limit                                      │
+│    • Produces (rule, frozen-bindings) pairs                  │
+│    • This is the "activation set" - ALL BINDINGS FROZEN      │
 │                                                              │
 │ 2. EXECUTION PHASE                                           │
 │    • Sort activations by salience/specificity/order          │
@@ -1033,12 +1067,26 @@ Queries use the same pattern syntax as rules:
 
 ### 6.2 Query Evaluation Context
 
-**Queries always evaluate against the committed world**, not the in-progress overlay.
+Queries follow the same read semantics as `get`:
 
-- During tick execution: queries see base world (start-of-tick state)
-- Outside ticks (REPL, external): queries see latest committed world
+| Context | View |
+|---------|------|
+| During activation phase | Base snapshot |
+| During rule `:then` execution | Overlay (sees earlier effects) |
+| Outside tick (REPL, external) | Latest committed world |
 
-This ensures queries are deterministic and don't observe partial tick state.
+To explicitly query the base snapshot during `:then` execution, use `query-base`:
+
+```clojure
+(rule: check-original-state
+  :where [[?e :tag/enemy]]
+  :then  [(let [current-count (query-count :where [[_ :tag/enemy]])
+                original-count (query-base-count :where [[_ :tag/enemy]])]
+            (when (!= current-count original-count)
+              (print! "Enemy count changed this tick")))])
+```
+
+**Note**: Pattern matching in `:where` clauses always uses the base snapshot (frozen during activation). Use `query` within `:then` when you need to see overlay changes.
 
 ### 6.3 Aggregation Examples
 
@@ -1141,17 +1189,33 @@ Rules process inputs like any other entity:
 
 ### 7.2 World Singleton
 
-A singleton entity holds global world state:
+A singleton entity holds **user-defined** global state. Runtime metadata is accessed via functions, not components:
 
 ```clojure
-;; Automatically maintained:
-[?world :world/tick ?t]
-[?world :world/seed ?seed]
-[?world :world/initialized true]
+;; Runtime values via functions (NOT queryable components):
+(tick)          ;; => Current tick number
+(world-seed)    ;; => World RNG seed
+(random)        ;; => Random float in [0, 1)
+(random-int n)  ;; => Random int in [0, n)
 
-;; User-defined globals:
+;; World entity for USER-DEFINED globals only:
+[?world :world/singleton]          ;; Tag to find the world entity
 [?world :game/mode :exploration]
 [?world :game/difficulty :hard]
+[?world :game/turns 42]
+```
+
+**Why this separation:**
+- Runtime values (tick, seed) are read-only and shouldn't be in the ECS
+- User globals (game mode, difficulty) are mutable game state
+- Prevents users from accidentally modifying runtime invariants
+
+```clojure
+;; Find and use world entity
+(rule: increment-turns
+  :where [[?world :world/singleton]
+          [?cmd :command/type _]]
+  :then  [(update! ?world :game/turns inc)])
 ```
 
 ### 7.3 Error Handling
@@ -1425,7 +1489,7 @@ pub enum Value {
     EntityRef(EntityId),
     Vec(Arc<Vector<Value>>), Set(Arc<HashSet<Value>>),
     Map(Arc<HashMap<Value, Value>>),
-    Option(Option<Box<Value>>), Result(Result<Box<Value>, Box<Value>>),
+    Option(Option<Box<Value>>),
 }
 
 impl World {
@@ -1626,4 +1690,4 @@ nil true false none
 
 ---
 
-*End of Specification v0.2*
+*End of Specification v0.3*
