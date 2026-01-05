@@ -1,4 +1,4 @@
-# Longtable Specification v0.5
+# Longtable Specification v0.6
 
 ## 1. Overview & Goals
 
@@ -1570,6 +1570,248 @@ Tick 42 constraint enforcement:
 
 This allows debugging and `(why ...)` to explain constraint-applied changes.
 
+### 7.5 Speculative Execution & Planning
+
+Longtable's "world as value" design enables powerful AI planning. Since `tick` is a pure function and worlds are immutable, agents can simulate futures without affecting the real world.
+
+#### 7.5.1 Core API
+
+```clojure
+;; Get the base world as an immutable value
+(world-snapshot)  ;; => World value (the committed state before this tick)
+
+;; Simulate a tick (pure function, no side effects escape)
+(tick world inputs)  ;; => New world value
+
+;; Query a world value (not the current overlay)
+(world-get world entity :component)
+(world-get world entity :component/field)
+(world-query world :where [[?e :tag/enemy]] :return ?e)
+
+;; Modify a world value (returns new world, original unchanged)
+(world-assoc world entity :component value)
+(world-dissoc world entity :component)
+
+;; Hash a world for memoization/visited-set tracking
+(world-hash world)  ;; => Deterministic hash of world state
+```
+
+#### 7.5.2 Basic Speculation
+
+```clojure
+(rule: ai-choose-action
+  :where [[?ai :tag/ai-controlled]
+          [?ai :possible-actions ?actions]]
+  :then [(let [base (world-snapshot)
+               scored (for [action ?actions]
+                        {:action action
+                         :outcome (tick base [{:actor ?ai :action action}])})
+               best (max-by #(evaluate (:outcome %) ?ai) scored)]
+           (set! ?ai :chosen-action (:action best)))])
+```
+
+#### 7.5.3 Multi-Perspective Planning (Theory of Mind)
+
+For complex AI that reasons about other agents' responses:
+
+```clojure
+;; "He's guarding the door. If I approach, he'll close it.
+;;  Better to go for the window."
+
+(fn: evaluate-action [world actor action]
+  (let [;; Simulate my action
+        after-my-action (tick world [{:actor actor :action action}])
+
+        ;; Simulate each other agent's response
+        other-agents (world-query after-my-action
+                       :where [[?a :tag/ai-controlled]
+                               (!= ?a actor)]
+                       :return ?a)
+
+        after-responses (reduce
+                          (fn [w other]
+                            (let [their-action (predict-action w other)]
+                              (tick w [{:actor other :action their-action}])))
+                          after-my-action
+                          other-agents)]
+
+    ;; Evaluate the resulting world from my perspective
+    (score-world after-responses actor)))
+
+(fn: predict-action [world agent]
+  ;; Simulate what this agent would choose (using their AI)
+  ;; This is recursive - they might reason about me too!
+  (let [their-options (world-get world agent :possible-actions)
+        their-best (max-by #(score-world
+                              (tick world [{:actor agent :action %}])
+                              agent)
+                           their-options)]
+    their-best))
+
+(rule: smart-ai-planning
+  :where [[?ai :tag/smart-ai]
+          [?ai :possible-actions ?actions]]
+  :then [(let [base (world-snapshot)
+               scores (for [a ?actions]
+                        {:action a
+                         :score (evaluate-action base ?ai a)})
+               best (max-by :score scores)]
+           (set! ?ai :chosen-action (:action best)))])
+```
+
+#### 7.5.4 GOAP-Style Planning
+
+Goal-Oriented Action Planning searches for action sequences:
+
+```clojure
+(fn: plan-goap [world actor goal-fn max-depth]
+  "Find a sequence of actions that achieves goal-fn."
+  (let [actions (world-get world actor :available-actions)]
+    (loop [frontier [{:world world :plan [] :cost 0}]
+           visited #{}
+           iterations 0]
+      (cond
+        ;; No solution found
+        (empty? frontier) nil
+
+        ;; Safety limit
+        (> iterations 10000) nil
+
+        :else
+        (let [{:keys [world plan cost]} (first frontier)
+              state-hash (world-hash world)]
+          (cond
+            ;; Goal achieved!
+            (goal-fn world actor)
+            plan
+
+            ;; Already visited this state
+            (contains? visited state-hash)
+            (recur (rest frontier) visited (inc iterations))
+
+            ;; Max depth reached
+            (>= (count plan) max-depth)
+            (recur (rest frontier) visited (inc iterations))
+
+            ;; Expand this node
+            :else
+            (let [children (for [action actions
+                                 :let [next-world (tick world [{:actor actor :action action}])
+                                       action-cost (action-cost action)]
+                                 :when (valid-action? world actor action)]
+                             {:world next-world
+                              :plan (conj plan action)
+                              :cost (+ cost action-cost)})]
+              (recur (into (rest frontier) children)
+                     (conj visited state-hash)
+                     (inc iterations)))))))))
+
+;; A* variant with heuristic
+(fn: plan-astar [world actor goal-fn heuristic-fn max-depth]
+  (let [actions (world-get world actor :available-actions)
+        compare-fn (fn [a b] (< (+ (:cost a) (:heuristic a))
+                                (+ (:cost b) (:heuristic b))))]
+    (loop [frontier (sorted-set-by compare-fn
+                      {:world world :plan [] :cost 0
+                       :heuristic (heuristic-fn world actor)})
+           visited #{}]
+      ;; ... similar to above, but frontier is priority queue
+      )))
+```
+
+#### 7.5.5 The Door-and-Window Example
+
+```clojure
+;; Components
+(component: position :x :int :y :int)
+(component: blocking :target :entity-ref)  ;; "I'm blocking this"
+(component: intention :action :keyword :target :entity-ref)
+
+;; The guard's reactive behavior
+(rule: guard-blocks-door
+  :where [[?guard :blocking ?door]
+          [?intruder :intention {:action :approach :target ?door}]]
+  :then [(set! ?guard :intention {:action :close :target ?door})])
+
+;; The intruder's planning
+(fn: evaluate-entry-plan [world intruder]
+  (let [door (world-query-one world :where [[?d :tag/door]] :return ?d)
+        window (world-query-one world :where [[?w :tag/window]] :return ?w)
+        guard (world-query-one world :where [[?g :blocking door]] :return ?g)
+
+        ;; Plan A: Go for door
+        door-plan [(tick world [{:actor intruder :action :approach :target door}])]
+        ;; Simulate guard's response
+        door-after-guard (if guard
+                           (tick (first door-plan)
+                                 [{:actor guard :action :close :target door}])
+                           (first door-plan))
+        door-success? (world-get door-after-guard door :open)
+
+        ;; Plan B: Go for window
+        window-plan [(tick world [{:actor intruder :action :break :target window}])]
+        window-success? true  ;; Windows can't be blocked
+        window-cost 10]       ;; But it's noisy/costly
+
+    (if (and door-success? (not guard))
+      {:plan :door :expected-success true :cost 0}
+      {:plan :window :expected-success true :cost window-cost})))
+
+(rule: intruder-plans-entry
+  :where [[?intruder :goal :enter-building]
+          [?intruder :tag/smart-ai]]
+  :then [(let [plan (evaluate-entry-plan (world-snapshot) ?intruder)]
+           (set! ?intruder :chosen-plan (:plan plan))
+           (print! (format "{} decides: {}" ?intruder (:plan plan))))])
+```
+
+#### 7.5.6 Output Handling in Speculation
+
+Speculative ticks buffer their outputs:
+
+| Output Type | During Speculation | After Real Commit |
+|-------------|-------------------|-------------------|
+| `print!` | Attached to world value | Flushed to output |
+| `trace!` | Always live (debug channel) | Always live |
+| Effects | Applied to speculative world | Applied to overlay |
+
+```clojure
+;; Inspect what a speculative tick would have printed
+(let [future (tick (world-snapshot) [{:action :attack}])]
+  (world-get future :runtime/output-buffer))
+;; => ["You attack the goblin!" "The goblin dies!"]
+```
+
+#### 7.5.7 Performance Considerations
+
+**Structural sharing**: Worlds share structure, so forking is O(changes), not O(world-size).
+
+**Memoization**: Use `(world-hash world)` for visited-set tracking in search algorithms.
+
+**Depth limits**: Always bound search depth to prevent runaway computation.
+
+**Lazy evaluation**: Consider evaluating branches lazily or with iterative deepening.
+
+```clojure
+;; Iterative deepening for anytime planning
+(fn: plan-iterative [world actor goal-fn]
+  (loop [depth 1
+         best-plan nil]
+    (if (> depth 20)
+      best-plan
+      (let [plan (plan-goap world actor goal-fn depth)]
+        (recur (inc depth) (or plan best-plan))))))
+```
+
+**Parallel search** (if supported):
+
+```clojure
+;; Evaluate top-level branches in parallel
+(let [branches (for [action actions]
+                 (future (evaluate-action base actor action)))]
+  (max-by :score (map deref branches)))
+```
+
 ---
 
 ## 8. Observability & Debugging
@@ -2107,4 +2349,4 @@ User-defined namespaces should use project-specific prefixes (e.g., `:game/*`, `
 
 ---
 
-*End of Specification v0.5*
+*End of Specification v0.6*
