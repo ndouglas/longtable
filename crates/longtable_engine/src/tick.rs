@@ -79,6 +79,7 @@ impl TickResult {
 // =============================================================================
 
 /// Orchestrates the execution of a single tick.
+#[derive(Clone, Debug)]
 pub struct TickExecutor {
     /// Rule engine
     rule_engine: ProductionRuleEngine,

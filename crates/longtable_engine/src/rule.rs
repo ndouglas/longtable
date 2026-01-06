@@ -21,7 +21,7 @@ use crate::pattern::{Bindings, CompiledPattern, PatternMatcher};
 // =============================================================================
 
 /// A compiled rule ready for execution.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CompiledRule {
     /// Rule name (interned keyword)
     pub name: KeywordId,
@@ -110,6 +110,7 @@ pub struct EffectRecord {
 // =============================================================================
 
 /// Manages rule execution within a tick.
+#[derive(Clone, Debug)]
 pub struct ProductionRuleEngine {
     /// Refracted activations (already fired this tick)
     refracted: HashSet<u64>,

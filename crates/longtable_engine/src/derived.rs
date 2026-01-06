@@ -140,6 +140,12 @@ impl DerivedCache {
         self.version += 1;
     }
 
+    /// Returns the current cache version.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
     /// Gets a cached value if still valid.
     #[must_use]
     pub fn get(&self, entity: EntityId, derived: KeywordId) -> Option<&Value> {
@@ -192,6 +198,7 @@ impl DerivedCache {
 // =============================================================================
 
 /// Evaluates derived components.
+#[derive(Clone, Debug)]
 pub struct DerivedEvaluator {
     /// Compiled derived components
     deriveds: Vec<CompiledDerived>,

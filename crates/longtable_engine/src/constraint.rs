@@ -176,6 +176,7 @@ impl ConstraintCompiler {
 // =============================================================================
 
 /// Checks constraints against a world state.
+#[derive(Clone, Debug)]
 pub struct ConstraintChecker {
     /// Compiled constraints
     constraints: Vec<CompiledConstraint>,
