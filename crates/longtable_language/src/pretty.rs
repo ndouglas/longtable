@@ -504,12 +504,10 @@ mod tests {
                     assert_ast_equivalent(va, vb, context);
                 }
             }
-            (Ast::Quote(a, _), Ast::Quote(b, _)) => assert_ast_equivalent(a, b, context),
-            (Ast::Unquote(a, _), Ast::Unquote(b, _)) => assert_ast_equivalent(a, b, context),
-            (Ast::UnquoteSplice(a, _), Ast::UnquoteSplice(b, _)) => {
-                assert_ast_equivalent(a, b, context);
-            }
-            (Ast::SyntaxQuote(a, _), Ast::SyntaxQuote(b, _)) => {
+            (Ast::Quote(a, _), Ast::Quote(b, _))
+            | (Ast::Unquote(a, _), Ast::Unquote(b, _))
+            | (Ast::UnquoteSplice(a, _), Ast::UnquoteSplice(b, _))
+            | (Ast::SyntaxQuote(a, _), Ast::SyntaxQuote(b, _)) => {
                 assert_ast_equivalent(a, b, context);
             }
             (Ast::Tagged(ta, a, _), Ast::Tagged(tb, b, _)) => {

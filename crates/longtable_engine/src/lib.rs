@@ -15,10 +15,28 @@
 // Allow missing error docs for now
 #![allow(clippy::missing_errors_doc)]
 
+pub mod constraint;
+pub mod derived;
 pub mod pattern;
+pub mod provenance;
 pub mod query;
 pub mod rule;
 pub mod spike;
+pub mod tick;
+
+// Constraints
+pub use constraint::{
+    CompiledConstraint, ConstraintChecker, ConstraintCompiler, ConstraintResult, ViolationDetails,
+};
+
+// Derived components
+pub use derived::{CompiledDerived, DerivedCache, DerivedCompiler, DerivedEvaluator};
+
+// Provenance tracking
+pub use provenance::{ProvenanceTracker, WriteRecord};
+
+// Tick orchestration
+pub use tick::{InputEvent, TickExecutor, TickResult};
 
 // Production pattern matching
 pub use pattern::{

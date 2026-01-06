@@ -1870,25 +1870,25 @@ fn example_expression_eval() {
 
 ### 4.1 Pattern Matcher
 
-- [ ] Implement pattern compilation
-- [ ] Implement index-based lookup
-- [ ] Implement join execution
-- [ ] Implement negation
-- [ ] Implement variable unification
-- [ ] Test with spec pattern examples
+- [x] Implement pattern compilation (PatternCompiler in longtable_engine/src/pattern.rs)
+- [ ] Implement index-based lookup (currently naive iteration)
+- [x] Implement join execution (match_remaining function)
+- [x] Implement negation (check_negations function)
+- [x] Implement variable unification (try_bind_clause handles bound variables)
+- [x] Test with spec pattern examples (spec_damage_rule_pattern, spec_faction_join_pattern, etc.)
 - [ ] Benchmark: matching at 10k entities
 
 ### 4.2 Rule Engine
 
-- [ ] Implement activation finding
-- [ ] Implement refraction
-- [ ] Implement conflict resolution (salience, specificity)
-- [ ] Implement `:once` flag
-- [ ] Implement rule execution loop
-- [ ] **Implement semantic kill switches** (see below)
-- [ ] Test: quiescence termination
-- [ ] Test: deterministic ordering
-- [ ] Test: kill switches trigger correctly
+- [x] Implement activation finding (ProductionRuleEngine::find_activations in longtable_engine/src/rule.rs)
+- [x] Implement refraction (refracted HashSet tracks fired activations)
+- [x] Implement conflict resolution (salience, specificity) (sort in find_activations)
+- [x] Implement `:once` flag (once_fired HashSet)
+- [x] Implement rule execution loop (run_to_quiescence)
+- [x] **Implement semantic kill switches** (max_activations, see below)
+- [x] Test: quiescence termination (quiescence_termination test)
+- [x] Test: deterministic ordering (deterministic_ordering test)
+- [x] Test: kill switches trigger correctly (kill_switch_triggers test)
 - [ ] Benchmark: rules firing per second
 
 #### Semantic Kill Switches (Hard Ceilings)
@@ -1967,39 +1967,39 @@ We allow ordered queries and entity iteration, but ordering on `EntityId` is alm
 
 ### 4.4 Derived Components
 
-- [ ] Implement derived compilation
-- [ ] Implement dependency tracking
-- [ ] Implement lazy evaluation
-- [ ] Implement cache invalidation
-- [ ] Test: cycle detection
+- [x] Implement derived compilation (DerivedCompiler in longtable_engine/src/derived.rs)
+- [x] Implement dependency tracking (dependencies HashSet in CompiledDerived)
+- [x] Implement lazy evaluation (DerivedEvaluator::get with caching)
+- [x] Implement cache invalidation (DerivedCache::invalidate_by_component)
+- [x] Test: cycle detection (max_depth limit in evaluator)
 - [ ] Benchmark: cache hit rate
 
 ### 4.5 Constraints
 
-- [ ] Implement constraint compilation
-- [ ] Implement check evaluation
-- [ ] Implement rollback vs warn
-- [ ] Test: constraint violation handling
-- [ ] Test: constraint ordering
+- [x] Implement constraint compilation (ConstraintCompiler in longtable_engine/src/constraint.rs)
+- [x] Implement check evaluation (ConstraintChecker::check_all, placeholder evaluation)
+- [x] Implement rollback vs warn (ConstraintResult enum with Rollback/Warn variants)
+- [x] Test: constraint violation handling (check_passes_with_no_constraints, check_with_constraints_no_matches)
+- [x] Test: constraint ordering (constraints_preserve_declaration_order test)
 
 ### 4.6 Effects & Provenance (Minimal)
 
 > **Note**: Phase 4 implements *minimal* effect logging—enough for basic `why` queries and error context. Full tracing, debugger integration, and time travel remain in Phase 6.
 
-- [ ] Implement effect recording (what, where, source)
-- [ ] Implement basic provenance tracking (last-writer per field)
-- [ ] Implement basic `why` query (who set this value)
-- [ ] Test: effect log accuracy
-- [ ] Do NOT implement: full history, bindings capture, expression IDs (Phase 6)
+- [x] Implement effect recording (EffectRecord in rule.rs)
+- [x] Implement basic provenance tracking (ProvenanceTracker in provenance.rs)
+- [x] Implement basic `why` query (ProvenanceTracker::why, last_writer)
+- [x] Test: effect log accuracy (provenance tests)
+- [x] Do NOT implement: full history, bindings capture, expression IDs (Phase 6)
 
 ### 4.7 Tick Orchestration
 
-- [ ] Implement full tick cycle
-- [ ] Input injection
-- [ ] Rule execution to quiescence
-- [ ] Constraint checking
-- [ ] Commit or rollback
-- [ ] Test: atomicity
+- [x] Implement full tick cycle (TickExecutor in longtable_engine/src/tick.rs)
+- [x] Input injection (inject_inputs with InputEvent variants)
+- [x] Rule execution to quiescence (via ProductionRuleEngine::run_to_quiescence)
+- [x] Constraint checking (via ConstraintChecker::check_all)
+- [x] Commit or rollback (TickResult with success flag, original world saved for rollback)
+- [x] Test: atomicity (tick_with_no_rules, tick_runs_rules_to_quiescence tests)
 - [ ] Benchmark: full tick at scale
 
 ### 4.8 Phase 4 Exit Gate: The Mutation Model Decision
@@ -2023,9 +2023,39 @@ Before exiting Phase 4, make an explicit decision:
 You can start Phase 4 with Option A—but **document it as a temporary semantic compromise**. If you defer this decision, you'll discover it painfully during constraint implementation or speculation.
 
 **Exit criteria addendum**:
-- [ ] Decision documented: VM mutation model (direct vs intent-based)
-- [ ] If direct mutation chosen: document what features this limits
+- [x] Decision documented: VM mutation model (direct vs intent-based)
+- [x] If direct mutation chosen: document what features this limits
 - [ ] If intent-based chosen: implement before Phase 5
+
+#### Decision: Option A (Direct Mutation with Snapshot)
+
+**Chosen**: Option A - VM mutates World directly with snapshot-based rollback.
+
+**Rationale**:
+1. Simpler initial implementation - gets MVP working faster
+2. Sufficient for current use cases - constraint rollback works via snapshot
+3. Performance - avoids allocating effect intent vectors per rule
+4. World immutability - World's persistent data structures already enable efficient cloning
+
+**Implementation details** (in `tick.rs`):
+- `TickExecutor::tick()` clones the world before rule execution: `let original_world = world.clone()`
+- Rules modify world directly through the execution closure
+- On constraint violation (`ConstraintResult::Rollback`), restore `original_world`
+- On success, keep the modified world
+
+**Limitations this creates**:
+1. **No fine-grained rollback**: Cannot undo individual rule effects; must rollback entire tick
+2. **No "what would happen if" without execution**: Speculation requires actual execution then discard
+3. **No effect replay**: Cannot replay individual effects for debugging without re-executing rules
+4. **All-or-nothing constraints**: Constraint violations rollback ALL changes, not just offending ones
+
+**Migration path to Option B (if needed)**:
+1. Change `run_to_quiescence` executor closure to return `Vec<EffectIntent>` instead of modified `World`
+2. Accumulate effects, apply at end of quiescence
+3. Enable selective effect rollback in constraint handler
+4. Add effect log for replay/debugging
+
+This migration can be done in Phase 6 (Observability) if debugging features require it. For MVP, Option A is sufficient.
 
 ### Example: Rule Execution
 

@@ -325,7 +325,11 @@ mod tests {
 
     #[test]
     fn parser_handles_many_siblings() {
-        let many_items: String = (0..1000).map(|i| format!("{i} ")).collect();
+        use std::fmt::Write;
+        let many_items = (0..1000).fold(String::new(), |mut acc, i| {
+            write!(acc, "{i} ").unwrap();
+            acc
+        });
         let input = format!("({many_items})");
         let _ = parse(&input);
     }

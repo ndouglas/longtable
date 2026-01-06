@@ -464,4 +464,175 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    /// Test that `run_to_quiescence` terminates properly when no more rules can fire
+    #[test]
+    fn quiescence_termination() {
+        let (mut world, health, processed) = setup_world_with_entities();
+
+        // Create a rule that matches [?e :health] (not [?e :processed])
+        // When it fires, it should add :processed to the entity
+        let decl_pattern = DeclPattern {
+            clauses: vec![PatternClause {
+                entity_var: "e".to_string(),
+                component: "health".to_string(),
+                value: PatternValue::Wildcard,
+                span: Span::default(),
+            }],
+            negations: vec![PatternClause {
+                entity_var: "e".to_string(),
+                component: "processed".to_string(),
+                value: PatternValue::Wildcard,
+                span: Span::default(),
+            }],
+        };
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+
+        let rule_name = world.interner_mut().intern_keyword("process-health");
+        let rule = CompiledRule::new(rule_name, compiled);
+        let rules = vec![rule];
+
+        let mut engine = ProductionRuleEngine::new();
+        engine.begin_tick();
+
+        // Initially should have 2 activations (2 entities with health, none processed)
+        let initial_activations = engine.find_activations(&rules, &world);
+        assert_eq!(initial_activations.len(), 2);
+
+        // Run to quiescence with an executor that marks entities as processed
+        let result = engine.run_to_quiescence(&rules, world, |activation, w| {
+            // Mark the entity as processed
+            if let Some(entity) = activation.bindings.get_entity("e") {
+                let new_world = w.set(entity, processed, Value::Bool(true)).unwrap();
+                return Ok((vec![], new_world));
+            }
+            Ok((vec![], w.clone()))
+        });
+
+        assert!(result.is_ok());
+        let final_world = result.unwrap();
+
+        // Verify all entities are now processed
+        for entity in final_world.with_component(health) {
+            assert!(
+                final_world.has(entity, processed),
+                "Entity should be processed"
+            );
+        }
+
+        // Verify 2 activations fired
+        assert_eq!(engine.activation_count(), 2);
+    }
+
+    /// Test deterministic ordering of activations by salience then specificity
+    #[test]
+    fn deterministic_ordering() {
+        let (mut world, health, _processed) = setup_world_with_entities();
+
+        // Add more components for specificity testing
+        let tag_a = world.interner_mut().intern_keyword("tag-a");
+        let tag_b = world.interner_mut().intern_keyword("tag-b");
+
+        world = world
+            .register_component(ComponentSchema::tag(tag_a))
+            .unwrap();
+        world = world
+            .register_component(ComponentSchema::tag(tag_b))
+            .unwrap();
+
+        // Get an entity and add tags to it
+        let entities: Vec<_> = world.with_component(health).collect();
+        let e1 = entities[0];
+        world = world.set(e1, tag_a, Value::Bool(true)).unwrap();
+        world = world.set(e1, tag_b, Value::Bool(true)).unwrap();
+
+        // Create rules with different saliences and specificities:
+        // Rule 1: salience 10, 1 clause (low priority, low specificity)
+        // Rule 2: salience 10, 2 clauses (low priority, high specificity)
+        // Rule 3: salience 20, 1 clause (high priority, low specificity)
+
+        // Rule 1: [?e :health] - salience 10, specificity 1
+        let pattern1 = DeclPattern {
+            clauses: vec![PatternClause {
+                entity_var: "e".to_string(),
+                component: "health".to_string(),
+                value: PatternValue::Wildcard,
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        let compiled1 = PatternCompiler::compile(&pattern1, world.interner_mut()).unwrap();
+        let rule1_name = world.interner_mut().intern_keyword("rule1");
+        let rule1 = CompiledRule::new(rule1_name, compiled1).with_salience(10);
+
+        // Rule 2: [?e :tag-a] [?e :tag-b] - salience 10, specificity 2
+        let pattern2 = DeclPattern {
+            clauses: vec![
+                PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "tag-a".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                },
+                PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "tag-b".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                },
+            ],
+            negations: vec![],
+        };
+        let compiled2 = PatternCompiler::compile(&pattern2, world.interner_mut()).unwrap();
+        let rule2_name = world.interner_mut().intern_keyword("rule2");
+        let rule2 = CompiledRule::new(rule2_name, compiled2).with_salience(10);
+
+        // Rule 3: [?e :tag-a] - salience 20, specificity 1
+        let pattern3 = DeclPattern {
+            clauses: vec![PatternClause {
+                entity_var: "e".to_string(),
+                component: "tag-a".to_string(),
+                value: PatternValue::Wildcard,
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        let compiled3 = PatternCompiler::compile(&pattern3, world.interner_mut()).unwrap();
+        let rule3_name = world.interner_mut().intern_keyword("rule3");
+        let rule3 = CompiledRule::new(rule3_name, compiled3).with_salience(20);
+
+        let all_rules = vec![rule1, rule2, rule3];
+
+        let mut engine = ProductionRuleEngine::new();
+        engine.begin_tick();
+
+        let activations = engine.find_activations(&all_rules, &world);
+
+        // Activations for e1 should be ordered:
+        // 1. rule3 (salience 20) - highest salience wins
+        // 2. rule2 (salience 10, specificity 2) - same salience, higher specificity
+        // 3. rule1 (salience 10, specificity 1) - same salience, lower specificity
+
+        // Find activations for e1
+        let e1_activations: Vec<_> = activations
+            .iter()
+            .filter(|a| a.bindings.get_entity("e") == Some(e1))
+            .collect();
+
+        // Should have at least 3 activations for e1
+        assert!(e1_activations.len() >= 3);
+
+        // First activation should be rule3 (highest salience)
+        assert_eq!(e1_activations[0].salience, 20);
+        assert_eq!(e1_activations[0].rule_name, rule3_name);
+
+        // Among salience 10 activations, higher specificity should come first
+        let salience_10: Vec<_> = e1_activations.iter().filter(|a| a.salience == 10).collect();
+        if salience_10.len() >= 2 {
+            assert!(
+                salience_10[0].specificity >= salience_10[1].specificity,
+                "Higher specificity should come first"
+            );
+        }
+    }
 }

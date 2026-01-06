@@ -358,12 +358,12 @@ impl PatternMatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use longtable_foundation::LtMap;
+    use longtable_foundation::{LtMap, Type};
     use longtable_language::Span;
     use longtable_language::declaration::{
         Pattern as DeclPattern, PatternClause as DeclClause, PatternValue,
     };
-    use longtable_storage::ComponentSchema;
+    use longtable_storage::{ComponentSchema, FieldSchema};
 
     fn setup_world() -> World {
         let mut world = World::new(42);
@@ -568,5 +568,329 @@ mod tests {
 
         // Different entity = different refraction key
         assert_ne!(b1.refraction_key(), b3.refraction_key());
+    }
+
+    // =========================================================================
+    // Spec Pattern Examples - Tests from SPECIFICATION.md
+    // =========================================================================
+
+    // Helper to create a map component value with a single value field
+    fn make_value_map(value_id: KeywordId, value: Value) -> Value {
+        let mut map = LtMap::new();
+        map = map.insert(Value::Keyword(value_id), value);
+        Value::Map(map)
+    }
+
+    /// Test the damage rule pattern from spec:
+    /// :where [[?target :health ?hp]
+    ///         [?target :incoming-damage ?dmg]]
+    /// Using structured components with value fields
+    #[test]
+    fn spec_damage_rule_pattern() {
+        let mut world = World::new(42);
+
+        // Register components with value fields
+        let health = world.interner_mut().intern_keyword("health");
+        let incoming_damage = world.interner_mut().intern_keyword("incoming-damage");
+        let value_field = world.interner_mut().intern_keyword("value");
+
+        world = world
+            .register_component(
+                ComponentSchema::new(health)
+                    .with_field(FieldSchema::required(value_field, Type::Int)),
+            )
+            .unwrap();
+        world = world
+            .register_component(
+                ComponentSchema::new(incoming_damage)
+                    .with_field(FieldSchema::required(value_field, Type::Int)),
+            )
+            .unwrap();
+
+        // Entity with only health
+        let (w, e1) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(e1, health, make_value_map(value_field, Value::Int(100)))
+            .unwrap();
+        let _ = e1; // Not used in assertions, just spawned for pattern testing
+
+        // Entity with both health and damage
+        let (w, e2) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(e2, health, make_value_map(value_field, Value::Int(75)))
+            .unwrap();
+        world = world
+            .set(
+                e2,
+                incoming_damage,
+                make_value_map(value_field, Value::Int(25)),
+            )
+            .unwrap();
+
+        // Entity with only damage (no health)
+        let (w, e3) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(
+                e3,
+                incoming_damage,
+                make_value_map(value_field, Value::Int(10)),
+            )
+            .unwrap();
+        let _ = e3; // Not used in assertions, just spawned for pattern testing
+
+        // Pattern: [?target :health ?hp] [?target :incoming-damage ?dmg]
+        let decl_pattern = DeclPattern {
+            clauses: vec![
+                DeclClause {
+                    entity_var: "target".to_string(),
+                    component: "health".to_string(),
+                    value: PatternValue::Variable("hp".to_string()),
+                    span: Span::default(),
+                },
+                DeclClause {
+                    entity_var: "target".to_string(),
+                    component: "incoming-damage".to_string(),
+                    value: PatternValue::Variable("dmg".to_string()),
+                    span: Span::default(),
+                },
+            ],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Only e2 has both components
+        assert_eq!(matches.len(), 1);
+        // The bound value is the whole Map component
+        assert!(matches[0].get("hp").is_some());
+        assert!(matches[0].get("dmg").is_some());
+        assert_eq!(matches[0].get_entity("target"), Some(e2));
+    }
+
+    /// Test join across entities (faction membership pattern):
+    /// `:where [[?faction :tag/faction]
+    ///         [?member :member-of ?faction-ref]]`
+    /// Using tag for faction marker and structured component for membership
+    #[test]
+    fn spec_faction_join_pattern() {
+        let mut world = World::new(42);
+
+        // Register components
+        let tag_faction = world.interner_mut().intern_keyword("tag/faction");
+        let member_of = world.interner_mut().intern_keyword("member-of");
+        let value_field = world.interner_mut().intern_keyword("value");
+
+        world = world
+            .register_component(ComponentSchema::tag(tag_faction))
+            .unwrap();
+        world = world
+            .register_component(
+                ComponentSchema::new(member_of)
+                    .with_field(FieldSchema::required(value_field, Type::EntityRef)),
+            )
+            .unwrap();
+
+        // Create a faction entity
+        let (w, faction_a) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(faction_a, tag_faction, Value::Bool(true))
+            .unwrap();
+
+        // Create another faction
+        let (w, faction_b) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(faction_b, tag_faction, Value::Bool(true))
+            .unwrap();
+
+        // Create member belonging to faction_a
+        let (w, member1) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(
+                member1,
+                member_of,
+                make_value_map(value_field, Value::EntityRef(faction_a)),
+            )
+            .unwrap();
+
+        // Create member belonging to faction_b
+        let (w, member2) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(
+                member2,
+                member_of,
+                make_value_map(value_field, Value::EntityRef(faction_b)),
+            )
+            .unwrap();
+
+        // Pattern: [?faction :tag/faction] [?member :member-of ?faction_ref]
+        // This finds all faction entities and all members with membership info
+        let decl_pattern = DeclPattern {
+            clauses: vec![
+                DeclClause {
+                    entity_var: "faction".to_string(),
+                    component: "tag/faction".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                },
+                DeclClause {
+                    entity_var: "member".to_string(),
+                    component: "member-of".to_string(),
+                    value: PatternValue::Variable("faction_ref".to_string()),
+                    span: Span::default(),
+                },
+            ],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Should find combinations - each faction paired with each member
+        // (2 factions × 2 members = 4 combinations)
+        assert!(!matches.is_empty());
+
+        // Check that we have member and faction entities bound
+        for m in &matches {
+            assert!(m.get_entity("faction").is_some());
+            assert!(m.get_entity("member").is_some());
+            assert!(m.get("faction_ref").is_some());
+        }
+    }
+
+    /// Test literal matching in patterns:
+    /// [?e :tag/enemy true]
+    #[test]
+    fn spec_tag_literal_pattern() {
+        let mut world = World::new(42);
+
+        let tag_enemy = world.interner_mut().intern_keyword("tag/enemy");
+        let tag_friendly = world.interner_mut().intern_keyword("tag/friendly");
+
+        world = world
+            .register_component(ComponentSchema::tag(tag_enemy))
+            .unwrap();
+        world = world
+            .register_component(ComponentSchema::tag(tag_friendly))
+            .unwrap();
+
+        // Create enemies
+        let (w, enemy1) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(enemy1, tag_enemy, Value::Bool(true)).unwrap();
+
+        let (w, enemy2) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(enemy2, tag_enemy, Value::Bool(true)).unwrap();
+
+        // Create a friendly
+        let (w, friendly) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world
+            .set(friendly, tag_friendly, Value::Bool(true))
+            .unwrap();
+
+        // Pattern: [?e :tag/enemy true]
+        let decl_pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "e".to_string(),
+                component: "tag/enemy".to_string(),
+                value: PatternValue::Literal(Ast::Bool(true, Span::default())),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Should find exactly 2 enemies
+        assert_eq!(matches.len(), 2);
+        let entities: Vec<_> = matches.iter().filter_map(|m| m.get_entity("e")).collect();
+        assert!(entities.contains(&enemy1));
+        assert!(entities.contains(&enemy2));
+        assert!(!entities.contains(&friendly));
+    }
+
+    /// Test empty pattern returns single empty bindings
+    #[test]
+    fn spec_empty_pattern() {
+        let world = World::new(42);
+
+        let decl_pattern = DeclPattern {
+            clauses: vec![],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, &mut Interner::new()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Empty pattern matches once with empty bindings
+        assert_eq!(matches.len(), 1);
+        assert!(matches[0].iter().count() == 0);
+    }
+
+    /// Test variable unification - same variable must bind same value
+    /// Using tag components which store Bool values directly
+    #[test]
+    fn spec_variable_unification() {
+        let mut world = World::new(42);
+
+        // Use tag components for simpler testing (store Bool directly)
+        let has_flag_a = world.interner_mut().intern_keyword("has-flag-a");
+        let has_flag_b = world.interner_mut().intern_keyword("has-flag-b");
+
+        world = world
+            .register_component(ComponentSchema::tag(has_flag_a))
+            .unwrap();
+        world = world
+            .register_component(ComponentSchema::tag(has_flag_b))
+            .unwrap();
+
+        // Entity with both flags true
+        let (w, e1) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(e1, has_flag_a, Value::Bool(true)).unwrap();
+        world = world.set(e1, has_flag_b, Value::Bool(true)).unwrap();
+
+        // Entity with only flag_a (no flag_b)
+        let (w, e2) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(e2, has_flag_a, Value::Bool(true)).unwrap();
+        let _ = e2; // Not used in assertions, just spawned for pattern testing
+
+        // Pattern: [?e :has-flag-a ?x] [?e :has-flag-b ?x] (same ?x must unify to same bool)
+        let decl_pattern = DeclPattern {
+            clauses: vec![
+                DeclClause {
+                    entity_var: "e".to_string(),
+                    component: "has-flag-a".to_string(),
+                    value: PatternValue::Variable("x".to_string()),
+                    span: Span::default(),
+                },
+                DeclClause {
+                    entity_var: "e".to_string(),
+                    component: "has-flag-b".to_string(),
+                    value: PatternValue::Variable("x".to_string()),
+                    span: Span::default(),
+                },
+            ],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Only e1 matches (has both flags with same value true)
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].get_entity("e"), Some(e1));
+        assert_eq!(matches[0].get("x"), Some(&Value::Bool(true)));
     }
 }
