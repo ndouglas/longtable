@@ -32,6 +32,7 @@
 
 pub mod ast;
 pub mod compiler;
+pub mod declaration;
 pub mod lexer;
 pub mod opcode;
 pub mod parser;
@@ -42,6 +43,7 @@ pub mod vm;
 // Re-exports for convenience
 pub use ast::Ast;
 pub use compiler::{CompiledFunction, CompiledProgram, Compiler, compile, compile_expr};
+pub use declaration::{DeclarationAnalyzer, Pattern, PatternClause, PatternValue, RuleDecl};
 pub use lexer::Lexer;
 pub use opcode::{Bytecode, Opcode};
 pub use parser::{Parser, parse, parse_one};
