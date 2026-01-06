@@ -31,14 +31,20 @@
 #![allow(clippy::missing_errors_doc)]
 
 pub mod ast;
+pub mod compiler;
 pub mod lexer;
+pub mod opcode;
 pub mod parser;
 pub mod span;
 pub mod token;
+pub mod vm;
 
 // Re-exports for convenience
 pub use ast::Ast;
+pub use compiler::{CompiledProgram, Compiler, compile, compile_expr};
 pub use lexer::Lexer;
+pub use opcode::{Bytecode, Opcode};
 pub use parser::{Parser, parse, parse_one};
 pub use span::Span;
 pub use token::{Token, TokenKind};
+pub use vm::{Vm, eval};

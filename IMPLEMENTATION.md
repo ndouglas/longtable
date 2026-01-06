@@ -822,9 +822,9 @@ impl Vm {
 - [x] Span and Token types implemented with proper source tracking
 - [x] Lexer tokenizes all spec literals (integers, floats, strings, symbols, keywords, collections)
 - [x] Parser builds AST for all expression forms (lists, vectors, sets, maps, quotes, tags)
-- [x] 62 unit tests for lexer and parser
-- [ ] Round-trip test: source → AST → bytecode → execution → expected value
-- [ ] Verify all spec expression forms can be represented
+- [x] 107 unit tests for lexer, parser, compiler, and VM
+- [x] Round-trip test: source → AST → bytecode → execution → expected value
+- [x] Verify all spec expression forms can be represented
 - [ ] Benchmark VM execution (target: 1M simple ops/sec)
 
 ### 1.4 Layer 3: Execution APIs
@@ -1700,7 +1700,14 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 
 ### 3.4 Compiler
 
-- [ ] Compile expressions to bytecode
+- [x] Compile expressions to bytecode
+- [x] Compile special forms (if, let, do, def, quote)
+- [x] Compile arithmetic operators (+, -, *, /, mod)
+- [x] Compile comparison operators (=, !=, <, <=, >, >=)
+- [x] Compile logic operators (not)
+- [x] Compile collection literals (vector, map, set)
+- [x] Constant deduplication via ConstKey
+- [x] Local variable slots for let bindings
 - [ ] Compile patterns for rule matching
 - [ ] Compile rule bodies
 - [ ] Compile queries
@@ -1708,15 +1715,23 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [ ] Compile constraints
 - [ ] Macro expansion
 - [ ] Module/namespace resolution
-- [ ] Test all spec forms compile correctly
+- [x] Test all expression forms compile correctly (14 tests)
 
 ### 3.5 Bytecode VM
 
-- [ ] Implement stack-based VM
-- [ ] Implement all opcodes
-- [ ] Implement function calls
-- [ ] Implement effect opcodes
-- [ ] Test: expression evaluation
+- [x] Implement stack-based VM
+- [x] Implement stack operations (Const, Pop, Dup)
+- [x] Implement arithmetic opcodes (Add, Sub, Mul, Div, Mod, Neg)
+- [x] Implement comparison opcodes (Eq, Ne, Lt, Le, Gt, Ge)
+- [x] Implement logic opcodes (Not, And, Or)
+- [x] Implement control flow (Jump, JumpIf, JumpIfNot)
+- [x] Implement local variables (LoadLocal, StoreLocal, LoadBinding)
+- [x] Implement collection opcodes (VecNew, VecPush, MapNew, MapInsert, SetNew, SetInsert)
+- [x] Implement print opcode
+- [x] Test: expression evaluation (26 tests)
+- [ ] Implement function calls (Call, CallNative)
+- [ ] Implement effect opcodes (Spawn, Destroy, SetComponent, SetField, Link, Unlink)
+- [ ] Implement world access opcodes (GetComponent, GetField)
 - [ ] Benchmark: 1M ops/sec target
 
 ### Example: Expression Evaluation
