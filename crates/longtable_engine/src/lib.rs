@@ -44,7 +44,7 @@ pub use pattern::{
 };
 
 // Query system
-pub use query::{CompiledQuery, QueryCompiler, QueryExecutor};
+pub use query::{CompiledQuery, QueryCompiler, QueryExecutor, QueryWarning};
 
 // Production rule engine
 pub use rule::{

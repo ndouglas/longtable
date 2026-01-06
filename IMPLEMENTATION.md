@@ -760,7 +760,7 @@ Comprehensive benchmarks for pattern matching, queries, and storage operations:
 ### 4.1 Pattern Matcher
 
 - [x] Implement pattern compilation (PatternCompiler in longtable_engine/src/pattern.rs)
-- [ ] Implement index-based lookup (currently naive iteration)
+- [ ] ~~Implement index-based lookup~~ — **Deferred to Phase 8** (currently naive O(n) iteration; sufficient for MVP, optimization target for 10k+ entities)
 - [x] Implement join execution (match_remaining function)
 - [x] Implement negation (check_negations function)
 - [x] Implement variable unification (try_bind_clause handles bound variables)
@@ -818,8 +818,8 @@ This matters especially for onboarding. A beginner shouldn't need to understand 
 - [x] Implement group-by
 - [x] Implement order-by and limit
 - [x] Implement query-one, query-count, query-exists?
-- [ ] **Implement entity ordering warnings** (see below)
-- [ ] Test with spec query examples
+- [x] **Implement entity ordering warnings** (QueryWarning::EntityOrderingUnstable in query.rs)
+- [x] Test with spec query examples (spec_query_* tests in query.rs)
 - [x] Benchmark: query at scale (query_execution/*/10000 benchmarks)
 
 #### Entity Ordering Is a Footgun
@@ -894,7 +894,7 @@ You can start Phase 4 with Option A—but **document it as a temporary semantic 
 **Exit criteria addendum**:
 - [x] Decision documented: VM mutation model (direct vs intent-based)
 - [x] If direct mutation chosen: document what features this limits
-- [ ] If intent-based chosen: implement before Phase 5
+- [x] If intent-based chosen: implement before Phase 5 — **N/A** (Option A chosen)
 
 #### Decision: Option A (Direct Mutation with Snapshot)
 

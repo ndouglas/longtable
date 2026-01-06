@@ -266,6 +266,54 @@ impl Compiler {
             "print",
             "println",
             "type",
+            // Stage S1: Critical functions
+            "inc",
+            "dec",
+            "last",
+            "range",
+            // Stage S2: String functions
+            "str/split",
+            "str/join",
+            "str/trim",
+            "str/trim-left",
+            "str/trim-right",
+            "str/starts-with?",
+            "str/ends-with?",
+            "str/contains?",
+            "str/replace",
+            "str/replace-all",
+            "str/blank?",
+            "str/substring",
+            "format",
+            // Stage S3: Collection functions
+            "take",
+            "drop",
+            "concat",
+            "reverse",
+            "vec",
+            "set",
+            "into",
+            "sort",
+            "merge",
+            // Stage S4: Math functions
+            "rem",
+            "clamp",
+            "trunc",
+            "pow",
+            "cbrt",
+            "exp",
+            "log",
+            "log10",
+            "log2",
+            "sin",
+            "cos",
+            "tan",
+            "asin",
+            "acos",
+            "atan",
+            "atan2",
+            "pi",
+            "e",
         ];
 
         for (idx, name) in natives.iter().enumerate() {
@@ -500,6 +548,12 @@ impl Compiler {
                 "thread-first" => return self.compile_thread_first(args, span, code),
                 "thread-last" => return self.compile_thread_last(args, span, code),
                 "doto*" => return self.compile_doto_star(args, span, code),
+                // Higher-order functions (emit special opcodes)
+                "map" => return self.compile_hof_map(args, span, code),
+                "filter" => return self.compile_hof_filter(args, span, code),
+                "reduce" => return self.compile_hof_reduce(args, span, code),
+                "every?" => return self.compile_hof_every(args, span, code),
+                "some" => return self.compile_hof_some(args, span, code),
                 _ => {}
             }
 
@@ -1313,6 +1367,117 @@ impl Compiler {
 
         // Restore local counter
         self.next_local = saved_next;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Higher-Order Functions (map, filter, reduce)
+    // =========================================================================
+
+    /// Compiles `(map fn coll)` - apply function to each element.
+    fn compile_hof_map(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "map requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit Map opcode
+        code.emit(Opcode::Map);
+
+        Ok(())
+    }
+
+    /// Compiles `(filter fn coll)` - keep elements where fn returns truthy.
+    fn compile_hof_filter(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "filter requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile function (predicate)
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit Filter opcode
+        code.emit(Opcode::Filter);
+
+        Ok(())
+    }
+
+    /// Compiles `(reduce fn init coll)` or `(reduce fn coll)` - fold collection.
+    fn compile_hof_reduce(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        match args.len() {
+            2 => {
+                // (reduce fn coll) - use first element as init
+                // We need to handle this case specially - get first element as init
+                // For now, require 3-arg form. We'll compile the 2-arg form as:
+                // (reduce fn (first coll) (rest coll))
+                // But this requires evaluating coll twice, so let's just require 3 args for now
+                // TODO: Support 2-arg reduce properly with temp variable
+                Err(self.error(
+                    span,
+                    "reduce currently requires 3 arguments (fn init coll); 2-arg form coming soon",
+                ))
+            }
+            3 => {
+                // (reduce fn init coll)
+                // Compile function
+                self.compile_node(&args[0], code)?;
+
+                // Compile initial value
+                self.compile_node(&args[1], code)?;
+
+                // Compile collection
+                self.compile_node(&args[2], code)?;
+
+                // Emit Reduce opcode
+                code.emit(Opcode::Reduce);
+
+                Ok(())
+            }
+            _ => Err(self.error(span, "reduce requires 2 or 3 arguments (fn [init] coll)")),
+        }
+    }
+
+    /// Compiles `(every? fn coll)` - check if all elements satisfy predicate.
+    fn compile_hof_every(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "every? requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile predicate function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit Every opcode
+        code.emit(Opcode::Every);
+
+        Ok(())
+    }
+
+    /// Compiles `(some fn coll)` - check if any element satisfies predicate.
+    fn compile_hof_some(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "some requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile predicate function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit Some opcode
+        code.emit(Opcode::Some);
 
         Ok(())
     }

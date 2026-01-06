@@ -576,3 +576,694 @@ fn eval_fn_fibonacci() {
         eval_test("(let [fib (fn [n] (if (<= n 1) n (+ (fib (- n 1)) (fib (- n 2)))))] (fib 10))");
     assert_eq!(result, Value::Int(55));
 }
+
+// =============================================================================
+// Stage S1: Critical stdlib functions (inc, dec, last, range, map, filter, reduce)
+// =============================================================================
+
+#[test]
+fn eval_inc() {
+    assert_eq!(eval_test("(inc 5)"), Value::Int(6));
+    assert_eq!(eval_test("(inc 0)"), Value::Int(1));
+    assert_eq!(eval_test("(inc -1)"), Value::Int(0));
+}
+
+#[test]
+fn eval_inc_float() {
+    let result = eval_test("(inc 1.5)");
+    assert!(matches!(result, Value::Float(f) if (f - 2.5).abs() < 0.001));
+}
+
+#[test]
+fn eval_dec() {
+    assert_eq!(eval_test("(dec 5)"), Value::Int(4));
+    assert_eq!(eval_test("(dec 1)"), Value::Int(0));
+    assert_eq!(eval_test("(dec 0)"), Value::Int(-1));
+}
+
+#[test]
+fn eval_dec_float() {
+    let result = eval_test("(dec 2.5)");
+    assert!(matches!(result, Value::Float(f) if (f - 1.5).abs() < 0.001));
+}
+
+#[test]
+fn eval_last() {
+    assert_eq!(eval_test("(last [1 2 3])"), Value::Int(3));
+    assert_eq!(eval_test("(last [42])"), Value::Int(42));
+    assert_eq!(eval_test("(last [])"), Value::Nil);
+    assert_eq!(eval_test("(last nil)"), Value::Nil);
+}
+
+#[test]
+fn eval_range_single_arg() {
+    // (range 5) -> [0 1 2 3 4]
+    let result = eval_test("(range 5)");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 5);
+            assert_eq!(v.get(0), Some(&Value::Int(0)));
+            assert_eq!(v.get(4), Some(&Value::Int(4)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_range_two_args() {
+    // (range 2 5) -> [2 3 4]
+    let result = eval_test("(range 2 5)");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v.get(0), Some(&Value::Int(2)));
+            assert_eq!(v.get(2), Some(&Value::Int(4)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_range_three_args() {
+    // (range 0 10 2) -> [0 2 4 6 8]
+    let result = eval_test("(range 0 10 2)");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 5);
+            assert_eq!(v.get(0), Some(&Value::Int(0)));
+            assert_eq!(v.get(1), Some(&Value::Int(2)));
+            assert_eq!(v.get(4), Some(&Value::Int(8)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_range_negative_step() {
+    // (range 5 0 -1) -> [5 4 3 2 1]
+    let result = eval_test("(range 5 0 -1)");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 5);
+            assert_eq!(v.get(0), Some(&Value::Int(5)));
+            assert_eq!(v.get(4), Some(&Value::Int(1)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_range_empty() {
+    // (range 0) -> []
+    let result = eval_test("(range 0)");
+    match result {
+        Value::Vec(v) => assert_eq!(v.len(), 0),
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_map_basic() {
+    // (map inc [1 2 3]) -> [2 3 4]
+    let result = eval_test("(map (fn [x] (+ x 1)) [1 2 3])");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v.get(0), Some(&Value::Int(2)));
+            assert_eq!(v.get(1), Some(&Value::Int(3)));
+            assert_eq!(v.get(2), Some(&Value::Int(4)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_map_with_closure() {
+    // Using a closure that captures a variable
+    let result = eval_test("(let [n 10] (map (fn [x] (+ x n)) [1 2 3]))");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v.get(0), Some(&Value::Int(11)));
+            assert_eq!(v.get(1), Some(&Value::Int(12)));
+            assert_eq!(v.get(2), Some(&Value::Int(13)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_map_empty() {
+    // Note: Currently native functions can't be passed directly to map/filter/reduce
+    // They must be wrapped in lambdas. This is a known limitation.
+    let result = eval_test("(map (fn [x] (inc x)) [])");
+    match result {
+        Value::Vec(v) => assert_eq!(v.len(), 0),
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_filter_basic() {
+    // Keep only even numbers (where x%2==0)
+    let result = eval_test("(filter (fn [x] (= (mod x 2) 0)) [1 2 3 4 5 6])");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v.get(0), Some(&Value::Int(2)));
+            assert_eq!(v.get(1), Some(&Value::Int(4)));
+            assert_eq!(v.get(2), Some(&Value::Int(6)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_filter_positive() {
+    // Keep positive numbers
+    let result = eval_test("(filter (fn [x] (> x 0)) [-2 -1 0 1 2])");
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 2);
+            assert_eq!(v.get(0), Some(&Value::Int(1)));
+            assert_eq!(v.get(1), Some(&Value::Int(2)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_filter_empty() {
+    let result = eval_test("(filter (fn [x] true) [])");
+    match result {
+        Value::Vec(v) => assert_eq!(v.len(), 0),
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_reduce_sum() {
+    // (reduce + 0 [1 2 3 4]) -> 10
+    let result = eval_test("(reduce (fn [acc x] (+ acc x)) 0 [1 2 3 4])");
+    assert_eq!(result, Value::Int(10));
+}
+
+#[test]
+fn eval_reduce_product() {
+    // (reduce * 1 [1 2 3 4]) -> 24
+    let result = eval_test("(reduce (fn [acc x] (* acc x)) 1 [1 2 3 4])");
+    assert_eq!(result, Value::Int(24));
+}
+
+#[test]
+fn eval_reduce_empty() {
+    // (reduce + 0 []) -> 0 (initial value)
+    let result = eval_test("(reduce (fn [acc x] (+ acc x)) 0 [])");
+    assert_eq!(result, Value::Int(0));
+}
+
+#[test]
+fn eval_reduce_count() {
+    // Count elements
+    let result = eval_test("(reduce (fn [acc x] (+ acc 1)) 0 [1 2 3 4 5])");
+    assert_eq!(result, Value::Int(5));
+}
+
+#[test]
+fn eval_map_filter_compose() {
+    // Double then filter even
+    let result = eval_test("(filter (fn [x] (> x 4)) (map (fn [x] (* x 2)) [1 2 3 4]))");
+    match result {
+        Value::Vec(v) => {
+            // [1 2 3 4] -> [2 4 6 8] -> [6 8]
+            assert_eq!(v.len(), 2);
+            assert_eq!(v.get(0), Some(&Value::Int(6)));
+            assert_eq!(v.get(1), Some(&Value::Int(8)));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_reduce_map() {
+    // Sum of squares
+    let result = eval_test("(reduce (fn [acc x] (+ acc x)) 0 (map (fn [x] (* x x)) [1 2 3]))");
+    // 1 + 4 + 9 = 14
+    assert_eq!(result, Value::Int(14));
+}
+
+// =============================================================================
+// Stage S2: String Functions
+// =============================================================================
+
+#[test]
+fn eval_str_split() {
+    let result = eval_test(r#"(str/split "a,b,c" ",")"#);
+    match result {
+        Value::Vec(v) => {
+            assert_eq!(v.len(), 3);
+            assert_eq!(v.get(0), Some(&Value::String("a".into())));
+            assert_eq!(v.get(1), Some(&Value::String("b".into())));
+            assert_eq!(v.get(2), Some(&Value::String("c".into())));
+        }
+        _ => panic!("Expected vector, got {result:?}"),
+    }
+}
+
+#[test]
+fn eval_str_join() {
+    let result = eval_test(r#"(str/join ", " ["a" "b" "c"])"#);
+    assert_eq!(result, Value::String("a, b, c".into()));
+}
+
+#[test]
+fn eval_str_trim() {
+    assert_eq!(
+        eval_test(r#"(str/trim "  hello  ")"#),
+        Value::String("hello".into())
+    );
+}
+
+#[test]
+fn eval_str_trim_left() {
+    assert_eq!(
+        eval_test(r#"(str/trim-left "  hello  ")"#),
+        Value::String("hello  ".into())
+    );
+}
+
+#[test]
+fn eval_str_trim_right() {
+    assert_eq!(
+        eval_test(r#"(str/trim-right "  hello  ")"#),
+        Value::String("  hello".into())
+    );
+}
+
+#[test]
+fn eval_str_starts_with() {
+    assert_eq!(
+        eval_test(r#"(str/starts-with? "hello world" "hello")"#),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_test(r#"(str/starts-with? "hello world" "world")"#),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn eval_str_ends_with() {
+    assert_eq!(
+        eval_test(r#"(str/ends-with? "hello world" "world")"#),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_test(r#"(str/ends-with? "hello world" "hello")"#),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn eval_str_contains_fn() {
+    assert_eq!(
+        eval_test(r#"(str/contains? "hello world" "lo wo")"#),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval_test(r#"(str/contains? "hello world" "xyz")"#),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn eval_str_replace() {
+    assert_eq!(
+        eval_test(r#"(str/replace "hello world" "world" "there")"#),
+        Value::String("hello there".into())
+    );
+}
+
+#[test]
+fn eval_str_replace_all() {
+    assert_eq!(
+        eval_test(r#"(str/replace-all "ab ab ab" "ab" "cd")"#),
+        Value::String("cd cd cd".into())
+    );
+}
+
+#[test]
+fn eval_str_blank() {
+    assert_eq!(eval_test(r#"(str/blank? "")"#), Value::Bool(true));
+    assert_eq!(eval_test(r#"(str/blank? "   ")"#), Value::Bool(true));
+    assert_eq!(eval_test(r#"(str/blank? "hello")"#), Value::Bool(false));
+    assert_eq!(eval_test(r"(str/blank? nil)"), Value::Bool(true));
+}
+
+#[test]
+fn eval_str_substring() {
+    assert_eq!(
+        eval_test(r#"(str/substring "hello" 1 4)"#),
+        Value::String("ell".into())
+    );
+    assert_eq!(
+        eval_test(r#"(str/substring "hello" 2)"#),
+        Value::String("llo".into())
+    );
+}
+
+#[test]
+fn eval_format() {
+    assert_eq!(
+        eval_test(r#"(format "Hello, {}!" "world")"#),
+        Value::String("Hello, world!".into())
+    );
+    assert_eq!(
+        eval_test(r#"(format "{} + {} = {}" 1 2 3)"#),
+        Value::String("1 + 2 = 3".into())
+    );
+}
+
+// ============================================================================
+// Stage S3: Collection Function Tests
+// ============================================================================
+
+#[test]
+fn eval_take() {
+    assert_eq!(
+        eval_test(r"(take 2 [1 2 3 4 5])"),
+        Value::Vec([Value::Int(1), Value::Int(2)].into_iter().collect())
+    );
+    assert_eq!(eval_test(r"(take 0 [1 2 3])"), Value::Vec(LtVec::new()));
+    assert_eq!(
+        eval_test(r"(take 10 [1 2])"),
+        Value::Vec([Value::Int(1), Value::Int(2)].into_iter().collect())
+    );
+    assert_eq!(eval_test(r"(take 2 nil)"), Value::Vec(LtVec::new()));
+}
+
+#[test]
+fn eval_drop() {
+    assert_eq!(
+        eval_test(r"(drop 2 [1 2 3 4 5])"),
+        Value::Vec(
+            [Value::Int(3), Value::Int(4), Value::Int(5)]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        eval_test(r"(drop 0 [1 2 3])"),
+        Value::Vec(
+            [Value::Int(1), Value::Int(2), Value::Int(3)]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(eval_test(r"(drop 10 [1 2])"), Value::Vec(LtVec::new()));
+}
+
+#[test]
+fn eval_concat() {
+    assert_eq!(
+        eval_test(r"(concat [1 2] [3 4])"),
+        Value::Vec(
+            [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        eval_test(r"(concat [1] [2] [3])"),
+        Value::Vec(
+            [Value::Int(1), Value::Int(2), Value::Int(3)]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        eval_test(r"(concat [] [1 2])"),
+        Value::Vec([Value::Int(1), Value::Int(2)].into_iter().collect())
+    );
+}
+
+#[test]
+fn eval_reverse() {
+    assert_eq!(
+        eval_test(r"(reverse [1 2 3])"),
+        Value::Vec(
+            [Value::Int(3), Value::Int(2), Value::Int(1)]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(eval_test(r"(reverse [])"), Value::Vec(LtVec::new()));
+    assert_eq!(eval_test(r#"(reverse "abc")"#), Value::String("cba".into()));
+}
+
+#[test]
+fn eval_vec_conversion() {
+    // vec from set - order may vary, so just test size
+    let result = eval_test(r"(count (vec #{1 2 3}))");
+    assert_eq!(result, Value::Int(3));
+
+    // vec from string
+    assert_eq!(
+        eval_test(r#"(vec "ab")"#),
+        Value::Vec(
+            [Value::String("a".into()), Value::String("b".into())]
+                .into_iter()
+                .collect()
+        )
+    );
+}
+
+#[test]
+fn eval_set_conversion() {
+    assert_eq!(eval_test(r"(count (set [1 2 2 3 3 3]))"), Value::Int(3));
+}
+
+#[test]
+fn eval_into() {
+    // Vector to vector
+    assert_eq!(
+        eval_test(r"(into [1 2] [3 4])"),
+        Value::Vec(
+            [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]
+                .into_iter()
+                .collect()
+        )
+    );
+
+    // Into empty vec
+    assert_eq!(
+        eval_test(r"(into [] [1 2 3])"),
+        Value::Vec(
+            [Value::Int(1), Value::Int(2), Value::Int(3)]
+                .into_iter()
+                .collect()
+        )
+    );
+}
+
+#[test]
+fn eval_sort() {
+    assert_eq!(
+        eval_test(r"(sort [3 1 2])"),
+        Value::Vec(
+            [Value::Int(1), Value::Int(2), Value::Int(3)]
+                .into_iter()
+                .collect()
+        )
+    );
+    assert_eq!(
+        eval_test(r#"(sort ["c" "a" "b"])"#),
+        Value::Vec(
+            [
+                Value::String("a".into()),
+                Value::String("b".into()),
+                Value::String("c".into())
+            ]
+            .into_iter()
+            .collect()
+        )
+    );
+    assert_eq!(eval_test(r"(sort [])"), Value::Vec(LtVec::new()));
+}
+
+#[test]
+fn eval_merge() {
+    // Simple merge
+    let result = eval_test(r"(get (merge {:a 1} {:b 2}) :b)");
+    assert_eq!(result, Value::Int(2));
+
+    // Override values
+    let result = eval_test(r"(get (merge {:a 1} {:a 2}) :a)");
+    assert_eq!(result, Value::Int(2));
+}
+
+#[test]
+fn eval_every() {
+    // All positive - returns true
+    assert_eq!(
+        eval_test(r"(every? (fn [x] (> x 0)) [1 2 3])"),
+        Value::Bool(true)
+    );
+    // Not all positive - returns false
+    assert_eq!(
+        eval_test(r"(every? (fn [x] (> x 0)) [1 -2 3])"),
+        Value::Bool(false)
+    );
+    // Empty collection - returns true (vacuously true)
+    assert_eq!(
+        eval_test(r"(every? (fn [x] (> x 0)) [])"),
+        Value::Bool(true)
+    );
+}
+
+#[test]
+fn eval_some_hof() {
+    // Some positive - returns truthy result
+    let result = eval_test(r"(some (fn [x] (> x 0)) [-1 2 -3])");
+    assert_eq!(result, Value::Bool(true));
+
+    // None positive - returns nil
+    assert_eq!(eval_test(r"(some (fn [x] (> x 0)) [-1 -2 -3])"), Value::Nil);
+
+    // Empty collection - returns nil
+    assert_eq!(eval_test(r"(some (fn [x] (> x 0)) [])"), Value::Nil);
+}
+
+// ============================================================================
+// Stage S4: Math Function Tests
+// ============================================================================
+
+#[test]
+fn eval_rem() {
+    assert_eq!(eval_test(r"(rem 10 3)"), Value::Int(1));
+    assert_eq!(eval_test(r"(rem -10 3)"), Value::Int(-1));
+    assert_eq!(eval_test(r"(rem 10.5 3.0)"), Value::Float(1.5));
+}
+
+#[test]
+fn eval_clamp() {
+    assert_eq!(eval_test(r"(clamp 5 0 10)"), Value::Int(5));
+    assert_eq!(eval_test(r"(clamp -5 0 10)"), Value::Int(0));
+    assert_eq!(eval_test(r"(clamp 15 0 10)"), Value::Int(10));
+    assert_eq!(eval_test(r"(clamp 5.5 0.0 10.0)"), Value::Float(5.5));
+}
+
+#[test]
+fn eval_trunc() {
+    assert_eq!(eval_test(r"(trunc 3.7)"), Value::Float(3.0));
+    assert_eq!(eval_test(r"(trunc -3.7)"), Value::Float(-3.0));
+    assert_eq!(eval_test(r"(trunc 5)"), Value::Int(5));
+}
+
+#[test]
+fn eval_pow() {
+    assert_eq!(eval_test(r"(pow 2 3)"), Value::Int(8));
+    assert_eq!(eval_test(r"(pow 2.0 3.0)"), Value::Float(8.0));
+    assert_eq!(eval_test(r"(pow 4 0.5)"), Value::Float(2.0));
+}
+
+#[test]
+fn eval_cbrt() {
+    assert_eq!(eval_test(r"(cbrt 27)"), Value::Float(3.0));
+    assert_eq!(eval_test(r"(cbrt 8.0)"), Value::Float(2.0));
+}
+
+#[test]
+fn eval_exp_log() {
+    // exp(1) = e
+    let exp1 = eval_test(r"(exp 1)");
+    match exp1 {
+        Value::Float(n) => assert!((n - std::f64::consts::E).abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // log(e) = 1
+    let loge = eval_test(r"(log (e))");
+    match loge {
+        Value::Float(n) => assert!((n - 1.0).abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+}
+
+#[test]
+fn eval_log10_log2() {
+    assert_eq!(eval_test(r"(log10 100)"), Value::Float(2.0));
+    assert_eq!(eval_test(r"(log2 8)"), Value::Float(3.0));
+}
+
+#[test]
+fn eval_trig() {
+    // sin(0) = 0
+    let sin0 = eval_test(r"(sin 0)");
+    match sin0 {
+        Value::Float(n) => assert!(n.abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // cos(0) = 1
+    let cos0 = eval_test(r"(cos 0)");
+    match cos0 {
+        Value::Float(n) => assert!((n - 1.0).abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // tan(0) = 0
+    let tan0 = eval_test(r"(tan 0)");
+    match tan0 {
+        Value::Float(n) => assert!(n.abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+}
+
+#[test]
+fn eval_inverse_trig() {
+    // asin(0) = 0
+    let asin0 = eval_test(r"(asin 0)");
+    match asin0 {
+        Value::Float(n) => assert!(n.abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // acos(1) = 0
+    let acos1 = eval_test(r"(acos 1)");
+    match acos1 {
+        Value::Float(n) => assert!(n.abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // atan(0) = 0
+    let atan0 = eval_test(r"(atan 0)");
+    match atan0 {
+        Value::Float(n) => assert!(n.abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // atan2(1, 1) = pi/4
+    let atan2_11 = eval_test(r"(atan2 1 1)");
+    match atan2_11 {
+        Value::Float(n) => assert!((n - std::f64::consts::FRAC_PI_4).abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+}
+
+#[test]
+fn eval_constants() {
+    // pi
+    let pi = eval_test(r"(pi)");
+    match pi {
+        Value::Float(n) => assert!((n - std::f64::consts::PI).abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+
+    // e
+    let e = eval_test(r"(e)");
+    match e {
+        Value::Float(n) => assert!((n - std::f64::consts::E).abs() < 0.0001),
+        _ => panic!("Expected Float"),
+    }
+}

@@ -4,8 +4,10 @@
 //! - [`CompiledQuery`] - A compiled query ready for execution
 //! - [`QueryCompiler`] - Compiles `QueryDecl` into `CompiledQuery`
 //! - [`QueryExecutor`] - Executes queries against a World
+//! - [`QueryWarning`] - Warnings emitted during query compilation
 
 use std::cmp::Ordering;
+use std::fmt;
 
 use longtable_foundation::{Interner, LtVec, Result, Value};
 use longtable_language::declaration::{OrderDirection, QueryDecl};
@@ -13,6 +15,41 @@ use longtable_language::{Ast, CompiledExpr, Vm, compile_expression};
 use longtable_storage::World;
 
 use crate::pattern::{Bindings, CompiledPattern, PatternCompiler, PatternMatcher};
+
+// =============================================================================
+// Query Warnings
+// =============================================================================
+
+/// Warnings emitted during query compilation.
+///
+/// These indicate potential issues that don't prevent compilation but may
+/// cause unexpected behavior at runtime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum QueryWarning {
+    /// Ordering by entity ID is unstable across serialization/deserialization.
+    ///
+    /// Entity allocation order is not guaranteed to be consistent after
+    /// saving and loading world state. Queries that depend on entity order
+    /// may produce different results.
+    EntityOrderingUnstable {
+        /// The entity variable used in order-by (e.g., "e" for `?e`)
+        variable: String,
+    },
+}
+
+impl fmt::Display for QueryWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EntityOrderingUnstable { variable } => {
+                write!(
+                    f,
+                    "ordering by entity variable `?{variable}` is unstable: \
+                     entity IDs may change across save/load cycles"
+                )
+            }
+        }
+    }
+}
 
 // =============================================================================
 // Compiled Query Types
@@ -39,6 +76,8 @@ pub struct CompiledQuery {
     pub return_expr: Option<CompiledExpr>,
     /// Variable names in order (for binding lookup)
     pub binding_vars: Vec<String>,
+    /// Warnings emitted during compilation
+    pub warnings: Vec<QueryWarning>,
 }
 
 // =============================================================================
@@ -55,8 +94,26 @@ impl QueryCompiler {
     ///
     /// Returns an error if compilation fails.
     pub fn compile(query: &QueryDecl, interner: &mut Interner) -> Result<CompiledQuery> {
+        let mut warnings = Vec::new();
+
         // Compile pattern
         let pattern = PatternCompiler::compile(&query.pattern, interner)?;
+
+        // Collect entity variables (variables that bind to entities, not component values)
+        let entity_vars: Vec<&str> = pattern
+            .clauses
+            .iter()
+            .map(|c| c.entity_var.as_str())
+            .collect();
+
+        // Check for entity ordering warnings
+        for (var, _direction) in &query.order_by {
+            if entity_vars.contains(&var.as_str()) {
+                warnings.push(QueryWarning::EntityOrderingUnstable {
+                    variable: var.clone(),
+                });
+            }
+        }
 
         // Collect all variable names for binding lookup
         let mut binding_vars = Vec::new();
@@ -112,6 +169,7 @@ impl QueryCompiler {
             limit: query.limit,
             return_expr,
             binding_vars,
+            warnings,
         })
     }
 
@@ -692,5 +750,406 @@ mod tests {
         for r in &results {
             assert!(matches!(r, Value::Map(_)), "Expected map, got {r:?}");
         }
+    }
+
+    // =========================================================================
+    // Spec Query Example Tests
+    // =========================================================================
+
+    #[test]
+    fn spec_query_with_order_by_value() {
+        // From spec: (query :where [[?e :power ?p]] :order-by [[?p :desc]] :return ?e)
+        let mut world = setup_world();
+
+        // Query: :where [[?e :level ?l]] :order-by [[?l :desc]] :return ?e
+        // Should return entities ordered by level descending
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "level".to_string(),
+                    value: PatternValue::Variable("l".to_string()),
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![("l".to_string(), OrderDirection::Desc)],
+            limit: None,
+            return_expr: Some(Ast::Symbol("l".to_string(), Span::default())),
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+
+        // No warnings for ordering by value variable
+        assert!(compiled.warnings.is_empty());
+
+        let results = QueryExecutor::execute(&compiled, &world).unwrap();
+
+        // We have 3 entities: level 5, level 3, level 5
+        // Ordered descending, we expect level 5 values first
+        assert_eq!(results.len(), 3);
+        // All results should be maps (component values)
+        for r in &results {
+            assert!(matches!(r, Value::Map(_)));
+        }
+    }
+
+    #[test]
+    fn spec_query_with_limit_and_order() {
+        // From spec: (query :where [[?e :power ?p]] :order-by [[?p :desc]] :limit 5 :return ?e)
+        let mut world = setup_world();
+
+        // Query: :where [[?e :health ?hp]] :order-by [[?hp :asc]] :limit 2 :return ?e
+        // Should return 2 entities with lowest health
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "health".to_string(),
+                    value: PatternValue::Variable("hp".to_string()),
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![("hp".to_string(), OrderDirection::Asc)],
+            limit: Some(2),
+            return_expr: Some(Ast::Symbol("e".to_string(), Span::default())),
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+        let results = QueryExecutor::execute(&compiled, &world).unwrap();
+
+        // Should only return 2 entities
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn spec_query_exists_basic() {
+        // From spec: (query-exists? :where [[?e :tag/player]])
+        let mut world = setup_world();
+
+        // Check that entities with :health exist
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "health".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![],
+            limit: None,
+            return_expr: None,
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+        let exists = QueryExecutor::exists(&compiled, &world).unwrap();
+
+        assert!(exists, "Entities with health should exist");
+
+        // Now check for a component that doesn't exist
+        let nonexistent_id = world.interner_mut().intern_keyword("nonexistent");
+        let _ = world
+            .register_component(longtable_storage::ComponentSchema::new(nonexistent_id))
+            .unwrap();
+
+        let query_decl2 = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "nonexistent".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![],
+            limit: None,
+            return_expr: None,
+            span: Span::default(),
+        };
+
+        let compiled2 = QueryCompiler::compile(&query_decl2, world.interner_mut()).unwrap();
+        let exists2 = QueryExecutor::exists(&compiled2, &world).unwrap();
+
+        assert!(!exists2, "No entities should have nonexistent component");
+    }
+
+    #[test]
+    fn spec_query_count_basic() {
+        // From spec: (query-count :where [[?e :tag/enemy]])
+        let mut world = setup_world();
+
+        // Count entities with :health
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "health".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![],
+            limit: None,
+            return_expr: None,
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+        let count = QueryExecutor::count(&compiled, &world).unwrap();
+
+        assert_eq!(count, 3, "Should count 3 entities with health");
+    }
+
+    #[test]
+    fn spec_query_one_basic() {
+        // From spec: (query-one :where [[?e :tag/player]] :return ?e)
+        let mut world = setup_world();
+
+        // Get one entity with :name
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "name".to_string(),
+                    value: PatternValue::Wildcard,
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![],
+            limit: None,
+            return_expr: Some(Ast::Symbol("e".to_string(), Span::default())),
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+        let result = QueryExecutor::execute_one(&compiled, &world).unwrap();
+
+        assert!(result.is_some(), "Should find at least one entity");
+        assert!(
+            matches!(result, Some(Value::EntityRef(_))),
+            "Result should be an entity ref"
+        );
+    }
+
+    #[test]
+    fn spec_multi_clause_join() {
+        // From spec: multi-clause patterns join entities
+        // (query :where [[?e :health ?hp] [?e :name ?n]] :return ?e)
+        let mut world = setup_world();
+
+        // Query entities that have both health AND name
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![
+                    PatternClause {
+                        entity_var: "e".to_string(),
+                        component: "health".to_string(),
+                        value: PatternValue::Variable("hp".to_string()),
+                        span: Span::default(),
+                    },
+                    PatternClause {
+                        entity_var: "e".to_string(),
+                        component: "name".to_string(),
+                        value: PatternValue::Variable("n".to_string()),
+                        span: Span::default(),
+                    },
+                ],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![],
+            limit: None,
+            return_expr: Some(Ast::Symbol("e".to_string(), Span::default())),
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+        let results = QueryExecutor::execute(&compiled, &world).unwrap();
+
+        // All 3 entities have both health and name
+        assert_eq!(results.len(), 3);
+    }
+
+    // =========================================================================
+    // Entity Ordering Warning Tests
+    // =========================================================================
+
+    #[test]
+    fn warning_when_ordering_by_entity_variable() {
+        let mut world = setup_world();
+
+        // Query: :where [[?e :health ?hp]] :order-by [[?e :asc]] :return ?e
+        // Should warn because ?e is an entity variable
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "health".to_string(),
+                    value: PatternValue::Variable("hp".to_string()),
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![("e".to_string(), OrderDirection::Asc)],
+            limit: None,
+            return_expr: Some(Ast::Symbol("e".to_string(), Span::default())),
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+
+        assert_eq!(compiled.warnings.len(), 1);
+        assert_eq!(
+            compiled.warnings[0],
+            QueryWarning::EntityOrderingUnstable {
+                variable: "e".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn no_warning_when_ordering_by_value_variable() {
+        let mut world = setup_world();
+
+        // Query: :where [[?e :health ?hp]] :order-by [[?hp :asc]] :return ?e
+        // Should NOT warn because ?hp is a value variable, not an entity
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![PatternClause {
+                    entity_var: "e".to_string(),
+                    component: "health".to_string(),
+                    value: PatternValue::Variable("hp".to_string()),
+                    span: Span::default(),
+                }],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![("hp".to_string(), OrderDirection::Asc)],
+            limit: None,
+            return_expr: Some(Ast::Symbol("e".to_string(), Span::default())),
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+
+        assert!(
+            compiled.warnings.is_empty(),
+            "Expected no warnings for value variable ordering"
+        );
+    }
+
+    #[test]
+    fn warning_message_format() {
+        let warning = QueryWarning::EntityOrderingUnstable {
+            variable: "player".to_string(),
+        };
+
+        let msg = warning.to_string();
+        assert!(
+            msg.contains("?player"),
+            "Warning should mention the variable"
+        );
+        assert!(
+            msg.contains("unstable"),
+            "Warning should mention instability"
+        );
+        assert!(
+            msg.contains("save/load"),
+            "Warning should mention serialization"
+        );
+    }
+
+    #[test]
+    fn multiple_entity_ordering_warnings() {
+        let mut world = setup_world();
+
+        // Query with two entity variables both used in order-by
+        // :where [[?e1 :health ?hp] [?e2 :name ?n]] :order-by [[?e1 :asc] [?e2 :desc]]
+        let query_decl = QueryDecl {
+            pattern: Pattern {
+                clauses: vec![
+                    PatternClause {
+                        entity_var: "e1".to_string(),
+                        component: "health".to_string(),
+                        value: PatternValue::Variable("hp".to_string()),
+                        span: Span::default(),
+                    },
+                    PatternClause {
+                        entity_var: "e2".to_string(),
+                        component: "name".to_string(),
+                        value: PatternValue::Variable("n".to_string()),
+                        span: Span::default(),
+                    },
+                ],
+                negations: vec![],
+            },
+            bindings: vec![],
+            aggregates: vec![],
+            group_by: vec![],
+            guards: vec![],
+            order_by: vec![
+                ("e1".to_string(), OrderDirection::Asc),
+                ("e2".to_string(), OrderDirection::Desc),
+            ],
+            limit: None,
+            return_expr: None,
+            span: Span::default(),
+        };
+
+        let compiled = QueryCompiler::compile(&query_decl, world.interner_mut()).unwrap();
+
+        // Should have warnings for both entity variables
+        assert_eq!(compiled.warnings.len(), 2);
+        assert!(compiled.warnings.iter().any(|w| matches!(
+            w,
+            QueryWarning::EntityOrderingUnstable { variable } if variable == "e1"
+        )));
+        assert!(compiled.warnings.iter().any(|w| matches!(
+            w,
+            QueryWarning::EntityOrderingUnstable { variable } if variable == "e2"
+        )));
     }
 }

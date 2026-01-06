@@ -133,6 +133,21 @@ pub enum Opcode {
     // === Misc ===
     /// Print value (for debugging): `[value] -> []`
     Print,
+
+    // === Higher-Order Functions ===
+    /// Map function over collection: `[fn, coll] -> [result_vec]`
+    /// Applies fn to each element of coll, collects results into vector.
+    Map,
+    /// Filter collection by predicate: `[fn, coll] -> [result_vec]`
+    /// Keeps elements where fn returns truthy.
+    Filter,
+    /// Reduce collection with function: `[fn, init, coll] -> [result]`
+    /// Folds left: (fn (fn (fn init e1) e2) e3) ...
+    Reduce,
+    /// Check if predicate returns truthy for all elements: `[fn, coll] -> [bool]`
+    Every,
+    /// Check if predicate returns truthy for any element: `[fn, coll] -> [bool | value]`
+    Some,
 }
 
 /// A sequence of bytecode instructions.
