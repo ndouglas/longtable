@@ -427,9 +427,9 @@ pub struct Archetype {
 ```
 
 **Design validation tasks**:
-- [ ] Benchmark iteration over 10k entities with component filter
-- [ ] Verify archetype grouping improves cache locality
-- [ ] Test schema validation catches type mismatches
+- [x] Benchmark iteration over 10k entities with component filter
+- [x] Verify archetype grouping improves cache locality
+- [x] Test schema validation catches type mismatches
 
 #### Relationship Store (`lt-storage::relationship`)
 
@@ -488,9 +488,9 @@ impl RelationshipStore {
 ```
 
 **Design validation tasks**:
-- [ ] Verify bidirectional index consistency
-- [ ] Test cardinality enforcement
-- [ ] Benchmark traversal at 10k relationships
+- [x] Verify bidirectional index consistency
+- [x] Test cardinality enforcement
+- [x] Benchmark traversal at 10k relationships
 
 #### World (`lt-storage::world`)
 
@@ -542,9 +542,9 @@ impl World {
 ```
 
 **Design validation tasks**:
-- [ ] Verify World::clone() is O(1)
-- [ ] Benchmark world fork + small modifications
-- [ ] Test previous() chain integrity
+- [x] Verify World::clone() is O(1)
+- [x] Benchmark world fork + small modifications
+- [x] Test previous() chain integrity
 
 ### 1.3 Layer 2: Language APIs
 
@@ -819,6 +819,10 @@ impl Vm {
 > You don't need intent buffering yet—but you need a **place** to put it later. If you let VM opcodes implicitly assume mutation semantics, you'll bake in assumptions that are painful to uproot.
 
 **Design validation tasks**:
+- [x] Span and Token types implemented with proper source tracking
+- [x] Lexer tokenizes all spec literals (integers, floats, strings, symbols, keywords, collections)
+- [x] Parser builds AST for all expression forms (lists, vectors, sets, maps, quotes, tags)
+- [x] 62 unit tests for lexer and parser
 - [ ] Round-trip test: source → AST → bytecode → execution → expected value
 - [ ] Verify all spec expression forms can be represented
 - [ ] Benchmark VM execution (target: 1M simple ops/sec)
@@ -1671,25 +1675,25 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 
 ### 3.1 Lexer
 
-- [ ] Implement tokenizer for all spec literals
-- [ ] Handle comments (`;`, `#_`)
-- [ ] Handle tagged literals (`#name[...]`)
-- [ ] Comprehensive span tracking
-- [ ] Test with spec grammar examples
+- [x] Implement tokenizer for all spec literals
+- [x] Handle comments (`;`, `#_`)
+- [x] Handle tagged literals (`#name[...]`)
+- [x] Comprehensive span tracking
+- [x] Test with spec grammar examples (24 tests)
 - [ ] Fuzz test for crash resistance
 
 ### 3.2 Parser
 
-- [ ] Implement recursive descent parser
-- [ ] Parse all expression forms
+- [x] Implement recursive descent parser
+- [x] Parse all expression forms
 - [ ] Parse all declaration forms (component:, rule:, etc.)
-- [ ] Rich error messages with span information
-- [ ] Test with spec examples
+- [x] Rich error messages with span information
+- [x] Test with spec examples (29 tests)
 - [ ] Fuzz test for crash resistance
 
 ### 3.3 AST
 
-- [ ] Implement all AST node types
+- [x] Implement all AST node types
 - [ ] Implement visitor pattern for traversal
 - [ ] Implement AST pretty-printer
 - [ ] Test round-trip: source → AST → pretty-print ≈ source

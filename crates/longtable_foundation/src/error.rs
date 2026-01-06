@@ -138,14 +138,16 @@ pub enum ErrorKind {
     },
 
     /// Parse error in DSL.
-    #[error("parse error: {message}")]
+    #[error("parse error at {line}:{column}: {message}")]
     ParseError {
         /// Description of the parse error.
         message: String,
-        /// Line number (1-indexed) if available.
-        line: Option<usize>,
-        /// Column number (1-indexed) if available.
-        column: Option<usize>,
+        /// Line number (1-indexed).
+        line: u32,
+        /// Column number (1-indexed).
+        column: u32,
+        /// The source line where the error occurred.
+        context: String,
     },
 
     /// Semantic limit exceeded (kill switch triggered).

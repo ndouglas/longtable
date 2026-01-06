@@ -53,7 +53,7 @@ impl fmt::Debug for KeywordId {
 ///
 /// This is a simple interner that maps strings to unique IDs and back.
 /// It is not thread-safe; use external synchronization if needed.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Interner {
     /// String storage (shared across symbols and keywords).
     strings: Vec<Arc<str>>,
