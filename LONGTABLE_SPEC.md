@@ -466,7 +466,7 @@ This ensures the activation set is stable throughout a tick. A rule cannot disab
 | `:string`     | UTF-8 string               | `"hello"`, `"world\n"` |
 | `:symbol`     | Interned identifier        | `'foo`, `'bar/baz`     |
 | `:keyword`    | Self-evaluating identifier | `:foo`, `:bar/baz`     |
-| `:entity-ref` | Reference to an entity     | `#entity[42.3]`        |
+| `:entity-ref` | Reference to an entity     | `#entity[3.42]`        |
 
 **Important**: `nil ≠ false`. They are distinct values of distinct types.
 
@@ -645,7 +645,7 @@ symbol              ;; symbol (evaluated as variable reference)
 '(1 2 3)            ;; quoted list
 
 ;; Special literals
-#entity[42.3]       ;; entity reference (index.generation)
+#entity[3.42]       ;; entity reference (generation.index)
 ```
 
 #### Tagged Literals
@@ -654,7 +654,7 @@ Tagged literals provide custom syntax that expands at read time:
 
 ```clojure
 ;; Built-in
-#entity[42.3]       ;; Entity reference
+#entity[3.42]       ;; Entity reference (generation.index)
 
 ;; User-defined (must be declared before use)
 #pos[10 20]         ;; Custom position literal
@@ -810,6 +810,7 @@ All declaration forms share a common pattern-matching syntax with `:where` claus
   ;; Metadata
   :salience   number              ;; Priority, default 0
   :enabled    true|false          ;; Default true
+  :once       true|false          ;; Fire at most once per tick, default false
 
   ;; Query pipeline
   :where      [[?e :component ?val] ...]
@@ -1169,7 +1170,35 @@ Even if the rule's `:then` block modifies Alice or Bob, the rule will not re-fir
 
 **Refraction resets each tick.** A rule that fired on Alice this tick can fire on Alice again next tick (if she still matches).
 
-#### 5.0.3 Why Refraction Works
+#### 5.0.3 The `:once` Flag
+
+For rules that should fire at most once per tick globally (regardless of how many binding tuples match), use `:once true`:
+
+```clojure
+(rule: bootstrap
+  :once true
+  :where [(not [_ :world/initialized])]
+  :then [(spawn! {:world/initialized true})
+         (print! "World initialized!")])
+
+(rule: daily-report
+  :once true
+  :where [[?e :tag/employee]]
+  :aggregate {:count (count ?e)}
+  :then [(print! (format "Employee count: {}" ?count))])
+```
+
+With `:once true`:
+- The rule fires on the first matching binding tuple
+- After firing once, it is excluded from the activation set for the remainder of the tick
+- Like refraction, this resets each tick
+
+This is useful for:
+- Bootstrap/initialization rules that should run exactly once
+- Aggregate reports that summarize across all matches
+- Global state transitions that shouldn't repeat
+
+#### 5.0.4 Why Refraction Works
 
 Refraction prevents the most common infinite loops:
 
@@ -1186,7 +1215,7 @@ Refraction prevents the most common infinite loops:
 
 Refraction tracks the binding tuple at match time, not the resulting values. The rule fired on "entity E with counter," so it won't fire on "entity E with counter" again—regardless of what the counter's value becomes.
 
-#### 5.0.4 Cascading Effects
+#### 5.0.5 Cascading Effects
 
 Because changes are visible immediately, rules naturally chain:
 
@@ -1220,7 +1249,7 @@ When damage reduces health below zero:
 
 All within one tick. No multi-tick workarounds needed.
 
-#### 5.0.5 Conflict Resolution
+#### 5.0.6 Conflict Resolution
 
 When multiple rules can fire, they are ordered by:
 
@@ -1236,7 +1265,7 @@ When multiple rules can fire, they are ordered by:
 
 The highest-priority rule fires, then the engine re-evaluates what rules now match (since the world may have changed).
 
-#### 5.0.6 Determinism
+#### 5.0.7 Determinism
 
 Given the same world state and rule definitions, the rule engine produces identical results:
 
@@ -1321,45 +1350,7 @@ Access values from the committed previous tick:
                    :event/amount damage})])
 ```
 
-### 5.4 Conflict Resolution
-
-When multiple rules can fire, they are ordered by:
-
-1. **Salience** (higher fires first, default 0)
-2. **Specificity** (more constraints = more specific)
-3. **Declaration order** (earlier in source fires first)
-
-**Specificity calculation:**
-- Each `:where` pattern clause adds 1
-- Each `:guard` condition adds 1
-- Negations (`not`) count as clauses
-- `:let` bindings don't count (they're computed values, not constraints)
-
-```clojure
-;; Specificity = 2 (two patterns)
-(rule: basic
-  :where [[?e :tag/enemy]
-          [?e :health ?hp]]
-  :then [...])
-
-;; Specificity = 3 (two patterns + one guard)
-(rule: more-specific
-  :where [[?e :tag/enemy]
-          [?e :health ?hp]]
-  :guard [(< ?hp 10)]
-  :then [...])
-
-;; Specificity = 3 (two patterns + one negation)
-(rule: also-specific
-  :where [[?e :tag/enemy]
-          [?e :health ?hp]
-          (not [?e :tag/boss])]
-  :then [...])
-```
-
-When salience and specificity are equal, declaration order (file position) is the final tiebreaker.
-
-### 5.5 Tick Lifecycle
+### 5.4 Tick Lifecycle
 
 ```
 tick(world, inputs) -> Result<World, Error>
@@ -1423,7 +1414,7 @@ Error during tick 42:
 
 Rules can catch errors explicitly with `try`.
 
-### 5.6 Group-By Semantics in Rules
+### 5.5 Group-By Semantics in Rules
 
 When `:group-by` is present, `:then` executes **once per group**:
 
@@ -1441,7 +1432,7 @@ When `:group-by` is present, `:then` executes **once per group**:
 
 This fires once per faction that has more than 5 members.
 
-### 5.7 Effects
+### 5.6 Effects
 
 Effects modify the world (visible immediately):
 
@@ -1503,7 +1494,7 @@ Both are useful: bindings tell you "why this rule fired," while `get`/`query` te
 
 This strict behavior catches bugs where multiple rules might act on the same entity without coordination.
 
-### 5.8 Write Conflict Semantics
+### 5.7 Write Conflict Semantics
 
 When multiple rules write to the same entity/field within a tick, **last-write-wins**:
 
@@ -2354,7 +2345,7 @@ impl World {
   "version": "0.2",
   "tick": 42,
   "seed": 12345,
-  "entities": { "42.3": { "position": {...}, ... }, ... },
+  "entities": { "3.42": { "position": {...}, ... }, ... },
   "relationships": { "follows": { "forward": {...}, "reverse": {...} }, ... },
   "meta_entities": { "rule/apply-damage": {...}, ... },
   "world_entity": "1.1"
@@ -2520,6 +2511,7 @@ User-defined namespaces should use project-specific prefixes (e.g., `:game/*`, `
 (namespace adventure.data)
 
 (rule: bootstrap
+  :once    true
   :salience 1000
   :where   [(not [_ :world/initialized])]
   :then    [(let [entrance (spawn! {:tag/room true
