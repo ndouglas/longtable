@@ -2,6 +2,9 @@
 
 use std::fmt;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Entity identifier with generational index for stale reference detection.
 ///
 /// The generation counter increments when an entity index is reused after destruction,
@@ -11,6 +14,7 @@ use std::fmt;
 /// - `index`: 64-bit index into entity storage
 /// - `generation`: 32-bit generation counter
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct EntityId {
     /// Index into entity storage.
     pub index: u64,

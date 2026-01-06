@@ -157,6 +157,14 @@ pub enum ErrorKind {
     /// Internal error (should not happen).
     #[error("internal error: {0}")]
     Internal(String),
+
+    /// I/O error during file operations.
+    #[error("I/O error: {0}")]
+    IoError(String),
+
+    /// Serialization or deserialization error.
+    #[error("serialization error: {0}")]
+    SerializationError(String),
 }
 
 /// Semantic limits (kill switches) that can be exceeded.

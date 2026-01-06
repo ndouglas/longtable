@@ -8,12 +8,16 @@
 
 use longtable_foundation::{EntityId, Error, Result};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Manages entity lifecycle and generation tracking.
 ///
 /// Entities are allocated from a free list when available, otherwise
 /// new indices are allocated. When an entity is destroyed, its index
 /// is added to the free list and its generation is incremented.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct EntityStore {
     /// Generation counter for each entity index.
     /// Even generations are free, odd generations are alive.

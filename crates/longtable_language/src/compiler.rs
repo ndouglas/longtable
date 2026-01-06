@@ -984,6 +984,50 @@ pub fn compile_expr(source: &str) -> Result<Bytecode> {
     compiler.compile_expr(&ast)
 }
 
+/// A compiled expression with its constants.
+#[derive(Clone, Debug)]
+pub struct CompiledExpr {
+    /// The bytecode for this expression.
+    pub code: Bytecode,
+    /// Constants referenced by the bytecode.
+    pub constants: Vec<Value>,
+}
+
+/// Compiles an AST expression with predefined binding variables.
+///
+/// Variables in `binding_vars` will be compiled to `LoadBinding(idx)` opcodes
+/// rather than being treated as undefined symbols.
+///
+/// This is used for query compilation where pattern-matched variables need
+/// to be accessible in guard, return, and aggregate expressions.
+pub fn compile_expression(ast: &Ast, binding_vars: &[String]) -> Result<CompiledExpr> {
+    let mut compiler = Compiler::new();
+    // Pre-populate locals with binding vars - they'll be treated as locals
+    // but we'll post-process to convert LoadLocal to LoadBinding
+    for (idx, var) in binding_vars.iter().enumerate() {
+        compiler.locals.insert(var.clone(), idx as u16);
+    }
+    compiler.next_local = binding_vars.len() as u16;
+
+    let mut code = Bytecode::new();
+    compiler.compile_node(ast, &mut code)?;
+
+    // Convert LoadLocal(n) to LoadBinding(n) for binding vars
+    let binding_count = binding_vars.len() as u16;
+    for op in &mut code.ops {
+        if let Opcode::LoadLocal(slot) = op {
+            if *slot < binding_count {
+                *op = Opcode::LoadBinding(*slot);
+            }
+        }
+    }
+
+    Ok(CompiledExpr {
+        code,
+        constants: compiler.constants,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

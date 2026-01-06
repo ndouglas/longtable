@@ -1,0 +1,67 @@
+;; Adventure Game Relationship Schemas
+;; Defines how entities connect to each other.
+
+;; =============================================================================
+;; Location Relationships
+;; =============================================================================
+
+;; Player/NPC/Item is located in a room
+;; Many entities can be in one room
+(relationship: in-room
+  :cardinality :many-to-one
+  :on-target-delete :remove)
+
+;; Item is contained within another entity (container, inventory)
+(relationship: contained-in
+  :cardinality :many-to-one
+  :on-target-delete :cascade)
+
+;; =============================================================================
+;; Navigation Relationships
+;; =============================================================================
+
+;; Room connections by direction
+;; Each direction is a separate relationship for clarity
+
+(relationship: exit/north
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+(relationship: exit/south
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+(relationship: exit/east
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+(relationship: exit/west
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+(relationship: exit/up
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+(relationship: exit/down
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+;; Door blocks an exit
+(relationship: blocked-by
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+;; =============================================================================
+;; Interaction Relationships
+;; =============================================================================
+
+;; NPC is talking to player
+(relationship: talking-to
+  :cardinality :one-to-one
+  :on-target-delete :remove)
+
+;; Entity is targeting another (for combat)
+(relationship: targeting
+  :cardinality :one-to-one
+  :on-target-delete :remove)

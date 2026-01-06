@@ -741,3 +741,183 @@ mod proptests {
         }
     }
 }
+
+// =============================================================================
+// Serde Implementation
+// =============================================================================
+
+#[cfg(feature = "serde")]
+mod serde_support {
+    use super::{EntityId, KeywordId, LtMap, SymbolId, Value};
+    use serde::de::{self, MapAccess, SeqAccess, Visitor};
+    use serde::ser::SerializeMap;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::fmt;
+
+    impl Serialize for Value {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            use serde::ser::SerializeSeq;
+
+            match self {
+                Value::Nil => serializer.serialize_unit(),
+                Value::Bool(b) => serializer.serialize_bool(*b),
+                Value::Int(n) => serializer.serialize_i64(*n),
+                Value::Float(f) => serializer.serialize_f64(*f),
+                Value::String(s) => serializer.serialize_str(s),
+                Value::Symbol(id) => {
+                    // Serialize symbol as a tagged map
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    map.serialize_entry("__symbol__", &id.index())?;
+                    map.end()
+                }
+                Value::Keyword(id) => {
+                    // Serialize keyword as a tagged map
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    map.serialize_entry("__keyword__", &id.index())?;
+                    map.end()
+                }
+                Value::EntityRef(id) => {
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    map.serialize_entry("__entity__", &(id.index, id.generation))?;
+                    map.end()
+                }
+                Value::Vec(v) => {
+                    let mut seq = serializer.serialize_seq(Some(v.len()))?;
+                    for item in v.iter() {
+                        seq.serialize_element(item)?;
+                    }
+                    seq.end()
+                }
+                Value::Set(s) => {
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    let items: Vec<_> = s.iter().cloned().collect();
+                    map.serialize_entry("__set__", &items)?;
+                    map.end()
+                }
+                Value::Map(m) => {
+                    // Serialize as array of [key, value] pairs since keys can be any Value
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    let pairs: Vec<_> = m.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+                    map.serialize_entry("__map__", &pairs)?;
+                    map.end()
+                }
+                Value::Fn(_) => {
+                    // Functions cannot be serialized - serialize as a marker
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    map.serialize_entry("__fn__", &true)?;
+                    map.end()
+                }
+            }
+        }
+    }
+
+    impl<'de> Deserialize<'de> for Value {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            deserializer.deserialize_any(ValueVisitor)
+        }
+    }
+
+    struct ValueVisitor;
+
+    impl<'de> Visitor<'de> for ValueVisitor {
+        type Value = Value;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a Longtable Value")
+        }
+
+        fn visit_unit<E>(self) -> Result<Self::Value, E> {
+            Ok(Value::Nil)
+        }
+
+        fn visit_bool<E>(self, v: bool) -> Result<Self::Value, E> {
+            Ok(Value::Bool(v))
+        }
+
+        fn visit_i64<E>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Value::Int(v))
+        }
+
+        fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+        where
+            E: de::Error,
+        {
+            i64::try_from(v)
+                .map(Value::Int)
+                .map_err(|_| de::Error::custom("integer overflow"))
+        }
+
+        fn visit_f64<E>(self, v: f64) -> Result<Self::Value, E> {
+            Ok(Value::Float(v))
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Value::String(v.into()))
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E> {
+            Ok(Value::String(v.into()))
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: SeqAccess<'de>,
+        {
+            let mut values = Vec::new();
+            while let Some(value) = seq.next_element()? {
+                values.push(value);
+            }
+            Ok(Value::Vec(values.into_iter().collect()))
+        }
+
+        fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+        where
+            A: MapAccess<'de>,
+        {
+            // Check for tagged types
+            if let Some(key) = map.next_key::<String>()? {
+                match key.as_str() {
+                    "__symbol__" => {
+                        let idx: u32 = map.next_value()?;
+                        Ok(Value::Symbol(SymbolId(idx)))
+                    }
+                    "__keyword__" => {
+                        let idx: u32 = map.next_value()?;
+                        Ok(Value::Keyword(KeywordId(idx)))
+                    }
+                    "__entity__" => {
+                        let (index, generation): (u64, u32) = map.next_value()?;
+                        Ok(Value::EntityRef(EntityId::new(index, generation)))
+                    }
+                    "__set__" => {
+                        let items: Vec<Value> = map.next_value()?;
+                        Ok(Value::Set(items.into_iter().collect()))
+                    }
+                    "__map__" => {
+                        let pairs: Vec<(Value, Value)> = map.next_value()?;
+                        Ok(Value::Map(pairs.into_iter().collect()))
+                    }
+                    "__fn__" => {
+                        // Functions deserialize as Nil (can't restore function pointers)
+                        let _: bool = map.next_value()?;
+                        Ok(Value::Nil)
+                    }
+                    _ => {
+                        // Regular map - but we already consumed the first key
+                        // This shouldn't happen in normal use since maps use __map__ tag
+                        Err(de::Error::custom("unexpected map key"))
+                    }
+                }
+            } else {
+                // Empty map
+                Ok(Value::Map(LtMap::new()))
+            }
+        }
+    }
+}

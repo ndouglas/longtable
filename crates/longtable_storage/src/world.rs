@@ -12,6 +12,143 @@ use crate::entity::EntityStore;
 use crate::relationship::RelationshipStore;
 use crate::schema::{ComponentSchema, RelationshipSchema};
 
+#[cfg(feature = "serde")]
+mod serde_support {
+    use super::World;
+    use serde::de::{self, MapAccess, Visitor};
+    use serde::ser::SerializeStruct;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::fmt;
+    use std::sync::Arc;
+
+    impl Serialize for World {
+        fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            // Serialize the world state without the history (previous field)
+            let mut state = serializer.serialize_struct("World", 6)?;
+            state.serialize_field("entities", &*self.entities)?;
+            state.serialize_field("components", &*self.components)?;
+            state.serialize_field("relationships", &*self.relationships)?;
+            state.serialize_field("interner", &*self.interner)?;
+            state.serialize_field("tick", &self.tick)?;
+            state.serialize_field("seed", &self.seed)?;
+            state.end()
+        }
+    }
+
+    impl<'de> Deserialize<'de> for World {
+        fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            #[derive(Deserialize)]
+            #[serde(field_identifier, rename_all = "lowercase")]
+            enum Field {
+                Entities,
+                Components,
+                Relationships,
+                Interner,
+                Tick,
+                Seed,
+            }
+
+            struct WorldVisitor;
+
+            impl<'de> Visitor<'de> for WorldVisitor {
+                type Value = World;
+
+                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                    formatter.write_str("struct World")
+                }
+
+                fn visit_map<V>(self, mut map: V) -> std::result::Result<World, V::Error>
+                where
+                    V: MapAccess<'de>,
+                {
+                    let mut entities = None;
+                    let mut components = None;
+                    let mut relationships = None;
+                    let mut interner = None;
+                    let mut tick = None;
+                    let mut seed = None;
+
+                    while let Some(key) = map.next_key()? {
+                        match key {
+                            Field::Entities => {
+                                if entities.is_some() {
+                                    return Err(de::Error::duplicate_field("entities"));
+                                }
+                                entities = Some(map.next_value()?);
+                            }
+                            Field::Components => {
+                                if components.is_some() {
+                                    return Err(de::Error::duplicate_field("components"));
+                                }
+                                components = Some(map.next_value()?);
+                            }
+                            Field::Relationships => {
+                                if relationships.is_some() {
+                                    return Err(de::Error::duplicate_field("relationships"));
+                                }
+                                relationships = Some(map.next_value()?);
+                            }
+                            Field::Interner => {
+                                if interner.is_some() {
+                                    return Err(de::Error::duplicate_field("interner"));
+                                }
+                                interner = Some(map.next_value()?);
+                            }
+                            Field::Tick => {
+                                if tick.is_some() {
+                                    return Err(de::Error::duplicate_field("tick"));
+                                }
+                                tick = Some(map.next_value()?);
+                            }
+                            Field::Seed => {
+                                if seed.is_some() {
+                                    return Err(de::Error::duplicate_field("seed"));
+                                }
+                                seed = Some(map.next_value()?);
+                            }
+                        }
+                    }
+
+                    let entities = entities.ok_or_else(|| de::Error::missing_field("entities"))?;
+                    let components =
+                        components.ok_or_else(|| de::Error::missing_field("components"))?;
+                    let relationships =
+                        relationships.ok_or_else(|| de::Error::missing_field("relationships"))?;
+                    let interner = interner.ok_or_else(|| de::Error::missing_field("interner"))?;
+                    let tick = tick.ok_or_else(|| de::Error::missing_field("tick"))?;
+                    let seed = seed.ok_or_else(|| de::Error::missing_field("seed"))?;
+
+                    Ok(World {
+                        entities: Arc::new(entities),
+                        components: Arc::new(components),
+                        relationships: Arc::new(relationships),
+                        interner: Arc::new(interner),
+                        tick,
+                        seed,
+                        previous: None, // History is not serialized
+                    })
+                }
+            }
+
+            const FIELDS: &[&str] = &[
+                "entities",
+                "components",
+                "relationships",
+                "interner",
+                "tick",
+                "seed",
+            ];
+            deserializer.deserialize_struct("World", FIELDS, WorldVisitor)
+        }
+    }
+}
+
 /// Immutable snapshot of simulation state.
 ///
 /// Clone is O(1) due to structural sharing via `Arc`.

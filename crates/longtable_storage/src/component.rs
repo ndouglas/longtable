@@ -7,10 +7,14 @@ use std::collections::HashMap;
 
 use longtable_foundation::{EntityId, Error, ErrorKind, KeywordId, LtMap, Result, Type, Value};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::schema::{ComponentSchema, FieldSchema};
 
 /// Represents a set of component types an entity has.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Archetype {
     /// Component types, sorted by `KeywordId` for consistent identity.
     components: Vec<KeywordId>,
@@ -83,6 +87,7 @@ impl Archetype {
 /// This is a simple entity-indexed storage. Components are stored
 /// as maps from entity ID to value.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ComponentStore {
     /// Registered schemas by component name.
     schemas: HashMap<KeywordId, ComponentSchema>,

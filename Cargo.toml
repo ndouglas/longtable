@@ -36,7 +36,7 @@ im = "15"
 thiserror = "2"
 
 # Serialization
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 rmp-serde = "1"
 
 # Random number generation (deterministic)

@@ -1,0 +1,103 @@
+;; Adventure Game Component Schemas
+;; Defines the structure of all components used in the game.
+
+;; =============================================================================
+;; Tag Components (marker components with no data)
+;; =============================================================================
+
+;; Entity type markers
+(component: tag/player)
+(component: tag/room)
+(component: tag/item)
+(component: tag/container)
+(component: tag/npc)
+(component: tag/door)
+
+;; State markers
+(component: tag/takeable)
+(component: tag/openable)
+(component: tag/open)
+(component: tag/locked)
+(component: tag/lit)
+(component: tag/dark)
+(component: tag/visited)
+
+;; =============================================================================
+;; Identity Components
+;; =============================================================================
+
+;; Display name for entities
+(component: name
+  :value :string)
+
+;; Description shown when examining
+(component: description
+  :value :string)
+
+;; Short description for room listings
+(component: short-description
+  :value :string)
+
+;; =============================================================================
+;; Player Components
+;; =============================================================================
+
+;; Player's health
+(component: health
+  :current :int
+  :max :int)
+
+;; Player's score
+(component: score
+  :value :int)
+
+;; Number of moves taken
+(component: moves
+  :value :int)
+
+;; =============================================================================
+;; Item Components
+;; =============================================================================
+
+;; Weight of an item (for inventory limits)
+(component: weight
+  :value :int)
+
+;; Item that can be used as a light source
+(component: light-source
+  :radius :int)
+
+;; Item that can be used as a weapon
+(component: weapon
+  :damage :int)
+
+;; Item that can be used as a key
+(component: key
+  :key-id :keyword)
+
+;; Door that requires a specific key
+(component: lock
+  :key-id :keyword)
+
+;; =============================================================================
+;; Container Components
+;; =============================================================================
+
+;; Maximum capacity for containers
+(component: capacity
+  :max-items :int
+  :max-weight :int)
+
+;; =============================================================================
+;; NPC Components
+;; =============================================================================
+
+;; NPC dialogue
+(component: dialogue
+  :greeting :string
+  :topics :map)
+
+;; NPC hostility
+(component: hostile
+  :damage :int
+  :attack-message :string)

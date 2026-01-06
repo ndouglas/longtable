@@ -16,6 +16,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 pub mod pattern;
+pub mod query;
 pub mod rule;
 pub mod spike;
 
@@ -23,6 +24,9 @@ pub mod spike;
 pub use pattern::{
     Bindings, CompiledBinding, CompiledClause, CompiledPattern, PatternCompiler, PatternMatcher,
 };
+
+// Query system
+pub use query::{CompiledQuery, QueryCompiler, QueryExecutor};
 
 // Production rule engine
 pub use rule::{Activation, CompiledRule, EffectRecord, ProductionRuleEngine};

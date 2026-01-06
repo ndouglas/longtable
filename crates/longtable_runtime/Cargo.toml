@@ -10,8 +10,8 @@ keywords.workspace = true
 categories.workspace = true
 
 [dependencies]
-longtable_foundation.workspace = true
-longtable_storage.workspace = true
+longtable_foundation = { workspace = true, features = ["serde"] }
+longtable_storage = { workspace = true, features = ["serde"] }
 longtable_language.workspace = true
 longtable_engine.workspace = true
 longtable_stdlib.workspace = true

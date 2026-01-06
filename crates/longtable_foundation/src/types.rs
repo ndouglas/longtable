@@ -2,10 +2,14 @@
 
 use std::fmt;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Type descriptor for schema validation.
 ///
 /// Used to declare component field types and validate values at runtime.
 #[derive(Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Type {
     /// The nil type (only value: nil).
     Nil,
@@ -39,6 +43,7 @@ pub enum Type {
 
 /// Function arity specification.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Arity {
     /// Exactly N arguments.
     Exact(usize),

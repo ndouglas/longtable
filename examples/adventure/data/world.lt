@@ -1,0 +1,214 @@
+;; Adventure Game Initial World State
+;; A small dungeon crawl inspired by classic text adventures.
+
+;; =============================================================================
+;; The Player
+;; =============================================================================
+
+(spawn: player
+  :tag/player true
+  :name {:value "Adventurer"}
+  :description {:value "A brave soul seeking treasure in the depths."}
+  :health {:current 100 :max 100}
+  :score {:value 0}
+  :moves {:value 0})
+
+;; =============================================================================
+;; Rooms - The Cave System
+;; =============================================================================
+
+(spawn: cave-entrance
+  :tag/room true
+  :tag/lit true
+  :name {:value "Cave Entrance"}
+  :description {:value "You stand at the mouth of a dark cave. Sunlight streams in from behind you, illuminating rough stone walls covered in moss. A cold breeze carries the smell of damp earth from deeper within."}
+  :short-description {:value "The cave entrance, dimly lit by daylight."})
+
+(spawn: main-hall
+  :tag/room true
+  :tag/dark true
+  :name {:value "Main Hall"}
+  :description {:value "A vast underground chamber stretches before you. Ancient stalactites hang from the ceiling like stone fangs. Multiple passages lead off into darkness."}
+  :short-description {:value "A large underground chamber."})
+
+(spawn: crystal-cavern
+  :tag/room true
+  :tag/lit true
+  :name {:value "Crystal Cavern"}
+  :description {:value "The walls here are studded with glowing crystals that cast an eerie blue light. The crystals hum faintly, resonating with some unknown energy."}
+  :short-description {:value "A cavern filled with glowing crystals."})
+
+(spawn: underground-lake
+  :tag/room true
+  :tag/dark true
+  :name {:value "Underground Lake"}
+  :description {:value "You stand on the shore of a still, black lake. The water is so calm it reflects like a mirror. Something glints in the shallows nearby."}
+  :short-description {:value "The shore of an underground lake."})
+
+(spawn: narrow-passage
+  :tag/room true
+  :tag/dark true
+  :name {:value "Narrow Passage"}
+  :description {:value "The passage here is barely wide enough to squeeze through. Rough stone scrapes against you on both sides."}
+  :short-description {:value "A tight squeeze between rock walls."})
+
+(spawn: treasure-chamber
+  :tag/room true
+  :tag/dark true
+  :name {:value "Treasure Chamber"}
+  :description {:value "You have found it! A small chamber filled with ancient artifacts and gleaming coins. A ornate chest sits in the center of the room."}
+  :short-description {:value "A chamber filled with treasure!"})
+
+(spawn: chimney
+  :tag/room true
+  :tag/dark true
+  :name {:value "Chimney"}
+  :description {:value "A natural vertical shaft in the rock. Looking up, you can see a faint glimmer of light far above. The walls are rough enough to climb."}
+  :short-description {:value "A vertical shaft leading upward."})
+
+;; =============================================================================
+;; Room Connections
+;; =============================================================================
+
+;; Cave Entrance connects to Main Hall (south)
+(link: cave-entrance :exit/south main-hall)
+(link: main-hall :exit/north cave-entrance)
+
+;; Main Hall connects to Crystal Cavern (east)
+(link: main-hall :exit/east crystal-cavern)
+(link: crystal-cavern :exit/west main-hall)
+
+;; Main Hall connects to Underground Lake (west)
+(link: main-hall :exit/west underground-lake)
+(link: underground-lake :exit/east main-hall)
+
+;; Crystal Cavern connects to Narrow Passage (south)
+(link: crystal-cavern :exit/south narrow-passage)
+(link: narrow-passage :exit/north crystal-cavern)
+
+;; Narrow Passage connects to Treasure Chamber (south)
+(link: narrow-passage :exit/south treasure-chamber)
+(link: treasure-chamber :exit/north narrow-passage)
+
+;; Underground Lake connects to Chimney (down)
+(link: underground-lake :exit/down chimney)
+(link: chimney :exit/up underground-lake)
+
+;; =============================================================================
+;; Items
+;; =============================================================================
+
+;; Brass Lantern - essential light source
+(spawn: brass-lantern
+  :tag/item true
+  :tag/takeable true
+  :name {:value "brass lantern"}
+  :description {:value "A sturdy brass lantern with a glass chimney. It provides a warm, steady light."}
+  :weight {:value 2}
+  :light-source {:radius 3})
+
+;; Rusty Sword - basic weapon
+(spawn: rusty-sword
+  :tag/item true
+  :tag/takeable true
+  :name {:value "rusty sword"}
+  :description {:value "An old iron sword. Despite its rust, the edge is still sharp."}
+  :weight {:value 3}
+  :weapon {:damage 10})
+
+;; Gold Coins - treasure
+(spawn: gold-coins
+  :tag/item true
+  :tag/takeable true
+  :name {:value "pile of gold coins"}
+  :description {:value "A handful of ancient gold coins, still gleaming after centuries."}
+  :weight {:value 1})
+
+;; Crystal Shard - treasure and light source
+(spawn: crystal-shard
+  :tag/item true
+  :tag/takeable true
+  :name {:value "crystal shard"}
+  :description {:value "A fragment of the glowing crystals. It pulses with a soft blue light."}
+  :weight {:value 1}
+  :light-source {:radius 1})
+
+;; Silver Key - opens the treasure chest
+(spawn: silver-key
+  :tag/item true
+  :tag/takeable true
+  :name {:value "silver key"}
+  :description {:value "An ornate silver key with a skull-shaped bow."}
+  :weight {:value 0}
+  :key {:key-id :treasure-chest})
+
+;; Treasure Chest - container
+(spawn: treasure-chest
+  :tag/item true
+  :tag/container true
+  :tag/openable true
+  :tag/locked true
+  :name {:value "treasure chest"}
+  :description {:value "A heavy wooden chest bound with iron bands. It is locked."}
+  :weight {:value 50}
+  :capacity {:max-items 10 :max-weight 100}
+  :lock {:key-id :treasure-chest})
+
+;; Golden Crown - inside the chest
+(spawn: golden-crown
+  :tag/item true
+  :tag/takeable true
+  :name {:value "golden crown"}
+  :description {:value "A magnificent crown of pure gold, set with a massive ruby."}
+  :weight {:value 2})
+
+;; Old Rope - utility item
+(spawn: old-rope
+  :tag/item true
+  :tag/takeable true
+  :name {:value "coil of rope"}
+  :description {:value "A sturdy hemp rope, about 30 feet long."}
+  :weight {:value 3})
+
+;; =============================================================================
+;; Item Placements
+;; =============================================================================
+
+;; Player starts at cave entrance
+(link: player :in-room cave-entrance)
+
+;; Items in Cave Entrance
+(link: brass-lantern :in-room cave-entrance)
+
+;; Items in Main Hall
+(link: rusty-sword :in-room main-hall)
+
+;; Items in Crystal Cavern
+(link: crystal-shard :in-room crystal-cavern)
+
+;; Items in Underground Lake
+(link: gold-coins :in-room underground-lake)
+(link: silver-key :in-room underground-lake)
+
+;; Items in Chimney
+(link: old-rope :in-room chimney)
+
+;; Items in Treasure Chamber
+(link: treasure-chest :in-room treasure-chamber)
+
+;; Golden crown is inside the chest
+(link: golden-crown :contained-in treasure-chest)
+
+;; =============================================================================
+;; NPCs
+;; =============================================================================
+
+(spawn: cave-troll
+  :tag/npc true
+  :name {:value "Cave Troll"}
+  :description {:value "A massive, lumbering creature with mottled grey skin and beady red eyes."}
+  :health {:current 50 :max 50}
+  :hostile {:damage 15 :attack-message "The troll swings its massive fist at you!"})
+
+;; Troll guards the narrow passage
+(link: cave-troll :in-room narrow-passage)

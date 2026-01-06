@@ -1,0 +1,63 @@
+;; =============================================================================
+;; THE DARK CAVE
+;; A Text Adventure Demo for Longtable
+;; =============================================================================
+;;
+;; This example demonstrates Longtable's capabilities for building text
+;; adventure games.
+;;
+;; CURRENT STATUS (Phase 2.5):
+;; The world structure is defined in components.lt, relationships.lt, and
+;; data/world.lt as examples of the planned DSL syntax. Currently, these
+;; declarations aren't executable - the world is constructed via Rust API
+;; in the integration tests.
+;;
+;; Once Phase 3-4 are complete, you'll be able to:
+;;   longtable examples/adventure/_.lt
+;; And the world will be constructed from the DSL files.
+;;
+;; For now, you can explore the REPL with basic expressions:
+;;
+;; =============================================================================
+
+;; Basic arithmetic
+(+ 1 2 3)
+
+;; Strings
+"Welcome to The Dark Cave!"
+
+;; Data structures
+{:player "Adventurer" :health 100}
+
+;; =============================================================================
+;; PLANNED DSL (Phase 3-4)
+;; =============================================================================
+;;
+;; Component definitions (components.lt):
+;;   (component: tag/player)
+;;   (component: health :current :int :max :int)
+;;   (component: name :value :string)
+;;
+;; Relationship definitions (relationships.lt):
+;;   (relationship: in-room :cardinality :many-to-one)
+;;   (relationship: exit/north :cardinality :one-to-one)
+;;
+;; Entity spawning (data/world.lt):
+;;   (spawn: player
+;;     :tag/player true
+;;     :name {:value "Adventurer"}
+;;     :health {:current 100 :max 100})
+;;
+;;   (spawn: cave-entrance
+;;     :tag/room true
+;;     :name {:value "Cave Entrance"})
+;;
+;; Relationships:
+;;   (link: player :in-room cave-entrance)
+;;   (link: cave-entrance :exit/south main-hall)
+;;
+;; Queries:
+;;   (query :where [[?e :tag/player]] :return ?e)
+;;   (query :where [[?r :tag/room] [?r :name ?n]] :return ?n)
+;;
+;; =============================================================================

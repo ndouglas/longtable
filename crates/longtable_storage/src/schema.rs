@@ -4,8 +4,12 @@
 
 use longtable_foundation::{KeywordId, Type, Value};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Schema definition for a component type.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct ComponentSchema {
     /// Component name (e.g., `:health`, `:position`).
     pub name: KeywordId,
@@ -52,6 +56,7 @@ impl ComponentSchema {
 
 /// Schema definition for a component field.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FieldSchema {
     /// Field name.
     pub name: KeywordId,
@@ -100,6 +105,7 @@ impl FieldSchema {
 
 /// Schema definition for a relationship type.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RelationshipSchema {
     /// Relationship name (e.g., `:contains`, `:parent-of`).
     pub name: KeywordId,
@@ -167,6 +173,7 @@ impl RelationshipSchema {
 
 /// How a relationship is stored.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Storage {
     /// Stored as a field on the source entity (efficient for 1:1 or N:1).
     Field,
@@ -176,6 +183,7 @@ pub enum Storage {
 
 /// Cardinality constraint for relationships.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum Cardinality {
     /// Each source has at most one target, each target has at most one source.
     OneToOne,
@@ -189,6 +197,7 @@ pub enum Cardinality {
 
 /// What happens when the target of a relationship is deleted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum OnDelete {
     /// Remove the relationship edge.
     Remove,
@@ -200,6 +209,7 @@ pub enum OnDelete {
 
 /// What happens when a cardinality constraint would be violated.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum OnViolation {
     /// Return an error.
     Error,

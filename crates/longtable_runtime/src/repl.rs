@@ -314,6 +314,8 @@ impl<E: LineEditor> Repl<E> {
 
     /// Loads and evaluates a file.
     ///
+    /// If the path is a directory containing a `_.lt` file, that file is loaded.
+    ///
     /// # Errors
     ///
     /// Returns an error if the file cannot be read or evaluated.
@@ -326,7 +328,17 @@ impl<E: LineEditor> Repl<E> {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("lt"));
 
-        let file_path = if resolved.exists() {
+        let file_path = if resolved.is_dir() {
+            // If it's a directory, look for _.lt inside
+            let entry_file = resolved.join("_.lt");
+            if entry_file.exists() {
+                entry_file
+            } else {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "directory '{path}' does not contain _.lt entry file"
+                ))));
+            }
+        } else if resolved.exists() {
             resolved
         } else if !has_lt_ext {
             let with_ext = self.session.resolve_path(&format!("{path}.lt"));

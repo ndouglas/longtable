@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 
 use longtable_foundation::{EntityId, Error, ErrorKind, KeywordId, Result};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::schema::{Cardinality, OnDelete, OnViolation, RelationshipSchema};
 
 /// Stores relationship edges between entities.
@@ -15,6 +18,7 @@ use crate::schema::{Cardinality, OnDelete, OnViolation, RelationshipSchema};
 /// - Forward: source -> relationship -> targets
 /// - Reverse: target -> relationship -> sources
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RelationshipStore {
     /// Registered schemas by relationship name.
     schemas: HashMap<KeywordId, RelationshipSchema>,

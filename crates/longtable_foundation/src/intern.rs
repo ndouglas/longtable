@@ -7,11 +7,15 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Interned symbol identifier.
 ///
 /// Symbols are identifiers like `foo`, `bar`, `?entity`.
 /// They are interned for fast comparison.
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SymbolId(pub(crate) u32);
 
 impl SymbolId {
@@ -33,6 +37,7 @@ impl fmt::Debug for SymbolId {
 /// Keywords are identifiers prefixed with `:`, like `:health`, `:position/x`.
 /// They are interned for fast comparison.
 #[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct KeywordId(pub(crate) u32);
 
 impl KeywordId {
@@ -54,6 +59,7 @@ impl fmt::Debug for KeywordId {
 /// This is a simple interner that maps strings to unique IDs and back.
 /// It is not thread-safe; use external synchronization if needed.
 #[derive(Clone, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Interner {
     /// String storage (shared across symbols and keywords).
     strings: Vec<Arc<str>>,
