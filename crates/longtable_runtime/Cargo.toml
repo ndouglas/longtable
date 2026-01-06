@@ -22,6 +22,11 @@ rustyline.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "serialization_benchmarks"
+harness = false
 
 [[bin]]
 name = "longtable"

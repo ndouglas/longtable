@@ -36,9 +36,14 @@ pub mod declaration;
 pub mod lexer;
 pub mod opcode;
 pub mod parser;
+pub mod pretty;
 pub mod span;
 pub mod token;
+pub mod visitor;
 pub mod vm;
+
+#[cfg(test)]
+mod fuzz_tests;
 
 // Re-exports for convenience
 pub use ast::Ast;

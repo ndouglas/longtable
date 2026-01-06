@@ -3,6 +3,10 @@
 //! This module provides the rule engine that manages rule execution,
 //! refraction, and the run-to-quiescence loop.
 
+pub mod compiler;
+
+pub use compiler::{CompiledRuleBody, FullCompiledRule, RuleCompiler};
+
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 

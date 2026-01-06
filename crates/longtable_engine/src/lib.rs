@@ -29,7 +29,10 @@ pub use pattern::{
 pub use query::{CompiledQuery, QueryCompiler, QueryExecutor};
 
 // Production rule engine
-pub use rule::{Activation, CompiledRule, EffectRecord, ProductionRuleEngine};
+pub use rule::{
+    Activation, CompiledRule, CompiledRuleBody, EffectRecord, FullCompiledRule,
+    ProductionRuleEngine, RuleCompiler,
+};
 
 // Spike code (to be replaced)
 pub use spike::{

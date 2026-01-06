@@ -1794,6 +1794,58 @@ Comprehensive benchmarks in `crates/longtable_language/benches/language_benchmar
 - Recursive performance: ~40,000x slower than native C (expected for bytecode VM without JIT)
 - Suitable for rule engine DSL where hot paths are native Rust functions
 
+#### Engine & Storage Benchmarks (criterion)
+
+Comprehensive benchmarks for pattern matching, queries, and storage operations:
+
+| Category                | Benchmark                | Time      | Notes              |
+| ----------------------- | ------------------------ | --------- | ------------------ |
+| **Pattern Compilation** |                          |           |                    |
+|                         | simple_component         | 96.7 ns   | Single clause      |
+|                         | multi_clause (3 clauses) | 228.4 ns  |                    |
+|                         | with_variable_binding    | 137.5 ns  |                    |
+| **Throughput**          |                          |           |                    |
+|                         | pattern_matches/sec (9K) | 3.84 ms   | ~2.3M matches/sec  |
+| **Component Store**     |                          |           |                    |
+|                         | get                      | 66.0 ns   |                    |
+|                         | get_field                | 112.0 ns  |                    |
+|                         | has                      | 32.0 ns   |                    |
+|                         | set_tag                  | 104.9 ns  |                    |
+|                         | set_structured           | 554.5 ns  |                    |
+| **Entity Store**        |                          |           |                    |
+|                         | spawn_destroy_cycle      | 54.7 ns   |                    |
+| **Relationship Store**  |                          |           |                    |
+|                         | link                     | 479.8 ns  |                    |
+|                         | has_edge                 | 60.3 ns   |                    |
+| **World**               |                          |           |                    |
+|                         | spawn_with_components    | 479.6 ns  |                    |
+|                         | get                      | 66.1 ns   |                    |
+|                         | set                      | 327.3 ns  |                    |
+|                         | link                     | 471.2 ns  |                    |
+|                         | advance_tick             | 50.8 ns   |                    |
+| **Interner**            |                          |           |                    |
+|                         | intern_new_symbol        | 296.1 ns  |                    |
+|                         | intern_duplicate         | 21.2 ns   |                    |
+|                         | get_symbol               | 0.8 ns    |                    |
+|                         | intern_1000_unique       | 284.16 µs |                    |
+| **Value Operations**    |                          |           |                    |
+|                         | clone (int/float)        | ~4 ns     | Inline copy        |
+|                         | clone (vec 1000)         | 21 ns     | Structural sharing |
+|                         | clone (map 1000)         | 13.3 ns   | Structural sharing |
+|                         | compare (int)            | 3.6 ns    |                    |
+|                         | compare (vec 1000)       | 5.91 µs   |                    |
+|                         | hash (int)               | 16.0 ns   |                    |
+|                         | hash (string short)      | 18.5 ns   |                    |
+|                         | hash (vec 1000)          | 9.07 µs   |                    |
+
+**Key performance insights**:
+- Pattern compilation is very fast (~100-230ns per pattern)
+- Pattern matching at scale: ~2.3 million matches/second
+- Storage operations are sub-microsecond (component get: 66ns, has: 32ns)
+- VM bytecode execution: ~500ns per simple operation
+- Persistent data structure cloning is extremely cheap due to structural sharing (vec 1000: 21ns)
+- Interning provides fast symbol lookup after first intern (0.8ns vs 296ns)
+
 ### Example: Expression Evaluation
 
 ```rust

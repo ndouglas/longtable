@@ -395,6 +395,7 @@ dependencies = [
 name = "longtable_engine"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "longtable_foundation",
  "longtable_language",
  "longtable_storage",
@@ -430,6 +431,7 @@ dependencies = [
 name = "longtable_runtime"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "longtable_engine",
  "longtable_foundation",
  "longtable_language",
