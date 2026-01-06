@@ -98,12 +98,12 @@ Each tick executes as a single transaction against the world:
 
 **Read/write semantics are uniform:**
 
-| Operation | What it sees |
-|-----------|--------------|
-| `get` | Current transaction state |
-| `query` | Current transaction state |
-| `prev` | Previous tick's committed world |
-| `set!`, `update!` | Modifies current transaction state |
+| Operation            | What it sees                       |
+| -------------------- | ---------------------------------- |
+| `get`                | Current transaction state          |
+| `query`              | Current transaction state          |
+| `prev`               | Previous tick's committed world    |
+| `set!`, `update!`    | Modifies current transaction state |
 | `spawn!`, `destroy!` | Modifies current transaction state |
 
 There is no distinction between "activation phase" and "execution phase." Rules see the world as it currently is, including changes made by earlier rules in the same tick.
@@ -221,26 +221,26 @@ A **Relationship** is a typed, directional connection between entities. Each rel
 
 **Storage strategies:**
 
-| Strategy | Use When | Example |
-|----------|----------|---------|
-| `:field` | Simple connections, no extra data | `:follows`, `:parent`, `:in-room` |
-| `:entity` | Relationships need attributes | `:employment`, `:friendship-with-history` |
+| Strategy  | Use When                          | Example                                   |
+| --------- | --------------------------------- | ----------------------------------------- |
+| `:field`  | Simple connections, no extra data | `:follows`, `:parent`, `:in-room`         |
+| `:entity` | Relationships need attributes     | `:employment`, `:friendship-with-history` |
 
 **Cardinality as Outgoing/Incoming Limits:**
 
-| Cardinality | Max Outgoing (source→) | Max Incoming (→target) | `:field` Storage |
-|-------------|------------------------|------------------------|------------------|
-| `:one-to-one` | 1 | 1 | Single `EntityRef` |
-| `:one-to-many` | many | 1 | `Vec<EntityRef>` |
-| `:many-to-one` | 1 | many | Single `EntityRef` |
-| `:many-to-many` | many | many | `Vec<EntityRef>` |
+| Cardinality     | Max Outgoing (source→) | Max Incoming (→target) | `:field` Storage   |
+| --------------- | ---------------------- | ---------------------- | ------------------ |
+| `:one-to-one`   | 1                      | 1                      | Single `EntityRef` |
+| `:one-to-many`  | many                   | 1                      | `Vec<EntityRef>`   |
+| `:many-to-one`  | 1                      | many                   | Single `EntityRef` |
+| `:many-to-many` | many                   | many                   | `Vec<EntityRef>`   |
 
 **Cardinality enforcement:**
 
-| Violation | Default Behavior | With `:on-violation :replace` |
-|-----------|------------------|-------------------------------|
-| Exceeds max outgoing | Error | Unlink old, link new |
-| Exceeds max incoming | Error | Unlink old, link new |
+| Violation            | Default Behavior | With `:on-violation :replace` |
+| -------------------- | ---------------- | ----------------------------- |
+| Exceeds max outgoing | Error            | Unlink old, link new          |
+| Exceeds max incoming | Error            | Unlink old, link new          |
 
 ```clojure
 ;; Default: error if player already in a room
@@ -267,11 +267,11 @@ Relationships are manipulated with `link!` and `unlink!`:
 
 **Link/unlink semantics:**
 
-| Operation | Behavior |
-|-----------|----------|
-| `link!` existing edge | No-op (idempotent, no duplicate) |
+| Operation                     | Behavior                                       |
+| ----------------------------- | ---------------------------------------------- |
+| `link!` existing edge         | No-op (idempotent, no duplicate)               |
 | `link!` violating cardinality | Error (or replace if `:on-violation :replace`) |
-| `unlink!` missing edge | No-op (no error) |
+| `unlink!` missing edge        | No-op (no error)                               |
 
 **Ordering**: For `:one-to-many` and `:many-to-many` relationships using `:field` storage, the `Vec<EntityRef>` maintains stable insertion order. This order is deterministic but not semantically meaningful—do not rely on it for game logic.
 
@@ -426,28 +426,28 @@ Longtable commits to the principle that **engine concepts are queryable entities
 
 **Meta-entity components** (read-only, in `:meta/*` namespace):
 
-| Component | Description |
-|-----------|-------------|
-| `:meta/type` | `:component`, `:relationship`, `:rule`, `:constraint`, `:derived` |
-| `:meta/name` | The declared name (keyword) |
-| `:meta/namespace` | Defining namespace |
-| `:meta/source-location` | File and line number |
-| `:meta/enabled` | For rules: currently enabled? |
-| `:meta/salience` | For rules/constraints: priority |
-| `:meta/patterns` | For rules: the `:where` patterns |
-| `:meta/fields` | For components: field definitions |
-| `:meta/cardinality` | For relationships: cardinality info |
+| Component               | Description                                                       |
+| ----------------------- | ----------------------------------------------------------------- |
+| `:meta/type`            | `:component`, `:relationship`, `:rule`, `:constraint`, `:derived` |
+| `:meta/name`            | The declared name (keyword)                                       |
+| `:meta/namespace`       | Defining namespace                                                |
+| `:meta/source-location` | File and line number                                              |
+| `:meta/enabled`         | For rules: currently enabled?                                     |
+| `:meta/salience`        | For rules/constraints: priority                                   |
+| `:meta/patterns`        | For rules: the `:where` patterns                                  |
+| `:meta/fields`          | For components: field definitions                                 |
+| `:meta/cardinality`     | For relationships: cardinality info                               |
 
 This makes Longtable self-describing and enables tooling like schema browsers, rule visualizers, and dynamic rule management.
 
 **Meta-entity phase boundary**: Changes to meta-entities take effect at **tick boundaries**, not during tick execution:
 
-| Operation | Effect Timing |
-|-----------|---------------|
-| `(disable-rule! r)` | Rule excluded from **next** tick's activation |
-| `(enable-rule! r)` | Rule included in **next** tick's activation |
-| `(set! rule :meta/salience n)` | New salience used **next** tick |
-| `(spawn! {:meta/type :rule ...})` | New rule activates **next** tick |
+| Operation                         | Effect Timing                                 |
+| --------------------------------- | --------------------------------------------- |
+| `(disable-rule! r)`               | Rule excluded from **next** tick's activation |
+| `(enable-rule! r)`                | Rule included in **next** tick's activation   |
+| `(set! rule :meta/salience n)`    | New salience used **next** tick               |
+| `(spawn! {:meta/type :rule ...})` | New rule activates **next** tick              |
 
 This ensures the activation set is stable throughout a tick. A rule cannot disable itself mid-tick to prevent its own effects—once activated, it runs to completion.
 
@@ -480,11 +480,11 @@ When enabled, operations like `(/ 0.0 0.0)` or `(sqrt -1.0)` will throw an error
 
 ### 3.2 Composite Types
 
-| Type           | Description                   | Literal Examples            |
-| -------------- | ----------------------------- | --------------------------- |
-| `:vec<T>`      | Ordered sequence              | `[1 2 3]`, `["a" "b"]`      |
-| `:set<T>`      | Unordered unique collection   | `#{1 2 3}`                  |
-| `:map<K,V>`    | Key-value mapping             | `{:a 1 :b 2}`               |
+| Type        | Description                 | Literal Examples       |
+| ----------- | --------------------------- | ---------------------- |
+| `:vec<T>`   | Ordered sequence            | `[1 2 3]`, `["a" "b"]` |
+| `:set<T>`   | Unordered unique collection | `#{1 2 3}`             |
+| `:map<K,V>` | Key-value mapping           | `{:a 1 :b 2}`          |
 
 ### 3.3 Nullability
 
@@ -582,11 +582,11 @@ Longtable guarantees **RNG determinism**: given the same world seed and inputs, 
 
 **Collection iteration order is NOT guaranteed** across runs, platforms, or implementations:
 
-| Collection | Iteration Order |
-|------------|-----------------|
-| `:vec` | Index order (0, 1, 2, ...) — stable |
-| `:set` | Unspecified (implementation-defined) |
-| `:map` | Unspecified (implementation-defined) |
+| Collection | Iteration Order                      |
+| ---------- | ------------------------------------ |
+| `:vec`     | Index order (0, 1, 2, ...) — stable  |
+| `:set`     | Unspecified (implementation-defined) |
+| `:map`     | Unspecified (implementation-defined) |
 
 **Practical implications:**
 
@@ -865,20 +865,20 @@ All declaration forms share a common pattern-matching syntax with `:where` claus
 
 All query-like forms (rules, queries, derived, constraints) support these clauses:
 
-| Clause | Purpose | Available In |
-|--------|---------|--------------|
-| `:where` | Pattern matching | All |
-| `:let` | Per-match computed values | All |
-| `:aggregate` | Aggregate functions | All |
-| `:group-by` | Partition results | Rule, Query, Constraint |
-| `:guard` | Filter on computed/aggregate values | All |
-| `:order-by` | Sort results | Rule, Query |
-| `:limit` | Cap result count | Rule, Query |
-| `:for` | Entity being computed | Derived only |
-| `:return` | Output shape | Query only |
-| `:then` | Effects to execute | Rule only |
-| `:value` | Computed value | Derived only |
-| `:check` | Invariant conditions | Constraint only |
+| Clause       | Purpose                             | Available In            |
+| ------------ | ----------------------------------- | ----------------------- |
+| `:where`     | Pattern matching                    | All                     |
+| `:let`       | Per-match computed values           | All                     |
+| `:aggregate` | Aggregate functions                 | All                     |
+| `:group-by`  | Partition results                   | Rule, Query, Constraint |
+| `:guard`     | Filter on computed/aggregate values | All                     |
+| `:order-by`  | Sort results                        | Rule, Query             |
+| `:limit`     | Cap result count                    | Rule, Query             |
+| `:for`       | Entity being computed               | Derived only            |
+| `:return`    | Output shape                        | Query only              |
+| `:then`      | Effects to execute                  | Rule only               |
+| `:value`     | Computed value                      | Derived only            |
+| `:check`     | Invariant conditions                | Constraint only         |
 
 **Execution order:**
 
@@ -1364,9 +1364,9 @@ When salience and specificity are equal, declaration order (file position) is th
 ```
 tick(world, inputs) -> Result<World, Error>
 
-┌─────────────────────────────────────────────────────────────┐
+┌──────────────────────────────────────────────────────────────┐
 │                         TICK N                               │
-├─────────────────────────────────────────────────────────────┤
+├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │ 1. SETUP                                                     │
 │    • Store current world as "previous" (for `prev` access)   │
@@ -1374,40 +1374,40 @@ tick(world, inputs) -> Result<World, Error>
 │    • Clear refraction set from previous tick                 │
 │                                                              │
 │ 2. RULE EXECUTION LOOP                                       │
-│    ┌────────────────────────────────────────────────────┐   │
-│    │ while true:                                         │   │
-│    │   matches = find_all_matching_rules(world)         │   │
-│    │   candidates = matches - refracted_this_tick       │   │
-│    │                                                     │   │
-│    │   if candidates.is_empty():                        │   │
-│    │     break  // Quiescence reached                   │   │
-│    │                                                     │   │
-│    │   rule, bindings = highest_priority(candidates)    │   │
-│    │   execute(rule.then, bindings)  // Mutates world   │   │
-│    │   refracted_this_tick.add((rule, bindings))        │   │
-│    └────────────────────────────────────────────────────┘   │
+│    ┌────────────────────────────────────────────────────┐    │
+│    │ while true:                                        │    │
+│    │   matches = find_all_matching_rules(world)         │    │
+│    │   candidates = matches - refracted_this_tick       │    │
+│    │                                                    │    │
+│    │   if candidates.is_empty():                        │    │
+│    │     break  // Quiescence reached                   │    │
+│    │                                                    │    │
+│    │   rule, bindings = highest_priority(candidates)    │    │
+│    │   execute(rule.then, bindings)  // Mutates world   │    │
+│    │   refracted_this_tick.add((rule, bindings))        │    │
+│    └────────────────────────────────────────────────────┘    │
 │                                                              │
 │ 3. CONSTRAINT CHECKING                                       │
-│    • For each constraint (ordered by salience, then decl):  │
-│      - Evaluate :check predicates against current world     │
-│      - :rollback violation → return Error, world unchanged  │
-│      - :warn violation → log warning, continue              │
+│    • For each constraint (ordered by salience, then decl):   │
+│      - Evaluate :check predicates against current world      │
+│      - :rollback violation → return Error, world unchanged   │
+│      - :warn violation → log warning, continue               │
 │                                                              │
 │ 4. COMMIT                                                    │
-│    • Flush output buffer (print! calls)                     │
-│    • Return new world with tick incremented                 │
+│    • Flush output buffer (print! calls)                      │
+│    • Return new world with tick incremented                  │
 │                                                              │
-└─────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────┘
 ```
 
 **Key properties:**
 
-| Property | Guarantee |
-|----------|-----------|
-| Termination | Refraction ensures finite rule firings per tick |
-| Atomicity | Entire tick succeeds or fails; no partial commits |
-| Causality | Effects chain naturally; rule A creates entity → rule B reacts |
-| Determinism | Same inputs + same world → same outputs |
+| Property    | Guarantee                                                      |
+| ----------- | -------------------------------------------------------------- |
+| Termination | Refraction ensures finite rule firings per tick                |
+| Atomicity   | Entire tick succeeds or fails; no partial commits              |
+| Causality   | Effects chain naturally; rule A creates entity → rule B reacts |
+| Determinism | Same inputs + same world → same outputs                        |
 
 **Error handling:**
 
@@ -1555,10 +1555,10 @@ Queries use the same pattern syntax as rules:
 
 Queries always see the current world state:
 
-| Context | View |
-|---------|------|
+| Context               | View                                             |
+| --------------------- | ------------------------------------------------ |
 | During rule execution | Current transaction state (sees earlier effects) |
-| Outside tick (REPL) | Latest committed world |
+| Outside tick (REPL)   | Latest committed world                           |
 
 To compare against the previous tick, use `prev`:
 
@@ -1955,11 +1955,11 @@ Goal-Oriented Action Planning searches for action sequences:
 
 Speculative ticks buffer their outputs:
 
-| Output Type | During Speculation | After Real Commit |
-|-------------|-------------------|-------------------|
-| `print!` | Attached to world value | Flushed to output |
-| `trace!` | Always live (debug channel) | Always live |
-| Effects | Applied to speculative world | Applied to current world |
+| Output Type | During Speculation           | After Real Commit        |
+| ----------- | ---------------------------- | ------------------------ |
+| `print!`    | Attached to world value      | Flushed to output        |
+| `trace!`    | Always live (debug channel)  | Always live              |
+| Effects     | Applied to speculative world | Applied to current world |
 
 ```clojure
 ;; Inspect what a speculative tick would have printed
@@ -2111,11 +2111,11 @@ EffectSource = :rule/<name> | :constraint/<name> | :system | :external
 
 **Storage policy:**
 
-| Mode | Stored | Use Case |
-|------|--------|----------|
-| Production | Last-writer index per field | Minimal overhead, basic `(why ...)` |
-| Development | Full effect log per tick | Complete history, rich debugging |
-| Debug | + expression IDs + bindings | Step-through, full provenance |
+| Mode        | Stored                      | Use Case                            |
+| ----------- | --------------------------- | ----------------------------------- |
+| Production  | Last-writer index per field | Minimal overhead, basic `(why ...)` |
+| Development | Full effect log per tick    | Complete history, rich debugging    |
+| Debug       | + expression IDs + bindings | Step-through, full provenance       |
 
 The `(why ...)` function traverses the effect log to explain how a value was computed, including intermediate writes that were later overwritten.
 
@@ -2293,11 +2293,11 @@ fn pathfind(from: Value, to: Value) -> Result<Value, Error> {
 
 **Effect/determinism rules:**
 
-| Flags | Allowed In |
-|-------|-----------|
-| `pure` + `deterministic` | Everywhere (queries, guards, derived, rules) |
-| `pure` + `nondeterministic` | Rule `:then` only (must use provided RNG) |
-| `effectful` | Rule `:then` only |
+| Flags                       | Allowed In                                   |
+| --------------------------- | -------------------------------------------- |
+| `pure` + `deterministic`    | Everywhere (queries, guards, derived, rules) |
+| `pure` + `nondeterministic` | Rule `:then` only (must use provided RNG)    |
+| `effectful`                 | Rule `:then` only                            |
 
 Pure/deterministic functions are optimizable; others are not.
 
@@ -2335,13 +2335,13 @@ impl World {
 
 **What gets saved:**
 
-| Content | Saved? | Notes |
-|---------|--------|-------|
-| Entity data | Yes | All components, relationships |
-| World metadata | Yes | Tick, seed, world entity |
-| Rule activations | No | Recomputed on load |
-| Derived caches | No | Recomputed on demand |
-| Bytecode | No | Recompiled from source |
+| Content          | Saved? | Notes                         |
+| ---------------- | ------ | ----------------------------- |
+| Entity data      | Yes    | All components, relationships |
+| World metadata   | Yes    | Tick, seed, world entity      |
+| Rule activations | No     | Recomputed on load            |
+| Derived caches   | No     | Recomputed on demand          |
+| Bytecode         | No     | Recompiled from source        |
 
 **Save/restore serializes world state, not compiled code**. Rules and constraints are stored as their meta-entity data, not bytecode. On restore, the engine recompiles from the original source files.
 
@@ -2428,12 +2428,12 @@ nil true false none
 
 The following keyword namespaces are reserved for engine use. User code **cannot** declare components, relationships, or other entities in these namespaces:
 
-| Namespace | Purpose | Example |
-|-----------|---------|---------|
-| `:runtime/*` | Engine runtime values | `:runtime/tick`, `:runtime/seed` |
-| `:system/*` | System-generated effects | `:system/rollback`, `:system/error` |
-| `:meta/*` | Entity metadata | `:meta/rule`, `:meta/component` |
-| `:internal/*` | Implementation details | `:internal/archetype-id` |
+| Namespace     | Purpose                  | Example                             |
+| ------------- | ------------------------ | ----------------------------------- |
+| `:runtime/*`  | Engine runtime values    | `:runtime/tick`, `:runtime/seed`    |
+| `:system/*`   | System-generated effects | `:system/rollback`, `:system/error` |
+| `:meta/*`     | Entity metadata          | `:meta/rule`, `:meta/component`     |
+| `:internal/*` | Implementation details   | `:internal/archetype-id`            |
 
 Attempting to `(set! entity :runtime/tick 42)` is a compile-time or load-time error.
 
