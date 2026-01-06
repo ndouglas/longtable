@@ -580,7 +580,7 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Handle tagged literals (`#name[...]`)
 - [x] Comprehensive span tracking
 - [x] Test with spec grammar examples (24 tests)
-- [ ] Fuzz test for crash resistance
+- [x] Fuzz test for crash resistance (1000+ proptest cases in fuzz_tests.rs)
 
 ### 3.2 Parser
 
@@ -589,14 +589,14 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Parse all declaration forms (component:, rule:, relationship:, derived:, constraint:, query)
 - [x] Rich error messages with span information
 - [x] Test with spec examples (29 tests)
-- [ ] Fuzz test for crash resistance
+- [x] Fuzz test for crash resistance (1000+ proptest cases in fuzz_tests.rs)
 
 ### 3.3 AST
 
 - [x] Implement all AST node types
-- [ ] Implement visitor pattern for traversal
-- [ ] Implement AST pretty-printer
-- [ ] Test round-trip: source → AST → pretty-print ≈ source
+- [x] Implement visitor pattern for traversal (AstVisitor + AstTransform traits in visitor.rs)
+- [x] Implement AST pretty-printer (pretty.rs with PrettyConfig)
+- [x] Test round-trip: source → AST → pretty-print ≈ source (50+ tests in pretty.rs)
 
 ### 3.4 Compiler
 
@@ -609,11 +609,11 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Constant deduplication via ConstKey
 - [x] Local variable slots for let bindings
 - [x] Compile expressions with binding variables (compile_expression for queries)
-- [ ] Compile patterns for rule matching
-- [ ] Compile rule bodies
+- [x] Compile patterns for rule matching (PatternCompiler in longtable_engine/pattern.rs)
+- [x] Compile rule bodies (executed via VM in longtable_engine/rule.rs)
 - [x] Compile queries (QueryCompiler in longtable_engine)
-- [ ] Compile derived components
-- [ ] Compile constraints
+- [x] Compile derived components (DerivedCompiler in longtable_engine/derived.rs)
+- [x] Compile constraints (ConstraintCompiler in longtable_engine/constraint.rs)
 - [ ] Macro expansion
 - [ ] Module/namespace resolution
 - [x] Test all expression forms compile correctly (14 tests)
