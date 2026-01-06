@@ -363,8 +363,9 @@ fn is_symbol_start(c: char) -> bool {
 }
 
 /// Returns true if `c` can appear in a symbol (not at start).
+/// Note: `#` is allowed to support gensym patterns like `x#`.
 fn is_symbol_char(c: char) -> bool {
-    is_symbol_start(c) || c.is_ascii_digit() || c == '.' || c == ':'
+    is_symbol_start(c) || c.is_ascii_digit() || c == '.' || c == ':' || c == '#'
 }
 
 #[cfg(test)]
@@ -485,6 +486,29 @@ mod tests {
         assert_eq!(
             lex(":bar/baz"),
             vec![TokenKind::Keyword("bar/baz".into()), TokenKind::Eof]
+        );
+    }
+
+    #[test]
+    fn lex_gensym_symbols() {
+        // Gensym patterns like x# should be valid symbols
+        assert_eq!(
+            lex("x#"),
+            vec![TokenKind::Symbol("x#".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            lex("temp#"),
+            vec![TokenKind::Symbol("temp#".into()), TokenKind::Eof]
+        );
+        assert_eq!(
+            lex("[x# y#]"),
+            vec![
+                TokenKind::LBracket,
+                TokenKind::Symbol("x#".into()),
+                TokenKind::Symbol("y#".into()),
+                TokenKind::RBracket,
+                TokenKind::Eof,
+            ]
         );
     }
 

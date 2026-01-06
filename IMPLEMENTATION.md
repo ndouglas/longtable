@@ -614,8 +614,9 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Compile queries (QueryCompiler in longtable_engine)
 - [x] Compile derived components (DerivedCompiler in longtable_engine/derived.rs)
 - [x] Compile constraints (ConstraintCompiler in longtable_engine/constraint.rs)
-- [ ] Macro expansion
-- [ ] Module/namespace resolution
+- [x] Macro expansion (MacroExpander with defmacro, gensym hygiene, syntax-quote with namespace qualification)
+- [x] Module/namespace resolution (NamespaceContext with aliases, refers; ModuleRegistry with cycle detection)
+- [x] Standard library macros (when, when-not, if-not, and, or, ->, ->>, cond, doto, comment)
 - [x] Test all expression forms compile correctly (14 tests)
 
 ### 3.5 Bytecode VM

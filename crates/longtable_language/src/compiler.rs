@@ -16,6 +16,8 @@ use std::collections::HashMap;
 use longtable_foundation::{Error, ErrorKind, Result, Value};
 
 use crate::ast::Ast;
+use crate::macro_expander::MacroExpander;
+use crate::macro_registry::MacroRegistry;
 use crate::namespace::NamespaceContext;
 use crate::opcode::{Bytecode, Opcode};
 use crate::span::Span;
@@ -42,6 +44,8 @@ pub struct Compiler {
     captures: HashMap<String, u16>,
     /// Namespace context for symbol resolution (aliases, refers).
     namespace_context: NamespaceContext,
+    /// Macro registry for macro expansion.
+    macro_registry: MacroRegistry,
 }
 
 /// Key for constant deduplication.
@@ -121,6 +125,7 @@ impl Compiler {
             outer_locals: None,
             captures: HashMap::new(),
             namespace_context: NamespaceContext::new(),
+            macro_registry: MacroRegistry::new(),
         };
 
         // Register built-in native functions
@@ -141,11 +146,50 @@ impl Compiler {
             outer_locals: None,
             captures: HashMap::new(),
             namespace_context,
+            macro_registry: MacroRegistry::new(),
         };
 
         // Register built-in native functions
         compiler.register_natives();
         compiler
+    }
+
+    /// Creates a new compiler with stdlib macros pre-registered.
+    #[must_use]
+    pub fn new_with_stdlib() -> Self {
+        Self::with_macro_registry(MacroRegistry::new_with_stdlib())
+    }
+
+    /// Creates a new compiler with a macro registry.
+    #[must_use]
+    pub fn with_macro_registry(macro_registry: MacroRegistry) -> Self {
+        let mut compiler = Self {
+            constants: Vec::new(),
+            constant_map: HashMap::new(),
+            locals: HashMap::new(),
+            next_local: 0,
+            natives: HashMap::new(),
+            functions: Vec::new(),
+            outer_locals: None,
+            captures: HashMap::new(),
+            namespace_context: NamespaceContext::new(),
+            macro_registry,
+        };
+
+        // Register built-in native functions
+        compiler.register_natives();
+        compiler
+    }
+
+    /// Returns a mutable reference to the macro registry.
+    pub fn macro_registry_mut(&mut self) -> &mut MacroRegistry {
+        &mut self.macro_registry
+    }
+
+    /// Returns a reference to the macro registry.
+    #[must_use]
+    pub fn macro_registry(&self) -> &MacroRegistry {
+        &self.macro_registry
     }
 
     /// Sets the namespace context for symbol resolution.
@@ -230,14 +274,65 @@ impl Compiler {
     }
 
     /// Compiles an AST expression into bytecode.
+    ///
+    /// This method expands macros before compilation.
     pub fn compile_expr(&mut self, ast: &Ast) -> Result<Bytecode> {
+        // Expand macros first
+        let expanded = {
+            let mut expander = MacroExpander::new(&mut self.macro_registry);
+            expander.expand(ast)?
+        };
+
+        let mut code = Bytecode::new();
+        self.compile_node(&expanded, &mut code)?;
+        Ok(code)
+    }
+
+    /// Compiles an AST expression into bytecode without macro expansion.
+    ///
+    /// Use this when you've already expanded macros or want to skip expansion.
+    pub fn compile_expr_raw(&mut self, ast: &Ast) -> Result<Bytecode> {
         let mut code = Bytecode::new();
         self.compile_node(ast, &mut code)?;
         Ok(code)
     }
 
     /// Compiles multiple expressions into a program.
+    ///
+    /// This method expands macros before compilation.
     pub fn compile(&mut self, asts: &[Ast]) -> Result<CompiledProgram> {
+        // Expand macros first
+        let expanded = {
+            let mut expander = MacroExpander::new(&mut self.macro_registry);
+            expander.expand_all(asts)?
+        };
+
+        let mut code = Bytecode::new();
+
+        for ast in &expanded {
+            self.compile_node(ast, &mut code)?;
+            // Pop intermediate results except the last
+            if !code.is_empty() {
+                code.emit(Opcode::Pop);
+            }
+        }
+
+        // Remove the last Pop if we added one
+        if !code.is_empty() && matches!(code.ops.last(), Some(Opcode::Pop)) {
+            code.ops.pop();
+        }
+
+        Ok(CompiledProgram {
+            code,
+            constants: self.constants.clone(),
+            functions: self.functions.clone(),
+        })
+    }
+
+    /// Compiles multiple expressions into a program without macro expansion.
+    ///
+    /// Use this when you've already expanded macros or want to skip expansion.
+    pub fn compile_raw(&mut self, asts: &[Ast]) -> Result<CompiledProgram> {
         let mut code = Bytecode::new();
 
         for ast in asts {
@@ -398,6 +493,13 @@ impl Compiler {
                 "fn" => return self.compile_fn(args, span, code),
                 "def" => return self.compile_def(args, span, code),
                 "quote" => return self.compile_quote_form(args, span, code),
+                // Macro-support special forms
+                "and*" => return self.compile_and_star(args, span, code),
+                "or*" => return self.compile_or_star(args, span, code),
+                "cond*" => return self.compile_cond_star(args, span, code),
+                "thread-first" => return self.compile_thread_first(args, span, code),
+                "thread-last" => return self.compile_thread_last(args, span, code),
+                "doto*" => return self.compile_doto_star(args, span, code),
                 _ => {}
             }
 
@@ -886,6 +988,335 @@ impl Compiler {
         self.compile_quoted(&args[0], code)
     }
 
+    /// Compiles `and*` - short-circuiting logical AND.
+    ///
+    /// - `(and*)` -> `true`
+    /// - `(and* x)` -> `x`
+    /// - `(and* x y ...)` -> if x is falsy, return x; else evaluate rest
+    fn compile_and_star(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.is_empty() {
+            // (and*) -> true
+            let idx = self.add_constant(Value::Bool(true));
+            code.emit(Opcode::Const(idx));
+            return Ok(());
+        }
+
+        if args.len() == 1 {
+            // (and* x) -> x
+            return self.compile_node(&args[0], code);
+        }
+
+        // (and* x y ...) -> short-circuit evaluation
+        // Compile first arg
+        self.compile_node(&args[0], code)?;
+
+        // For each subsequent arg, check if previous was falsy
+        let mut jump_if_false_positions = Vec::new();
+
+        for arg in &args[1..] {
+            // Duplicate the current value to test it
+            code.emit(Opcode::Dup);
+            // If falsy, jump to end (keeping the falsy value)
+            let jump_pos = code.emit(Opcode::JumpIfNot(0));
+            jump_if_false_positions.push(jump_pos);
+            // Pop the duplicated value (we'll replace with next)
+            code.emit(Opcode::Pop);
+            // Compile next arg
+            self.compile_node(arg, code)?;
+        }
+
+        // Patch all jumps to here
+        let end_pos = code.len();
+        for jump_pos in jump_if_false_positions {
+            let offset = i16::try_from(end_pos - jump_pos - 1)
+                .map_err(|_| self.error(span, "jump offset too large"))?;
+            code.patch_jump(jump_pos, offset);
+        }
+
+        Ok(())
+    }
+
+    /// Compiles `or*` - short-circuiting logical OR.
+    ///
+    /// - `(or*)` -> `nil`
+    /// - `(or* x)` -> `x`
+    /// - `(or* x y ...)` -> if x is truthy, return x; else evaluate rest
+    fn compile_or_star(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.is_empty() {
+            // (or*) -> nil
+            let idx = self.add_constant(Value::Nil);
+            code.emit(Opcode::Const(idx));
+            return Ok(());
+        }
+
+        if args.len() == 1 {
+            // (or* x) -> x
+            return self.compile_node(&args[0], code);
+        }
+
+        // (or* x y ...) -> short-circuit evaluation
+        // Compile first arg
+        self.compile_node(&args[0], code)?;
+
+        // For each subsequent arg, check if previous was truthy
+        let mut jump_if_true_positions = Vec::new();
+
+        for arg in &args[1..] {
+            // Duplicate the current value to test it
+            code.emit(Opcode::Dup);
+            // If truthy, jump to end (keeping the truthy value)
+            let jump_pos = code.emit(Opcode::JumpIf(0));
+            jump_if_true_positions.push(jump_pos);
+            // Pop the duplicated value (we'll replace with next)
+            code.emit(Opcode::Pop);
+            // Compile next arg
+            self.compile_node(arg, code)?;
+        }
+
+        // Patch all jumps to here
+        let end_pos = code.len();
+        for jump_pos in jump_if_true_positions {
+            let offset = i16::try_from(end_pos - jump_pos - 1)
+                .map_err(|_| self.error(span, "jump offset too large"))?;
+            code.patch_jump(jump_pos, offset);
+        }
+
+        Ok(())
+    }
+
+    /// Compiles `cond*` - multi-branch conditional.
+    ///
+    /// - `(cond*)` -> `nil`
+    /// - `(cond* test expr rest...)` -> `(if test expr (cond* rest...))`
+    fn compile_cond_star(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.is_empty() {
+            // (cond*) -> nil
+            let idx = self.add_constant(Value::Nil);
+            code.emit(Opcode::Const(idx));
+            return Ok(());
+        }
+
+        if args.len() % 2 != 0 {
+            return Err(self.error(span, "cond requires even number of forms (test/expr pairs)"));
+        }
+
+        // Build nested if structure
+        let mut jump_to_ends = Vec::new();
+
+        for i in (0..args.len()).step_by(2) {
+            let test = &args[i];
+            let expr = &args[i + 1];
+
+            // Compile test
+            self.compile_node(test, code)?;
+
+            // Jump to next clause if false
+            let jump_to_next = code.emit(Opcode::JumpIfNot(0));
+
+            // Compile expression for this clause
+            self.compile_node(expr, code)?;
+
+            // Jump to end (skip remaining clauses)
+            let jump_to_end = code.emit(Opcode::Jump(0));
+            jump_to_ends.push(jump_to_end);
+
+            // Patch jump to next clause
+            let next_clause_pos = code.len();
+            let offset = i16::try_from(next_clause_pos - jump_to_next - 1)
+                .map_err(|_| self.error(span, "jump offset too large"))?;
+            code.patch_jump(jump_to_next, offset);
+        }
+
+        // If no clause matched, result is nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        // Patch all jumps to end
+        let end_pos = code.len();
+        for jump_pos in jump_to_ends {
+            let offset = i16::try_from(end_pos - jump_pos - 1)
+                .map_err(|_| self.error(span, "jump offset too large"))?;
+            code.patch_jump(jump_pos, offset);
+        }
+
+        Ok(())
+    }
+
+    /// Compiles `thread-first` - threads value through forms as first argument.
+    ///
+    /// - `(thread-first x)` -> `x`
+    /// - `(thread-first x (f a b))` -> `(f x a b)`
+    /// - `(thread-first x f)` -> `(f x)`
+    fn compile_thread_first(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.is_empty() {
+            return Err(self.error(span, "thread-first requires at least 1 argument"));
+        }
+
+        if args.len() == 1 {
+            // (thread-first x) -> x
+            return self.compile_node(&args[0], code);
+        }
+
+        // Transform and compile: thread x through forms
+        let threaded = self.thread_first_transform(&args[0], &args[1..])?;
+        self.compile_node(&threaded, code)
+    }
+
+    /// Recursively transforms thread-first forms.
+    fn thread_first_transform(&self, x: &Ast, forms: &[Ast]) -> Result<Ast> {
+        if forms.is_empty() {
+            return Ok(x.clone());
+        }
+
+        let form = &forms[0];
+        let rest = &forms[1..];
+
+        // Transform the first form
+        let transformed = match form {
+            Ast::List(elements, span) if !elements.is_empty() => {
+                // (f a b) -> (f x a b)
+                let mut new_elements = vec![elements[0].clone(), x.clone()];
+                new_elements.extend(elements[1..].iter().cloned());
+                Ast::List(new_elements, *span)
+            }
+            Ast::Symbol(_, span) => {
+                // f -> (f x)
+                Ast::List(vec![form.clone(), x.clone()], *span)
+            }
+            _ => {
+                // Treat as function call
+                Ast::List(vec![form.clone(), x.clone()], form.span())
+            }
+        };
+
+        // Continue threading through rest
+        self.thread_first_transform(&transformed, rest)
+    }
+
+    /// Compiles `thread-last` - threads value through forms as last argument.
+    ///
+    /// - `(thread-last x)` -> `x`
+    /// - `(thread-last x (f a b))` -> `(f a b x)`
+    /// - `(thread-last x f)` -> `(f x)`
+    fn compile_thread_last(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.is_empty() {
+            return Err(self.error(span, "thread-last requires at least 1 argument"));
+        }
+
+        if args.len() == 1 {
+            // (thread-last x) -> x
+            return self.compile_node(&args[0], code);
+        }
+
+        // Transform and compile: thread x through forms
+        let threaded = self.thread_last_transform(&args[0], &args[1..])?;
+        self.compile_node(&threaded, code)
+    }
+
+    /// Recursively transforms thread-last forms.
+    fn thread_last_transform(&self, x: &Ast, forms: &[Ast]) -> Result<Ast> {
+        if forms.is_empty() {
+            return Ok(x.clone());
+        }
+
+        let form = &forms[0];
+        let rest = &forms[1..];
+
+        // Transform the first form
+        let transformed = match form {
+            Ast::List(elements, span) if !elements.is_empty() => {
+                // (f a b) -> (f a b x)
+                let mut new_elements = elements.clone();
+                new_elements.push(x.clone());
+                Ast::List(new_elements, *span)
+            }
+            Ast::Symbol(_, span) => {
+                // f -> (f x)
+                Ast::List(vec![form.clone(), x.clone()], *span)
+            }
+            _ => {
+                // Treat as function call
+                Ast::List(vec![form.clone(), x.clone()], form.span())
+            }
+        };
+
+        // Continue threading through rest
+        self.thread_last_transform(&transformed, rest)
+    }
+
+    /// Compiles `doto*` - evaluates forms with first arg, returns first arg.
+    ///
+    /// `(doto* x (f a) (g b))` -> evaluates (f x a), (g x b), returns x
+    fn compile_doto_star(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.is_empty() {
+            return Err(self.error(span, "doto requires at least 1 argument"));
+        }
+
+        // Compile and store x in a local
+        let x = &args[0];
+        let forms = &args[1..];
+
+        // Compile x
+        self.compile_node(x, code)?;
+
+        if forms.is_empty() {
+            // Just return x
+            return Ok(());
+        }
+
+        // Store x in a temp local
+        let saved_next = self.next_local;
+        let temp_slot = self.next_local;
+        self.next_local += 1;
+        code.emit(Opcode::StoreLocal(temp_slot));
+
+        // Evaluate each form with x inserted as first arg
+        for form in forms {
+            match form {
+                Ast::List(elements, form_span) if !elements.is_empty() => {
+                    // (f a b) -> (f x a b)
+                    // Compile function
+                    self.compile_node(&elements[0], code)?;
+                    // Load x
+                    code.emit(Opcode::LoadLocal(temp_slot));
+                    // Compile remaining args
+                    for arg in &elements[1..] {
+                        self.compile_node(arg, code)?;
+                    }
+                    // Call with x + other args
+                    let arg_count = u16::try_from(elements.len())
+                        .map_err(|_| self.error(*form_span, "too many arguments"))?;
+                    code.emit(Opcode::Call(arg_count));
+                    // Discard result
+                    code.emit(Opcode::Pop);
+                }
+                Ast::Symbol(_, _form_span) => {
+                    // f -> (f x)
+                    self.compile_node(form, code)?;
+                    code.emit(Opcode::LoadLocal(temp_slot));
+                    code.emit(Opcode::Call(1));
+                    code.emit(Opcode::Pop);
+                }
+                _ => {
+                    return Err(self.error(span, "doto forms must be lists or symbols"));
+                }
+            }
+        }
+
+        // Load x to return it
+        code.emit(Opcode::LoadLocal(temp_slot));
+
+        // Restore local counter
+        self.next_local = saved_next;
+
+        Ok(())
+    }
+
     /// Compiles a quoted expression (as data, not evaluated).
     fn compile_quoted(&mut self, ast: &Ast, code: &mut Bytecode) -> Result<()> {
         // Convert AST to runtime value
@@ -1029,18 +1460,25 @@ impl Compiler {
     }
 }
 
-/// Compiles source code to a program.
+/// Compiles source code to a program with stdlib macros.
 pub fn compile(source: &str) -> Result<CompiledProgram> {
     let ast = crate::parser::parse(source)?;
-    let mut compiler = Compiler::new();
+    let mut compiler = Compiler::new_with_stdlib();
     compiler.compile(&ast)
 }
 
-/// Compiles a single expression.
+/// Compiles a single expression with stdlib macros.
 pub fn compile_expr(source: &str) -> Result<Bytecode> {
     let ast = crate::parser::parse_one(source)?;
-    let mut compiler = Compiler::new();
+    let mut compiler = Compiler::new_with_stdlib();
     compiler.compile_expr(&ast)
+}
+
+/// Compiles source code to a program without stdlib macros.
+pub fn compile_without_stdlib(source: &str) -> Result<CompiledProgram> {
+    let ast = crate::parser::parse(source)?;
+    let mut compiler = Compiler::new();
+    compiler.compile(&ast)
 }
 
 /// A compiled expression with its constants.
@@ -1348,5 +1786,27 @@ mod tests {
             }
         });
         assert!(has_qualified, "Fully qualified symbol should be preserved");
+    }
+
+    #[test]
+    fn compile_with_macro_expansion() {
+        // Test that macros are expanded during compilation
+        let mut compiler = Compiler::new();
+
+        // First, define a macro through expansion
+        let def_ast = crate::parse("(defmacro double [x] (+ x x))").unwrap();
+        // Compile the defmacro - this registers the macro
+        let _ = compiler.compile(&def_ast).unwrap();
+
+        // Now use the macro - it should be expanded during compilation
+        let use_ast = crate::parse("(double 21)").unwrap();
+        let prog = compiler.compile(&use_ast).unwrap();
+
+        // The expanded form (+ 21 21) should have two constants: 21 and the native + index
+        // The key test is that it compiled without error, meaning the macro was expanded
+        assert!(
+            !prog.code.ops.is_empty(),
+            "Macro expansion and compilation should succeed"
+        );
     }
 }

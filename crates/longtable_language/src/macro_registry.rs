@@ -30,6 +30,14 @@ impl MacroRegistry {
         }
     }
 
+    /// Creates a new macro registry with stdlib macros pre-registered.
+    #[must_use]
+    pub fn new_with_stdlib() -> Self {
+        let mut registry = Self::new();
+        crate::stdlib_macros::register_stdlib_macros(&mut registry);
+        registry
+    }
+
     /// Creates a new macro registry with the given current namespace.
     #[must_use]
     pub fn with_namespace(namespace: impl Into<String>) -> Self {
@@ -74,13 +82,19 @@ impl MacroRegistry {
     /// Resolves a macro name (qualified or unqualified).
     ///
     /// If the name contains `/`, it's treated as qualified.
-    /// Otherwise, it's looked up in the current namespace.
+    /// Otherwise, it's looked up in the current namespace first,
+    /// then in the "core" namespace for stdlib macros.
     #[must_use]
     pub fn resolve(&self, name: &str) -> Option<&MacroDef> {
         if name.contains('/') {
             self.get(name)
         } else {
-            self.get_local(name)
+            // Try current namespace first
+            self.get_local(name).or_else(|| {
+                // Fall back to core namespace for stdlib macros
+                let core_qualified = format!("core/{name}");
+                self.macros.get(&core_qualified)
+            })
         }
     }
 
