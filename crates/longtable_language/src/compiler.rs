@@ -373,7 +373,9 @@ impl Compiler {
                         for arg in args {
                             self.compile_node(arg, code)?;
                         }
-                        code.emit(Opcode::CallNative(native_idx));
+                        let arg_count = u8::try_from(args.len())
+                            .map_err(|_| self.error(span, "too many arguments"))?;
+                        code.emit(Opcode::CallNative(native_idx, arg_count));
                         return Ok(());
                     }
                 }

@@ -63,8 +63,8 @@ pub enum Opcode {
     JumpIfNot(i16),
     /// Call a function by index in the function table.
     Call(u16),
-    /// Call a native/builtin function by index.
-    CallNative(u16),
+    /// Call a native/builtin function by index with argument count.
+    CallNative(u16, u8),
     /// Return from function, top of stack is return value.
     Return,
 

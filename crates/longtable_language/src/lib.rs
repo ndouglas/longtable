@@ -47,4 +47,4 @@ pub use opcode::{Bytecode, Opcode};
 pub use parser::{Parser, parse, parse_one};
 pub use span::Span;
 pub use token::{Token, TokenKind};
-pub use vm::{Vm, eval};
+pub use vm::{Vm, VmContext, VmEffect, WorldContext, eval};

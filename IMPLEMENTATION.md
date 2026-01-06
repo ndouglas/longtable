@@ -822,7 +822,7 @@ impl Vm {
 - [x] Span and Token types implemented with proper source tracking
 - [x] Lexer tokenizes all spec literals (integers, floats, strings, symbols, keywords, collections)
 - [x] Parser builds AST for all expression forms (lists, vectors, sets, maps, quotes, tags)
-- [x] 107 unit tests for lexer, parser, compiler, and VM
+- [x] 140 unit tests for lexer, parser, compiler, and VM (including native functions)
 - [x] Round-trip test: source → AST → bytecode → execution → expected value
 - [x] Verify all spec expression forms can be represented
 - [ ] Benchmark VM execution (target: 1M simple ops/sec)
@@ -1728,10 +1728,15 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Implement local variables (LoadLocal, StoreLocal, LoadBinding)
 - [x] Implement collection opcodes (VecNew, VecPush, MapNew, MapInsert, SetNew, SetInsert)
 - [x] Implement print opcode
-- [x] Test: expression evaluation (26 tests)
-- [ ] Implement function calls (Call, CallNative)
-- [ ] Implement effect opcodes (Spawn, Destroy, SetComponent, SetField, Link, Unlink)
-- [ ] Implement world access opcodes (GetComponent, GetField)
+- [x] Implement CallNative with 40+ native functions (predicates, math, collections, strings)
+- [x] Implement VmContext trait for World access
+- [x] Implement WorldContext wrapper for World integration
+- [x] Implement effect opcodes (Spawn, Destroy, SetComponent, SetField, Link, Unlink)
+- [x] Implement world access opcodes (GetComponent, GetField)
+- [x] Implement VmEffect enum for deferred effect application
+- [x] Test: expression evaluation (33 tests)
+- [x] Test: native function evaluation (33 tests)
+- [ ] Implement user-defined function calls (Call)
 - [ ] Benchmark: 1M ops/sec target
 
 ### Example: Expression Evaluation

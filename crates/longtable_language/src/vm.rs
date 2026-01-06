@@ -1,6 +1,17 @@
 //! Stack-based virtual machine for Longtable bytecode.
 //!
 //! The VM executes compiled bytecode and produces results.
+//!
+//! # World Access
+//!
+//! The VM can optionally access a World via the [`VmContext`] trait. This enables
+//! execution of ECS operations (reading components, spawning entities, etc.).
+//! When no context is provided, the VM operates in "pure evaluation" mode where
+//! World operations will return errors.
+//!
+//! Effects (mutations) are collected during execution and can be retrieved via
+//! [`Vm::take_effects`]. The caller is responsible for applying these effects
+//! to the World.
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_possible_truncation)]
@@ -13,10 +24,207 @@
 #![allow(clippy::redundant_closure)]
 #![allow(clippy::redundant_closure_for_method_calls)]
 
-use longtable_foundation::{Error, ErrorKind, LtMap, LtSet, LtVec, Result, Value};
+use longtable_foundation::{
+    EntityId, Error, ErrorKind, KeywordId, LtMap, LtSet, LtVec, Result, Value,
+};
 
 use crate::compiler::CompiledProgram;
 use crate::opcode::{Bytecode, Opcode};
+
+// =============================================================================
+// VmContext Trait
+// =============================================================================
+
+/// Provides read-only World access for VM execution.
+///
+/// Implement this trait to allow the VM to read entity data during rule evaluation.
+pub trait VmContext {
+    /// Gets a component value for an entity.
+    fn get_component(&self, entity: EntityId, component: KeywordId) -> Result<Option<Value>>;
+
+    /// Gets a specific field from a component.
+    fn get_field(
+        &self,
+        entity: EntityId,
+        component: KeywordId,
+        field: KeywordId,
+    ) -> Result<Option<Value>>;
+
+    /// Checks if an entity exists.
+    fn exists(&self, entity: EntityId) -> bool;
+
+    /// Checks if an entity has a component.
+    fn has_component(&self, entity: EntityId, component: KeywordId) -> bool;
+
+    /// Resolves a keyword value to its `KeywordId` (for dynamic keyword access).
+    fn resolve_keyword(&self, value: &Value) -> Option<KeywordId>;
+}
+
+// =============================================================================
+// VM Effects
+// =============================================================================
+
+/// An effect produced by VM execution.
+///
+/// Effects represent mutations that should be applied to the World after
+/// successful rule execution. Effects are collected during execution and
+/// can be retrieved via [`Vm::take_effects`].
+#[derive(Clone, Debug, PartialEq)]
+pub enum VmEffect {
+    /// Spawn a new entity with components.
+    Spawn {
+        /// Initial components as a map of keyword -> value.
+        components: LtMap<Value, Value>,
+    },
+
+    /// Destroy an entity.
+    Destroy {
+        /// The entity to destroy.
+        entity: EntityId,
+    },
+
+    /// Set a component on an entity.
+    SetComponent {
+        /// The target entity.
+        entity: EntityId,
+        /// The component name.
+        component: KeywordId,
+        /// The component value.
+        value: Value,
+    },
+
+    /// Set a field within a component.
+    SetField {
+        /// The target entity.
+        entity: EntityId,
+        /// The component name.
+        component: KeywordId,
+        /// The field name.
+        field: KeywordId,
+        /// The field value.
+        value: Value,
+    },
+
+    /// Create a relationship.
+    Link {
+        /// The source entity.
+        source: EntityId,
+        /// The relationship type.
+        relationship: KeywordId,
+        /// The target entity.
+        target: EntityId,
+    },
+
+    /// Remove a relationship.
+    Unlink {
+        /// The source entity.
+        source: EntityId,
+        /// The relationship type.
+        relationship: KeywordId,
+        /// The target entity.
+        target: EntityId,
+    },
+}
+
+// =============================================================================
+// WorldContext (VmContext implementation for World)
+// =============================================================================
+
+use longtable_storage::World;
+
+/// A context that provides access to a World for VM execution.
+///
+/// This allows the VM to read entity data during rule evaluation.
+pub struct WorldContext<'a> {
+    /// Reference to the World.
+    world: &'a World,
+}
+
+impl<'a> WorldContext<'a> {
+    /// Creates a new `WorldContext` wrapping a World reference.
+    #[must_use]
+    pub fn new(world: &'a World) -> Self {
+        Self { world }
+    }
+
+    /// Returns a reference to the underlying World.
+    #[must_use]
+    pub fn world(&self) -> &World {
+        self.world
+    }
+}
+
+impl VmContext for WorldContext<'_> {
+    fn get_component(&self, entity: EntityId, component: KeywordId) -> Result<Option<Value>> {
+        self.world.get(entity, component)
+    }
+
+    fn get_field(
+        &self,
+        entity: EntityId,
+        component: KeywordId,
+        field: KeywordId,
+    ) -> Result<Option<Value>> {
+        self.world.get_field(entity, component, field)
+    }
+
+    fn exists(&self, entity: EntityId) -> bool {
+        self.world.exists(entity)
+    }
+
+    fn has_component(&self, entity: EntityId, component: KeywordId) -> bool {
+        self.world.has(entity, component)
+    }
+
+    fn resolve_keyword(&self, value: &Value) -> Option<KeywordId> {
+        // Keywords are already interned and carry their ID
+        if let Value::Keyword(k) = value {
+            Some(*k)
+        } else {
+            None
+        }
+    }
+}
+
+// =============================================================================
+// NoContext (for pure evaluation without World)
+// =============================================================================
+
+/// A no-op context that returns errors for World operations.
+///
+/// Used internally when executing without a World context.
+struct NoContext;
+
+impl VmContext for NoContext {
+    fn get_component(&self, _entity: EntityId, _component: KeywordId) -> Result<Option<Value>> {
+        Err(Error::new(ErrorKind::Internal(
+            "world operations not available in this context".to_string(),
+        )))
+    }
+
+    fn get_field(
+        &self,
+        _entity: EntityId,
+        _component: KeywordId,
+        _field: KeywordId,
+    ) -> Result<Option<Value>> {
+        Err(Error::new(ErrorKind::Internal(
+            "world operations not available in this context".to_string(),
+        )))
+    }
+
+    fn exists(&self, _entity: EntityId) -> bool {
+        false
+    }
+
+    fn has_component(&self, _entity: EntityId, _component: KeywordId) -> bool {
+        false
+    }
+
+    fn resolve_keyword(&self, _value: &Value) -> Option<KeywordId> {
+        None
+    }
+}
 
 /// Stack-based virtual machine.
 pub struct Vm {
@@ -30,6 +238,10 @@ pub struct Vm {
     ip: usize,
     /// Output from print statements.
     output: Vec<String>,
+    /// Collected effects from execution.
+    effects: Vec<VmEffect>,
+    /// Counter for spawned entities (used for temporary IDs).
+    spawn_counter: u64,
 }
 
 impl Default for Vm {
@@ -48,6 +260,8 @@ impl Vm {
             bindings: Vec::new(),
             ip: 0,
             output: Vec::new(),
+            effects: Vec::new(),
+            spawn_counter: 0,
         }
     }
 
@@ -58,6 +272,8 @@ impl Vm {
         self.bindings.clear();
         self.ip = 0;
         self.output.clear();
+        self.effects.clear();
+        self.spawn_counter = 0;
     }
 
     /// Sets pattern bindings for rule execution.
@@ -76,13 +292,48 @@ impl Vm {
         self.output.clear();
     }
 
+    /// Returns the collected effects from execution.
+    #[must_use]
+    pub fn effects(&self) -> &[VmEffect] {
+        &self.effects
+    }
+
+    /// Takes and clears the collected effects.
+    pub fn take_effects(&mut self) -> Vec<VmEffect> {
+        std::mem::take(&mut self.effects)
+    }
+
+    /// Clears the effects buffer.
+    pub fn clear_effects(&mut self) {
+        self.effects.clear();
+    }
+
     /// Executes a compiled program and returns the result.
     pub fn execute(&mut self, program: &CompiledProgram) -> Result<Value> {
         self.execute_bytecode(&program.code, &program.constants)
     }
 
+    /// Executes a compiled program with World context.
+    pub fn execute_with_context<C: VmContext>(
+        &mut self,
+        program: &CompiledProgram,
+        ctx: &C,
+    ) -> Result<Value> {
+        self.execute_bytecode_with_context(&program.code, &program.constants, Some(ctx))
+    }
+
     /// Executes bytecode with a constants pool.
     pub fn execute_bytecode(&mut self, code: &Bytecode, constants: &[Value]) -> Result<Value> {
+        self.execute_bytecode_with_context::<NoContext>(code, constants, None)
+    }
+
+    /// Executes bytecode with optional World context.
+    fn execute_bytecode_with_context<C: VmContext>(
+        &mut self,
+        code: &Bytecode,
+        constants: &[Value],
+        ctx: Option<&C>,
+    ) -> Result<Value> {
         self.ip = 0;
 
         while self.ip < code.ops.len() {
@@ -163,8 +414,8 @@ impl Vm {
                         "user-defined functions not yet supported".to_string(),
                     )));
                 }
-                Opcode::CallNative(idx) => {
-                    self.call_native(*idx)?;
+                Opcode::CallNative(idx, arg_count) => {
+                    self.call_native(*idx, *arg_count)?;
                 }
                 Opcode::Return => {
                     // Return top of stack
@@ -189,23 +440,338 @@ impl Vm {
                     self.push(value);
                 }
 
-                // Data access (World operations - not yet implemented)
-                Opcode::GetComponent | Opcode::GetField => {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "world operations not yet supported".to_string(),
-                    )));
+                // Data access (World operations)
+                Opcode::GetComponent => {
+                    // Stack: [entity, component_kw] -> [value]
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: entity_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let component = match &component_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(c) =
+                                ctx.as_ref().and_then(|c| c.resolve_keyword(&component_val))
+                            {
+                                c
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: component_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    let value = if let Some(c) = ctx.as_ref() {
+                        c.get_component(entity, component)?.unwrap_or(Value::Nil)
+                    } else {
+                        return Err(Error::new(ErrorKind::Internal(
+                            "world context required for GetComponent".to_string(),
+                        )));
+                    };
+                    self.push(value);
                 }
 
-                // Effects (not yet implemented)
-                Opcode::Spawn
-                | Opcode::Destroy
-                | Opcode::SetComponent
-                | Opcode::SetField
-                | Opcode::Link
-                | Opcode::Unlink => {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "effect operations not yet supported".to_string(),
-                    )));
+                Opcode::GetField => {
+                    // Stack: [entity, component_kw, field_kw] -> [value]
+                    let field_val = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: entity_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let component = match &component_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(c) =
+                                ctx.as_ref().and_then(|c| c.resolve_keyword(&component_val))
+                            {
+                                c
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: component_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    let field = match &field_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(f) =
+                                ctx.as_ref().and_then(|c| c.resolve_keyword(&field_val))
+                            {
+                                f
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: field_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    let value = if let Some(c) = ctx.as_ref() {
+                        c.get_field(entity, component, field)?.unwrap_or(Value::Nil)
+                    } else {
+                        return Err(Error::new(ErrorKind::Internal(
+                            "world context required for GetField".to_string(),
+                        )));
+                    };
+                    self.push(value);
+                }
+
+                // Effects (collected for deferred application)
+                Opcode::Spawn => {
+                    // Stack: [components_map] -> [entity_id]
+                    let components_val = self.pop()?;
+
+                    let components = match components_val {
+                        Value::Map(m) => m,
+                        _ => LtMap::new(), // Empty spawn if no map
+                    };
+
+                    // Create a temporary entity ID for tracking
+                    self.spawn_counter += 1;
+                    let temp_id = EntityId {
+                        index: self.spawn_counter,
+                        generation: 0, // Generation 0 indicates a temporary spawn ID
+                    };
+
+                    self.effects.push(VmEffect::Spawn { components });
+                    self.push(Value::EntityRef(temp_id));
+                }
+
+                Opcode::Destroy => {
+                    // Stack: [entity] -> []
+                    let entity_val = self.pop()?;
+
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: entity_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    self.effects.push(VmEffect::Destroy { entity });
+                }
+
+                Opcode::SetComponent => {
+                    // Stack: [entity, component_kw, value] -> []
+                    let value = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: entity_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let component = match &component_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(c) =
+                                ctx.as_ref().and_then(|c| c.resolve_keyword(&component_val))
+                            {
+                                c
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: component_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    self.effects.push(VmEffect::SetComponent {
+                        entity,
+                        component,
+                        value,
+                    });
+                }
+
+                Opcode::SetField => {
+                    // Stack: [entity, component_kw, field_kw, value] -> []
+                    let value = self.pop()?;
+                    let field_val = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: entity_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let component = match &component_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(c) =
+                                ctx.as_ref().and_then(|c| c.resolve_keyword(&component_val))
+                            {
+                                c
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: component_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    let field = match &field_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(f) =
+                                ctx.as_ref().and_then(|c| c.resolve_keyword(&field_val))
+                            {
+                                f
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: field_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    self.effects.push(VmEffect::SetField {
+                        entity,
+                        component,
+                        field,
+                        value,
+                    });
+                }
+
+                Opcode::Link => {
+                    // Stack: [source, rel_kw, target] -> []
+                    let target_val = self.pop()?;
+                    let relationship_val = self.pop()?;
+                    let source_val = self.pop()?;
+
+                    let source = match source_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: source_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let target = match target_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: target_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let relationship = match &relationship_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(r) = ctx
+                                .as_ref()
+                                .and_then(|c| c.resolve_keyword(&relationship_val))
+                            {
+                                r
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: relationship_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    self.effects.push(VmEffect::Link {
+                        source,
+                        relationship,
+                        target,
+                    });
+                }
+
+                Opcode::Unlink => {
+                    // Stack: [source, rel_kw, target] -> []
+                    let target_val = self.pop()?;
+                    let relationship_val = self.pop()?;
+                    let source_val = self.pop()?;
+
+                    let source = match source_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: source_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let target = match target_val {
+                        Value::EntityRef(e) => e,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::EntityRef,
+                                actual: target_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    let relationship = match &relationship_val {
+                        Value::Keyword(k) => *k,
+                        _ => {
+                            if let Some(r) = ctx
+                                .as_ref()
+                                .and_then(|c| c.resolve_keyword(&relationship_val))
+                            {
+                                r
+                            } else {
+                                return Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Keyword,
+                                    actual: relationship_val.value_type(),
+                                }));
+                            }
+                        }
+                    };
+
+                    self.effects.push(VmEffect::Unlink {
+                        source,
+                        relationship,
+                        target,
+                    });
                 }
 
                 // Collections
@@ -405,11 +971,85 @@ impl Vm {
     }
 
     /// Calls a native function.
-    fn call_native(&mut self, _idx: u16) -> Result<()> {
-        // Native functions not yet implemented
-        Err(Error::new(ErrorKind::Internal(
-            "native functions not yet implemented".to_string(),
-        )))
+    fn call_native(&mut self, idx: u16, arg_count: u8) -> Result<()> {
+        // Pop arguments in reverse order
+        let mut args = Vec::with_capacity(arg_count as usize);
+        for _ in 0..arg_count {
+            args.push(self.pop()?);
+        }
+        args.reverse();
+
+        // Dispatch to native function implementation
+        // Index matches order in compiler's register_natives()
+        let result = match idx {
+            // 0-4: Arithmetic (+, -, *, /, mod) - handled by opcodes
+            // 5-10: Comparison (=, !=, <, <=, >, >=) - handled by opcodes
+            // 11: not - handled by opcode
+            // 12-13: and, or - handled by opcodes/short-circuit
+            12 => native_and(&args),
+            13 => native_or(&args),
+            // 14-24: Predicates
+            14 => native_nil_p(&args),
+            15 => native_some_p(&args),
+            16 => native_int_p(&args),
+            17 => native_float_p(&args),
+            18 => native_string_p(&args),
+            19 => native_keyword_p(&args),
+            20 => native_symbol_p(&args),
+            21 => native_list_p(&args),
+            22 => native_vector_p(&args),
+            23 => native_map_p(&args),
+            24 => native_set_p(&args),
+            // 25-37: Collections
+            25 => native_count(&args),
+            26 => native_empty_p(&args),
+            27 => native_first(&args),
+            28 => native_rest(&args),
+            29 => native_nth(&args),
+            30 => native_conj(&args),
+            31 => native_cons(&args),
+            32 => native_get(&args),
+            33 => native_assoc(&args),
+            34 => native_dissoc(&args),
+            35 => native_contains_p(&args),
+            36 => native_keys(&args),
+            37 => native_vals(&args),
+            // 38-41: String
+            38 => native_str(&args),
+            39 => native_str_len(&args),
+            40 => native_str_upper(&args),
+            41 => native_str_lower(&args),
+            // 42-47: Math
+            42 => native_abs(&args),
+            43 => native_min(&args),
+            44 => native_max(&args),
+            45 => native_floor(&args),
+            46 => native_ceil(&args),
+            47 => native_round(&args),
+            48 => native_sqrt(&args),
+            // 49-51: Misc
+            49 => {
+                // print - already handled specially, but in case it comes through
+                if let Some(v) = args.first() {
+                    self.output.push(format_value(v));
+                }
+                Ok(Value::Nil)
+            }
+            50 => {
+                // println
+                if let Some(v) = args.first() {
+                    self.output.push(format!("{}\n", format_value(v)));
+                }
+                Ok(Value::Nil)
+            }
+            51 => native_type(&args),
+            _ => Err(Error::new(ErrorKind::Internal(format!(
+                "unknown native function index: {idx}"
+            )))),
+        }?;
+
+        self.push(result);
+        Ok(())
     }
 }
 
@@ -548,6 +1188,564 @@ where
         }
     };
     Ok(Value::Bool(pred(ord)))
+}
+
+// =============================================================================
+// Native Function Implementations
+// =============================================================================
+
+/// Logic: and - returns first falsy value or last value
+fn native_and(args: &[Value]) -> Result<Value> {
+    for arg in args {
+        if !is_truthy(arg) {
+            return Ok(arg.clone());
+        }
+    }
+    Ok(args.last().cloned().unwrap_or(Value::Bool(true)))
+}
+
+/// Logic: or - returns first truthy value or last value
+fn native_or(args: &[Value]) -> Result<Value> {
+    for arg in args {
+        if is_truthy(arg) {
+            return Ok(arg.clone());
+        }
+    }
+    Ok(args.last().cloned().unwrap_or(Value::Bool(false)))
+}
+
+/// Predicate: nil?
+fn native_nil_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Nil))))
+}
+
+/// Predicate: some?
+fn native_some_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(!matches!(
+        args.first(),
+        Some(Value::Nil) | None
+    )))
+}
+
+/// Predicate: int?
+fn native_int_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Int(_)))))
+}
+
+/// Predicate: float?
+fn native_float_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Float(_)))))
+}
+
+/// Predicate: string?
+fn native_string_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::String(_)))))
+}
+
+/// Predicate: keyword?
+fn native_keyword_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Keyword(_)))))
+}
+
+/// Predicate: symbol?
+fn native_symbol_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Symbol(_)))))
+}
+
+/// Predicate: list? (vectors are lists in our model)
+fn native_list_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Vec(_)))))
+}
+
+/// Predicate: vector?
+fn native_vector_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Vec(_)))))
+}
+
+/// Predicate: map?
+fn native_map_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Map(_)))))
+}
+
+/// Predicate: set?
+fn native_set_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Set(_)))))
+}
+
+/// Collection: count
+fn native_count(args: &[Value]) -> Result<Value> {
+    let count = match args.first() {
+        Some(Value::Vec(v)) => v.len() as i64,
+        Some(Value::Set(s)) => s.len() as i64,
+        Some(Value::Map(m)) => m.len() as i64,
+        Some(Value::String(s)) => s.len() as i64,
+        Some(Value::Nil) => 0,
+        _ => {
+            return Err(Error::new(ErrorKind::TypeMismatch {
+                expected: longtable_foundation::Type::Vec(Box::new(
+                    longtable_foundation::Type::Any,
+                )),
+                actual: args
+                    .first()
+                    .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+            }));
+        }
+    };
+    Ok(Value::Int(count))
+}
+
+/// Collection: empty?
+fn native_empty_p(args: &[Value]) -> Result<Value> {
+    let empty = match args.first() {
+        Some(Value::Vec(v)) => v.is_empty(),
+        Some(Value::Set(s)) => s.is_empty(),
+        Some(Value::Map(m)) => m.is_empty(),
+        Some(Value::String(s)) => s.is_empty(),
+        Some(Value::Nil) => true,
+        _ => false,
+    };
+    Ok(Value::Bool(empty))
+}
+
+/// Collection: first
+fn native_first(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Vec(v)) => Ok(v.first().cloned().unwrap_or(Value::Nil)),
+        Some(Value::Nil) => Ok(Value::Nil),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: rest
+fn native_rest(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Vec(v)) => {
+            if v.is_empty() {
+                Ok(Value::Vec(LtVec::new()))
+            } else {
+                // Skip the first element
+                let rest: LtVec<Value> = v.iter().skip(1).cloned().collect();
+                Ok(Value::Vec(rest))
+            }
+        }
+        Some(Value::Nil) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: nth
+fn native_nth(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Vec(v)), Some(Value::Int(idx))) => {
+            let idx = *idx as usize;
+            Ok(v.get(idx).cloned().unwrap_or(Value::Nil))
+        }
+        (Some(Value::String(s)), Some(Value::Int(idx))) => {
+            let idx = *idx as usize;
+            Ok(s.chars()
+                .nth(idx)
+                .map_or(Value::Nil, |c| Value::String(c.to_string().into())))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: conj (add to collection)
+fn native_conj(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Vec(v)) => {
+            let mut result = v.clone();
+            for arg in args.iter().skip(1) {
+                result = result.push_back(arg.clone());
+            }
+            Ok(Value::Vec(result))
+        }
+        Some(Value::Set(s)) => {
+            let mut result = s.clone();
+            for arg in args.iter().skip(1) {
+                result = result.insert(arg.clone());
+            }
+            Ok(Value::Set(result))
+        }
+        Some(Value::Nil) => {
+            // conj on nil creates a vector
+            let mut result = LtVec::new();
+            for arg in args.iter().skip(1) {
+                result = result.push_back(arg.clone());
+            }
+            Ok(Value::Vec(result))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: cons (prepend to collection)
+fn native_cons(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(elem), Some(Value::Vec(v))) => {
+            let mut result = LtVec::new();
+            result = result.push_back(elem.clone());
+            for item in v.iter() {
+                result = result.push_back(item.clone());
+            }
+            Ok(Value::Vec(result))
+        }
+        (Some(elem), Some(Value::Nil)) => {
+            let mut result = LtVec::new();
+            result = result.push_back(elem.clone());
+            Ok(Value::Vec(result))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .get(1)
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: get
+fn native_get(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Map(m)), Some(key)) => Ok(m.get(key).cloned().unwrap_or(Value::Nil)),
+        (Some(Value::Vec(v)), Some(Value::Int(idx))) => {
+            let idx = *idx as usize;
+            Ok(v.get(idx).cloned().unwrap_or(Value::Nil))
+        }
+        (Some(Value::Nil), _) => Ok(Value::Nil),
+        _ => Ok(Value::Nil),
+    }
+}
+
+/// Collection: assoc
+fn native_assoc(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Map(m)) => {
+            let mut result = m.clone();
+            let mut i = 1;
+            while i + 1 < args.len() {
+                result = result.insert(args[i].clone(), args[i + 1].clone());
+                i += 2;
+            }
+            Ok(Value::Map(result))
+        }
+        Some(Value::Vec(v)) => {
+            let mut result = v.clone();
+            let mut i = 1;
+            while i + 1 < args.len() {
+                if let Value::Int(idx) = &args[i] {
+                    let idx = *idx as usize;
+                    if idx < result.len() {
+                        result = result.update(idx, args[i + 1].clone()).unwrap_or(result);
+                    }
+                }
+                i += 2;
+            }
+            Ok(Value::Vec(result))
+        }
+        Some(Value::Nil) => {
+            // assoc on nil creates a map
+            let mut result = LtMap::new();
+            let mut i = 1;
+            while i + 1 < args.len() {
+                result = result.insert(args[i].clone(), args[i + 1].clone());
+                i += 2;
+            }
+            Ok(Value::Map(result))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Map(
+                Box::new(longtable_foundation::Type::Any),
+                Box::new(longtable_foundation::Type::Any),
+            ),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: dissoc
+fn native_dissoc(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Map(m)) => {
+            let mut result = m.clone();
+            for key in args.iter().skip(1) {
+                result = result.remove(key);
+            }
+            Ok(Value::Map(result))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Map(
+                Box::new(longtable_foundation::Type::Any),
+                Box::new(longtable_foundation::Type::Any),
+            ),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: contains?
+fn native_contains_p(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Map(m)), Some(key)) => Ok(Value::Bool(m.contains_key(key))),
+        (Some(Value::Set(s)), Some(elem)) => Ok(Value::Bool(s.contains(elem))),
+        (Some(Value::Vec(v)), Some(Value::Int(idx))) => {
+            let idx = *idx as usize;
+            Ok(Value::Bool(idx < v.len()))
+        }
+        _ => Ok(Value::Bool(false)),
+    }
+}
+
+/// Collection: keys
+fn native_keys(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Map(m)) => {
+            let keys: LtVec<Value> = m.keys().cloned().collect();
+            Ok(Value::Vec(keys))
+        }
+        Some(Value::Nil) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Map(
+                Box::new(longtable_foundation::Type::Any),
+                Box::new(longtable_foundation::Type::Any),
+            ),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: vals
+fn native_vals(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Map(m)) => {
+            let vals: LtVec<Value> = m.values().cloned().collect();
+            Ok(Value::Vec(vals))
+        }
+        Some(Value::Nil) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Map(
+                Box::new(longtable_foundation::Type::Any),
+                Box::new(longtable_foundation::Type::Any),
+            ),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// String: str (concatenate to string)
+fn native_str(args: &[Value]) -> Result<Value> {
+    let result: String = args.iter().map(format_value).collect();
+    Ok(Value::String(result.into()))
+}
+
+/// String: str/len
+fn native_str_len(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::String(s)) => Ok(Value::Int(s.len() as i64)),
+        Some(Value::Nil) => Ok(Value::Int(0)),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::String,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// String: str/upper
+fn native_str_upper(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::String(s)) => Ok(Value::String(s.to_uppercase().into())),
+        Some(Value::Nil) => Ok(Value::String("".into())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::String,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// String: str/lower
+fn native_str_lower(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::String(s)) => Ok(Value::String(s.to_lowercase().into())),
+        Some(Value::Nil) => Ok(Value::String("".into())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::String,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Math: abs
+fn native_abs(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Int(n)) => Ok(Value::Int(n.abs())),
+        Some(Value::Float(n)) => Ok(Value::Float(n.abs())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Int,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Math: min
+fn native_min(args: &[Value]) -> Result<Value> {
+    if args.is_empty() {
+        return Err(Error::new(ErrorKind::Internal(
+            "min requires at least one argument".to_string(),
+        )));
+    }
+    let mut result = args[0].clone();
+    for arg in args.iter().skip(1) {
+        result = match (&result, arg) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(*a.min(b)),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a.min(*b)),
+            (Value::Int(a), Value::Float(b)) => Value::Float((*a as f64).min(*b)),
+            (Value::Float(a), Value::Int(b)) => Value::Float(a.min(*b as f64)),
+            _ => {
+                return Err(Error::new(ErrorKind::TypeMismatch {
+                    expected: longtable_foundation::Type::Int,
+                    actual: arg.value_type(),
+                }));
+            }
+        };
+    }
+    Ok(result)
+}
+
+/// Math: max
+fn native_max(args: &[Value]) -> Result<Value> {
+    if args.is_empty() {
+        return Err(Error::new(ErrorKind::Internal(
+            "max requires at least one argument".to_string(),
+        )));
+    }
+    let mut result = args[0].clone();
+    for arg in args.iter().skip(1) {
+        result = match (&result, arg) {
+            (Value::Int(a), Value::Int(b)) => Value::Int(*a.max(b)),
+            (Value::Float(a), Value::Float(b)) => Value::Float(a.max(*b)),
+            (Value::Int(a), Value::Float(b)) => Value::Float((*a as f64).max(*b)),
+            (Value::Float(a), Value::Int(b)) => Value::Float(a.max(*b as f64)),
+            _ => {
+                return Err(Error::new(ErrorKind::TypeMismatch {
+                    expected: longtable_foundation::Type::Int,
+                    actual: arg.value_type(),
+                }));
+            }
+        };
+    }
+    Ok(result)
+}
+
+/// Math: floor
+fn native_floor(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Int(n)) => Ok(Value::Int(*n)),
+        Some(Value::Float(n)) => Ok(Value::Float(n.floor())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Float,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Math: ceil
+fn native_ceil(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Int(n)) => Ok(Value::Int(*n)),
+        Some(Value::Float(n)) => Ok(Value::Float(n.ceil())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Float,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Math: round
+fn native_round(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Int(n)) => Ok(Value::Int(*n)),
+        Some(Value::Float(n)) => Ok(Value::Float(n.round())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Float,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Math: sqrt
+fn native_sqrt(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Int(n)) => Ok(Value::Float((*n as f64).sqrt())),
+        Some(Value::Float(n)) => Ok(Value::Float(n.sqrt())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Float,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Misc: type (returns type as keyword string)
+fn native_type(args: &[Value]) -> Result<Value> {
+    let type_name = match args.first() {
+        Some(Value::Nil) => "nil",
+        Some(Value::Bool(_)) => "bool",
+        Some(Value::Int(_)) => "int",
+        Some(Value::Float(_)) => "float",
+        Some(Value::String(_)) => "string",
+        Some(Value::Symbol(_)) => "symbol",
+        Some(Value::Keyword(_)) => "keyword",
+        Some(Value::EntityRef(_)) => "entity",
+        Some(Value::Vec(_)) => "vector",
+        Some(Value::Set(_)) => "set",
+        Some(Value::Map(_)) => "map",
+        Some(Value::Fn(_)) => "fn",
+        None => "nil",
+    };
+    Ok(Value::String(format!(":{type_name}").into()))
 }
 
 /// Formats a value for display.
@@ -758,5 +1956,292 @@ mod tests {
         // (let [x 10 y 20] (if (> x 5) (+ x y) (* x y)))
         let result = eval_test("(let [x 10 y 20] (if (> x 5) (+ x y) (* x y)))");
         assert_eq!(result, Value::Int(30));
+    }
+
+    // =========================================================================
+    // Native Function Tests
+    // =========================================================================
+
+    #[test]
+    fn eval_predicate_nil() {
+        assert_eq!(eval_test("(nil? nil)"), Value::Bool(true));
+        assert_eq!(eval_test("(nil? 1)"), Value::Bool(false));
+        assert_eq!(eval_test("(nil? false)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_predicate_some() {
+        assert_eq!(eval_test("(some? 1)"), Value::Bool(true));
+        assert_eq!(eval_test("(some? nil)"), Value::Bool(false));
+        assert_eq!(eval_test("(some? false)"), Value::Bool(true));
+    }
+
+    #[test]
+    fn eval_predicate_int() {
+        assert_eq!(eval_test("(int? 42)"), Value::Bool(true));
+        assert_eq!(eval_test("(int? 3.14)"), Value::Bool(false));
+        assert_eq!(eval_test("(int? nil)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_predicate_float() {
+        assert_eq!(eval_test("(float? 3.14)"), Value::Bool(true));
+        assert_eq!(eval_test("(float? 42)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_predicate_string() {
+        assert_eq!(eval_test(r#"(string? "hello")"#), Value::Bool(true));
+        assert_eq!(eval_test("(string? 42)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_predicate_vector() {
+        assert_eq!(eval_test("(vector? [1 2 3])"), Value::Bool(true));
+        assert_eq!(eval_test("(vector? nil)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_predicate_map() {
+        assert_eq!(eval_test("(map? {:a 1})"), Value::Bool(true));
+        assert_eq!(eval_test("(map? [1 2])"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_predicate_set() {
+        assert_eq!(eval_test("(set? #{1 2})"), Value::Bool(true));
+        assert_eq!(eval_test("(set? [1 2])"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_count() {
+        assert_eq!(eval_test("(count [1 2 3])"), Value::Int(3));
+        assert_eq!(eval_test("(count [])"), Value::Int(0));
+        assert_eq!(eval_test("(count {:a 1 :b 2})"), Value::Int(2));
+        assert_eq!(eval_test("(count #{1 2 3})"), Value::Int(3));
+        assert_eq!(eval_test(r#"(count "hello")"#), Value::Int(5));
+        assert_eq!(eval_test("(count nil)"), Value::Int(0));
+    }
+
+    #[test]
+    fn eval_empty() {
+        assert_eq!(eval_test("(empty? [])"), Value::Bool(true));
+        assert_eq!(eval_test("(empty? [1])"), Value::Bool(false));
+        assert_eq!(eval_test("(empty? nil)"), Value::Bool(true));
+        assert_eq!(eval_test("(empty? {})"), Value::Bool(true));
+    }
+
+    #[test]
+    fn eval_first() {
+        assert_eq!(eval_test("(first [1 2 3])"), Value::Int(1));
+        assert_eq!(eval_test("(first [])"), Value::Nil);
+        assert_eq!(eval_test("(first nil)"), Value::Nil);
+    }
+
+    #[test]
+    fn eval_rest() {
+        let result = eval_test("(rest [1 2 3])");
+        match result {
+            Value::Vec(v) => {
+                assert_eq!(v.len(), 2);
+                assert_eq!(v.get(0), Some(&Value::Int(2)));
+                assert_eq!(v.get(1), Some(&Value::Int(3)));
+            }
+            _ => panic!("expected vector"),
+        }
+        let result = eval_test("(rest [])");
+        match result {
+            Value::Vec(v) => assert!(v.is_empty()),
+            _ => panic!("expected vector"),
+        }
+    }
+
+    #[test]
+    fn eval_nth() {
+        assert_eq!(eval_test("(nth [10 20 30] 0)"), Value::Int(10));
+        assert_eq!(eval_test("(nth [10 20 30] 2)"), Value::Int(30));
+        assert_eq!(eval_test("(nth [10 20 30] 5)"), Value::Nil);
+    }
+
+    #[test]
+    fn eval_conj() {
+        let result = eval_test("(conj [1 2] 3)");
+        match result {
+            Value::Vec(v) => {
+                assert_eq!(v.len(), 3);
+                assert_eq!(v.get(2), Some(&Value::Int(3)));
+            }
+            _ => panic!("expected vector"),
+        }
+        let result = eval_test("(conj nil 1)");
+        match result {
+            Value::Vec(v) => {
+                assert_eq!(v.len(), 1);
+                assert_eq!(v.get(0), Some(&Value::Int(1)));
+            }
+            _ => panic!("expected vector"),
+        }
+    }
+
+    #[test]
+    fn eval_cons() {
+        let result = eval_test("(cons 0 [1 2])");
+        match result {
+            Value::Vec(v) => {
+                assert_eq!(v.len(), 3);
+                assert_eq!(v.get(0), Some(&Value::Int(0)));
+                assert_eq!(v.get(1), Some(&Value::Int(1)));
+            }
+            _ => panic!("expected vector"),
+        }
+    }
+
+    #[test]
+    fn eval_get() {
+        assert_eq!(eval_test("(get [10 20 30] 1)"), Value::Int(20));
+        assert_eq!(eval_test("(get {:a 1} :a)"), Value::Int(1));
+        assert_eq!(eval_test("(get {:a 1} :b)"), Value::Nil);
+        assert_eq!(eval_test("(get nil :a)"), Value::Nil);
+    }
+
+    #[test]
+    fn eval_assoc() {
+        let result = eval_test("(assoc {:a 1} :b 2)");
+        match result {
+            Value::Map(m) => {
+                assert_eq!(m.len(), 2);
+            }
+            _ => panic!("expected map"),
+        }
+    }
+
+    #[test]
+    fn eval_dissoc() {
+        let result = eval_test("(dissoc {:a 1 :b 2} :a)");
+        match result {
+            Value::Map(m) => {
+                assert_eq!(m.len(), 1);
+            }
+            _ => panic!("expected map"),
+        }
+    }
+
+    #[test]
+    fn eval_contains() {
+        assert_eq!(eval_test("(contains? {:a 1} :a)"), Value::Bool(true));
+        assert_eq!(eval_test("(contains? {:a 1} :b)"), Value::Bool(false));
+        assert_eq!(eval_test("(contains? #{1 2 3} 2)"), Value::Bool(true));
+        assert_eq!(eval_test("(contains? #{1 2 3} 4)"), Value::Bool(false));
+    }
+
+    #[test]
+    fn eval_keys() {
+        let result = eval_test("(keys {:a 1 :b 2})");
+        match result {
+            Value::Vec(v) => {
+                assert_eq!(v.len(), 2);
+            }
+            _ => panic!("expected vector"),
+        }
+    }
+
+    #[test]
+    fn eval_vals() {
+        let result = eval_test("(vals {:a 1 :b 2})");
+        match result {
+            Value::Vec(v) => {
+                assert_eq!(v.len(), 2);
+            }
+            _ => panic!("expected vector"),
+        }
+    }
+
+    #[test]
+    fn eval_str() {
+        assert_eq!(
+            eval_test(r#"(str "hello" " " "world")"#),
+            Value::String("hello world".into())
+        );
+        assert_eq!(eval_test("(str 1 2 3)"), Value::String("123".into()));
+    }
+
+    #[test]
+    fn eval_str_len() {
+        assert_eq!(eval_test(r#"(str/len "hello")"#), Value::Int(5));
+        assert_eq!(eval_test(r#"(str/len "")"#), Value::Int(0));
+    }
+
+    #[test]
+    fn eval_str_upper() {
+        assert_eq!(
+            eval_test(r#"(str/upper "hello")"#),
+            Value::String("HELLO".into())
+        );
+    }
+
+    #[test]
+    fn eval_str_lower() {
+        assert_eq!(
+            eval_test(r#"(str/lower "HELLO")"#),
+            Value::String("hello".into())
+        );
+    }
+
+    #[test]
+    fn eval_abs() {
+        assert_eq!(eval_test("(abs -5)"), Value::Int(5));
+        assert_eq!(eval_test("(abs 5)"), Value::Int(5));
+        assert!(matches!(eval_test("(abs -3.14)"), Value::Float(f) if (f - 3.14).abs() < 0.001));
+    }
+
+    #[test]
+    fn eval_min() {
+        assert_eq!(eval_test("(min 3 1 2)"), Value::Int(1));
+        assert!(matches!(eval_test("(min 1.5 2.5)"), Value::Float(f) if (f - 1.5).abs() < 0.001));
+    }
+
+    #[test]
+    fn eval_max() {
+        assert_eq!(eval_test("(max 3 1 2)"), Value::Int(3));
+        assert!(matches!(eval_test("(max 1.5 2.5)"), Value::Float(f) if (f - 2.5).abs() < 0.001));
+    }
+
+    #[test]
+    fn eval_floor() {
+        assert!(matches!(eval_test("(floor 3.7)"), Value::Float(f) if (f - 3.0).abs() < 0.001));
+        assert_eq!(eval_test("(floor 3)"), Value::Int(3));
+    }
+
+    #[test]
+    fn eval_ceil() {
+        assert!(matches!(eval_test("(ceil 3.2)"), Value::Float(f) if (f - 4.0).abs() < 0.001));
+        assert_eq!(eval_test("(ceil 3)"), Value::Int(3));
+    }
+
+    #[test]
+    fn eval_round() {
+        assert!(matches!(eval_test("(round 3.7)"), Value::Float(f) if (f - 4.0).abs() < 0.001));
+        assert!(matches!(eval_test("(round 3.2)"), Value::Float(f) if (f - 3.0).abs() < 0.001));
+    }
+
+    #[test]
+    fn eval_sqrt() {
+        assert!(matches!(eval_test("(sqrt 4)"), Value::Float(f) if (f - 2.0).abs() < 0.001));
+        assert!(matches!(eval_test("(sqrt 2.0)"), Value::Float(f) if (f - 1.414).abs() < 0.01));
+    }
+
+    #[test]
+    fn eval_type() {
+        assert_eq!(eval_test("(type nil)"), Value::String(":nil".into()));
+        assert_eq!(eval_test("(type 42)"), Value::String(":int".into()));
+        assert_eq!(eval_test("(type 3.14)"), Value::String(":float".into()));
+        assert_eq!(eval_test("(type true)"), Value::String(":bool".into()));
+        assert_eq!(
+            eval_test(r#"(type "hello")"#),
+            Value::String(":string".into())
+        );
+        assert_eq!(eval_test("(type [1 2])"), Value::String(":vector".into()));
+        assert_eq!(eval_test("(type {:a 1})"), Value::String(":map".into()));
+        assert_eq!(eval_test("(type #{1})"), Value::String(":set".into()));
     }
 }
