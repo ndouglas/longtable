@@ -18,6 +18,11 @@ longtable_stdlib.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 rmp-serde.workspace = true
+rustyline.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+
+[[bin]]
+name = "longtable"
+path = "src/bin/longtable.rs"
