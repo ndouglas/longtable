@@ -3,7 +3,7 @@
 use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::collections::{LtMap, LtSet, LtVec};
 use crate::entity::EntityId;
@@ -63,12 +63,98 @@ pub struct NativeFn {
 }
 
 /// Compiled function reference.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// Captures use `Mutex` for interior mutability, which is needed to support
+/// recursive closures (where a function needs to capture itself).
+#[derive(Clone)]
 pub struct CompiledFn {
     /// Index into the function table.
     pub index: u32,
     /// Captured environment (for closures).
-    pub captures: Option<Arc<Vec<Value>>>,
+    /// Uses `Mutex` to allow patching recursive self-references after creation.
+    pub captures: Option<Arc<Mutex<Vec<Value>>>>,
+}
+
+impl CompiledFn {
+    /// Creates a new compiled function reference without captures.
+    #[must_use]
+    pub fn new(index: u32) -> Self {
+        Self {
+            index,
+            captures: None,
+        }
+    }
+
+    /// Creates a new compiled function with captured values.
+    #[must_use]
+    pub fn with_captures(index: u32, captures: Vec<Value>) -> Self {
+        Self {
+            index,
+            captures: Some(Arc::new(Mutex::new(captures))),
+        }
+    }
+
+    /// Gets a clone of the captured values.
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    #[must_use]
+    pub fn get_captures(&self) -> Option<Vec<Value>> {
+        self.captures.as_ref().map(|c| c.lock().unwrap().clone())
+    }
+
+    /// Patches a capture slot with a new value (for recursive closures).
+    ///
+    /// # Panics
+    /// Panics if the internal mutex is poisoned.
+    pub fn patch_capture(&self, index: usize, value: Value) {
+        if let Some(ref captures) = self.captures {
+            let mut caps = captures.lock().unwrap();
+            if index < caps.len() {
+                caps[index] = value;
+            }
+        }
+    }
+}
+
+impl PartialEq for CompiledFn {
+    fn eq(&self, other: &Self) -> bool {
+        if self.index != other.index {
+            return false;
+        }
+        match (&self.captures, &other.captures) {
+            (None, None) => true,
+            (Some(a), Some(b)) => *a.lock().unwrap() == *b.lock().unwrap(),
+            _ => false,
+        }
+    }
+}
+
+impl Eq for CompiledFn {}
+
+impl Hash for CompiledFn {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.index.hash(state);
+        match &self.captures {
+            None => 0u8.hash(state),
+            Some(caps) => {
+                1u8.hash(state);
+                caps.lock().unwrap().hash(state);
+            }
+        }
+    }
+}
+
+impl fmt::Debug for CompiledFn {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CompiledFn")
+            .field("index", &self.index)
+            .field(
+                "captures",
+                &self.captures.as_ref().map(|c| c.lock().unwrap().len()),
+            )
+            .finish()
+    }
 }
 
 impl Value {

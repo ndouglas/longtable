@@ -822,7 +822,7 @@ impl Vm {
 - [x] Span and Token types implemented with proper source tracking
 - [x] Lexer tokenizes all spec literals (integers, floats, strings, symbols, keywords, collections)
 - [x] Parser builds AST for all expression forms (lists, vectors, sets, maps, quotes, tags)
-- [x] 150 unit tests for lexer, parser, compiler, and VM (including native and user-defined functions)
+- [x] 156 unit tests for lexer, parser, compiler, and VM (including closures and recursive functions)
 - [x] Round-trip test: source → AST → bytecode → execution → expected value
 - [x] Verify all spec expression forms can be represented
 - [ ] Benchmark VM execution (target: 1M simple ops/sec)
@@ -1739,8 +1739,15 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Implement user-defined function calls (Call opcode)
 - [x] Implement CompiledFunction structure for function bytecode
 - [x] Implement fn compilation (anonymous functions)
-- [x] Test: function calls (9 tests)
-- [ ] Implement closures (captured variables)
+- [x] Test: function calls (11 tests)
+- [x] Implement closures (captured variables)
+  - [x] LoadCapture opcode for accessing captured variables at runtime
+  - [x] MakeClosure opcode for creating closures with captured values
+  - [x] PatchCapture opcode for recursive closure support (letrec semantics)
+  - [x] CompiledFn uses Arc<Mutex<Vec<Value>>> for mutable captures
+  - [x] Compiler tracks outer_locals and captures during fn compilation
+  - [x] compile_let uses three-phase approach for recursive bindings
+  - [x] Test: closure capture (5 tests) + recursive functions (2 tests)
 - [ ] Benchmark: 1M ops/sec target
 
 ### Example: Expression Evaluation

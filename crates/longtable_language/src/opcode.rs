@@ -75,6 +75,14 @@ pub enum Opcode {
     StoreLocal(u16),
     /// Load a value from pattern bindings (during rule execution).
     LoadBinding(u16),
+    /// Load a captured variable by index (for closures).
+    LoadCapture(u16),
+    /// Create a closure: pops `capture_count` values, creates function with captures.
+    /// Arguments: (function_index, capture_count)
+    MakeClosure(u32, u16),
+    /// Patch a closure's capture slot (for recursive closures).
+    /// Pops the new value, then pops the closure, patches `capture[index]`, pushes closure back.
+    PatchCapture(u16),
 
     // === Data Access (World Operations) ===
     /// Get component value: `[entity, component_kw] -> [value]`

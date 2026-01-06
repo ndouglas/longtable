@@ -33,6 +33,12 @@ pub struct Compiler {
     natives: HashMap<String, u16>,
     /// Compiled functions.
     functions: Vec<CompiledFunction>,
+    /// Variables from outer scopes that can be captured (name -> outer slot).
+    /// Only set during function compilation.
+    outer_locals: Option<HashMap<String, u16>>,
+    /// Captured variables for the current function being compiled.
+    /// Maps variable name to capture index.
+    captures: HashMap<String, u16>,
 }
 
 /// Key for constant deduplication.
@@ -76,6 +82,9 @@ pub struct CompiledFunction {
     pub code: Bytecode,
     /// Number of local variable slots needed.
     pub locals_count: u16,
+    /// Names of captured variables (for closures).
+    /// The order corresponds to the capture index used by `LoadCapture`.
+    pub captures: Vec<String>,
 }
 
 /// Compiled program ready for execution.
@@ -106,6 +115,8 @@ impl Compiler {
             next_local: 0,
             natives: HashMap::new(),
             functions: Vec::new(),
+            outer_locals: None,
+            captures: HashMap::new(),
         };
 
         // Register built-in native functions
@@ -283,6 +294,23 @@ impl Compiler {
         if let Some(&slot) = self.locals.get(name) {
             code.emit(Opcode::LoadLocal(slot));
             return;
+        }
+
+        // Check for captured variable (from outer scope)
+        if let Some(&capture_idx) = self.captures.get(name) {
+            code.emit(Opcode::LoadCapture(capture_idx));
+            return;
+        }
+
+        // Check if this variable exists in outer scope and needs to be captured
+        if let Some(outer) = &self.outer_locals {
+            if outer.contains_key(name) {
+                // Add to captures
+                let capture_idx = self.captures.len() as u16;
+                self.captures.insert(name.to_string(), capture_idx);
+                code.emit(Opcode::LoadCapture(capture_idx));
+                return;
+            }
         }
 
         // Symbol resolves to itself (for use as data)
@@ -504,6 +532,9 @@ impl Compiler {
     }
 
     /// Compiles a let expression.
+    ///
+    /// Uses letrec-style semantics: all bindings are visible to all values,
+    /// enabling recursive function definitions like `(let [f (fn [x] (f x))] ...)`.
     fn compile_let(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
         if args.is_empty() {
             return Err(self.error(span, "let requires bindings vector"));
@@ -522,7 +553,10 @@ impl Compiler {
         let saved_locals = self.locals.clone();
         let saved_next = self.next_local;
 
-        // Process bindings
+        // Phase 1: Allocate slots for ALL bindings first (letrec semantics)
+        // This allows recursive references within binding values
+        let mut binding_info: Vec<(String, &Ast, u16)> = Vec::new();
+        let mut binding_names: Vec<String> = Vec::new();
         for chunk in bindings.chunks(2) {
             let name = match &chunk[0] {
                 Ast::Symbol(name, _) => name.clone(),
@@ -530,14 +564,67 @@ impl Compiler {
             };
             let value = &chunk[1];
 
-            // Compile the value
-            self.compile_node(value, code)?;
-
-            // Store in local slot
+            // Allocate slot and register name
             let slot = self.next_local;
             self.next_local += 1;
-            code.emit(Opcode::StoreLocal(slot));
-            self.locals.insert(name, slot);
+            self.locals.insert(name.clone(), slot);
+            binding_names.push(name.clone());
+            binding_info.push((name, value, slot));
+        }
+
+        // Phase 2: Compile values and store them
+        // Track self-referential captures that need patching
+        // (slot, capture_indices_to_patch) - indices in the captures list that refer to this let
+        let mut patches: Vec<(u16, Vec<(u16, u16)>)> = Vec::new(); // (slot, [(capture_idx, local_slot)])
+
+        for (_name, value, slot) in &binding_info {
+            // Compile the value - this handles both regular values and closures
+            self.compile_node(value, code)?;
+
+            // Check if this created a closure with captures that need patching
+            // We detect this by seeing if the emitted code ends with MakeClosure
+            // and checking if any captures are from this let scope
+            if let Some(Opcode::MakeClosure(fn_index, _capture_count)) = code.ops.last().cloned() {
+                let func = &self.functions[fn_index as usize];
+                let mut patch_indices: Vec<(u16, u16)> = Vec::new();
+
+                for (cap_idx, cap_name) in func.captures.iter().enumerate() {
+                    // Check if this capture is from the current let scope
+                    if let Some(local_slot) = binding_names
+                        .iter()
+                        .position(|n| n == cap_name)
+                        .and_then(|_| self.locals.get(cap_name))
+                    {
+                        patch_indices.push((cap_idx as u16, *local_slot));
+                    }
+                }
+
+                if !patch_indices.is_empty() {
+                    // Store initial closure, we'll patch it later
+                    code.emit(Opcode::StoreLocal(*slot));
+
+                    // Record that we need to patch this slot later
+                    patches.push((*slot, patch_indices));
+                    continue;
+                }
+            }
+
+            code.emit(Opcode::StoreLocal(*slot));
+        }
+
+        // Phase 3: Patch self-referential closures
+        // Now all slots have their values, so we can patch closures that reference themselves
+        for (slot, patch_indices) in patches {
+            for (capture_idx, local_slot) in patch_indices {
+                // Load the closure to patch
+                code.emit(Opcode::LoadLocal(slot));
+                // Load the value to patch in (the actual closure from its slot)
+                code.emit(Opcode::LoadLocal(local_slot));
+                // Patch the capture slot
+                code.emit(Opcode::PatchCapture(capture_idx));
+                // Store the patched closure back (PatchCapture leaves it on stack)
+                code.emit(Opcode::StoreLocal(slot));
+            }
         }
 
         // Compile body expressions
@@ -606,10 +693,21 @@ impl Compiler {
         // Save current compiler state
         let saved_locals = self.locals.clone();
         let saved_next = self.next_local;
+        let saved_outer = self.outer_locals.take();
+        let saved_captures = std::mem::take(&mut self.captures);
+
+        // Set up outer locals for closure capture
+        // Merge current locals with any existing outer locals
+        let mut combined_outer = saved_outer.clone().unwrap_or_default();
+        for (name, slot) in &saved_locals {
+            combined_outer.insert(name.clone(), *slot);
+        }
+        self.outer_locals = Some(combined_outer);
 
         // Reset locals for function compilation
         self.locals.clear();
         self.next_local = 0;
+        self.captures.clear();
 
         // Add parameters as locals
         for name in &param_names {
@@ -639,9 +737,16 @@ impl Compiler {
 
         let locals_count = self.next_local;
 
+        // Collect captures in order (sorted by capture index)
+        let mut capture_names: Vec<(String, u16)> = self.captures.drain().collect();
+        capture_names.sort_by_key(|(_, idx)| *idx);
+        let captures: Vec<String> = capture_names.into_iter().map(|(name, _)| name).collect();
+
         // Restore compiler state
         self.locals = saved_locals;
         self.next_local = saved_next;
+        self.outer_locals = saved_outer;
+        self.captures = saved_captures;
 
         // Create compiled function
         let func = CompiledFunction {
@@ -649,6 +754,7 @@ impl Compiler {
             params: param_names,
             code: fn_code,
             locals_count,
+            captures: captures.clone(),
         };
 
         // Add to functions table
@@ -656,16 +762,32 @@ impl Compiler {
             .map_err(|_| self.error(span, "too many functions"))?;
         self.functions.push(func);
 
-        // Create function value
-        let fn_value = Value::Fn(longtable_foundation::LtFn::Compiled(
-            longtable_foundation::CompiledFn {
-                index: fn_index,
-                captures: None, // No closures yet
-            },
-        ));
+        if captures.is_empty() {
+            // No captures - emit as constant
+            let fn_value = Value::Fn(longtable_foundation::LtFn::Compiled(
+                longtable_foundation::CompiledFn::new(fn_index),
+            ));
+            let idx = self.add_constant(fn_value);
+            code.emit(Opcode::Const(idx));
+        } else {
+            // Has captures - emit code to load captured values and create closure
+            let capture_count =
+                u16::try_from(captures.len()).map_err(|_| self.error(span, "too many captures"))?;
 
-        let idx = self.add_constant(fn_value);
-        code.emit(Opcode::Const(idx));
+            // Load each captured variable onto the stack
+            for name in &captures {
+                // Look up the variable in current locals (after restoring)
+                if let Some(&slot) = self.locals.get(name) {
+                    code.emit(Opcode::LoadLocal(slot));
+                } else {
+                    // Should not happen - captured variable should exist
+                    return Err(self.error(span, &format!("captured variable '{name}' not found")));
+                }
+            }
+
+            // Emit MakeClosure to create the function with captures
+            code.emit(Opcode::MakeClosure(fn_index, capture_count));
+        }
 
         Ok(())
     }
