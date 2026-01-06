@@ -3,7 +3,9 @@
 use crate::editor::{LineEditor, ReadResult, RustylineEditor};
 use crate::session::Session;
 use longtable_foundation::{Error, ErrorKind, Result, Value};
-use longtable_language::{Compiler, Vm, parse};
+use longtable_language::{
+    Compiler, Declaration, DeclarationAnalyzer, NamespaceContext, NamespaceInfo, Vm, parse,
+};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -315,10 +317,11 @@ impl<E: LineEditor> Repl<E> {
     /// Loads and evaluates a file.
     ///
     /// If the path is a directory containing a `_.lt` file, that file is loaded.
+    /// Uses cycle detection to prevent recursive loading.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read or evaluated.
+    /// Returns an error if the file cannot be read, contains cyclic loads, or evaluation fails.
     pub fn load_file(&mut self, path: &str) -> Result<()> {
         // Resolve path relative to current load path
         let resolved = self.session.resolve_path(path);
@@ -355,8 +358,27 @@ impl<E: LineEditor> Repl<E> {
             ))));
         };
 
+        // Canonicalize for consistent cycle detection
+        let canonical = file_path
+            .canonicalize()
+            .unwrap_or_else(|_| file_path.clone());
+
+        // Check if already loaded (skip re-loading)
+        if self.session.module_registry().has_file(&canonical) {
+            return Ok(());
+        }
+
+        // Begin loading (cycle detection)
+        self.session
+            .module_registry_mut()
+            .begin_loading(canonical.clone())?;
+
         // Read file
         let source = fs::read_to_string(&file_path).map_err(|e| {
+            // Clean up loading state on error
+            self.session
+                .module_registry_mut()
+                .finish_loading(&canonical);
             Error::new(ErrorKind::Internal(format!(
                 "failed to read {}: {e}",
                 file_path.display()
@@ -369,13 +391,56 @@ impl<E: LineEditor> Repl<E> {
             self.session.set_load_path(parent.to_path_buf());
         }
 
-        // Evaluate
-        let result = self.eval(&source);
+        // Evaluate with file context
+        let result = self.eval_with_file_context(&source, &canonical);
 
         // Restore load path
         self.session.set_load_path(old_path);
 
+        // Finish loading (remove from loading stack)
+        self.session
+            .module_registry_mut()
+            .finish_loading(&canonical);
+
         result.map(|_| ())
+    }
+
+    /// Evaluates source code within a file context.
+    ///
+    /// Handles namespace declarations and registers the file in the module registry.
+    fn eval_with_file_context(
+        &mut self,
+        source: &str,
+        file_path: &std::path::Path,
+    ) -> Result<Value> {
+        // Parse
+        let forms = parse(source)?;
+
+        // Check for namespace declaration at the beginning
+        if let Some(first_form) = forms.first() {
+            if let Some(Declaration::Namespace(ns_decl)) = DeclarationAnalyzer::analyze(first_form)?
+            {
+                // Build namespace context from declaration
+                let ns_context = NamespaceContext::from_decl(&ns_decl);
+
+                // Register the namespace
+                let ns_info = NamespaceInfo::new(ns_decl, file_path.to_path_buf());
+                self.session
+                    .module_registry_mut()
+                    .register_namespace(ns_info);
+
+                // Set as current namespace context for compilation
+                self.session.set_namespace_context(ns_context);
+            }
+        }
+
+        // Evaluate each form
+        let mut result = Value::Nil;
+        for form in forms {
+            result = self.eval_form(&form)?;
+        }
+
+        Ok(result)
     }
 
     /// Evaluates a file without changing the load path (for CLI batch mode).

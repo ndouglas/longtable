@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use longtable_foundation::{Error, ErrorKind, Result, Value};
 
 use crate::ast::Ast;
+use crate::namespace::NamespaceContext;
 use crate::opcode::{Bytecode, Opcode};
 use crate::span::Span;
 
@@ -39,6 +40,8 @@ pub struct Compiler {
     /// Captured variables for the current function being compiled.
     /// Maps variable name to capture index.
     captures: HashMap<String, u16>,
+    /// Namespace context for symbol resolution (aliases, refers).
+    namespace_context: NamespaceContext,
 }
 
 /// Key for constant deduplication.
@@ -117,11 +120,43 @@ impl Compiler {
             functions: Vec::new(),
             outer_locals: None,
             captures: HashMap::new(),
+            namespace_context: NamespaceContext::new(),
         };
 
         // Register built-in native functions
         compiler.register_natives();
         compiler
+    }
+
+    /// Creates a new compiler with the given namespace context.
+    #[must_use]
+    pub fn with_namespace_context(namespace_context: NamespaceContext) -> Self {
+        let mut compiler = Self {
+            constants: Vec::new(),
+            constant_map: HashMap::new(),
+            locals: HashMap::new(),
+            next_local: 0,
+            natives: HashMap::new(),
+            functions: Vec::new(),
+            outer_locals: None,
+            captures: HashMap::new(),
+            namespace_context,
+        };
+
+        // Register built-in native functions
+        compiler.register_natives();
+        compiler
+    }
+
+    /// Sets the namespace context for symbol resolution.
+    pub fn set_namespace_context(&mut self, context: NamespaceContext) {
+        self.namespace_context = context;
+    }
+
+    /// Returns a reference to the namespace context.
+    #[must_use]
+    pub fn namespace_context(&self) -> &NamespaceContext {
+        &self.namespace_context
     }
 
     /// Registers built-in native functions.
@@ -311,6 +346,30 @@ impl Compiler {
                 code.emit(Opcode::LoadCapture(capture_idx));
                 return;
             }
+        }
+
+        // Check for qualified name (namespace/symbol or alias/symbol)
+        if let Some((prefix, symbol)) = name.split_once('/') {
+            // Try to resolve the prefix as an alias
+            let resolved = self
+                .namespace_context
+                .resolve_alias(prefix, symbol)
+                .unwrap_or_else(|| {
+                    // If not an alias, it might already be fully qualified
+                    name.to_string()
+                });
+            // Emit as a qualified symbol string for runtime lookup
+            let idx = self.add_constant(Value::String(format!("'{resolved}").into()));
+            code.emit(Opcode::Const(idx));
+            return;
+        }
+
+        // Check for referred symbol (imported from another namespace)
+        if let Some(qualified) = self.namespace_context.resolve_referred(name) {
+            // Emit as a qualified symbol string for runtime lookup
+            let idx = self.add_constant(Value::String(format!("'{qualified}").into()));
+            code.emit(Opcode::Const(idx));
+            return;
         }
 
         // Symbol resolves to itself (for use as data)
@@ -1223,5 +1282,71 @@ mod tests {
             .filter(|op| matches!(op, Opcode::Add))
             .count();
         assert_eq!(add_count, 3);
+    }
+
+    // =========================================================================
+    // Namespace-aware compilation tests
+    // =========================================================================
+
+    #[test]
+    fn compile_with_namespace_alias() {
+        use crate::namespace::NamespaceContext;
+
+        let mut ns_ctx = NamespaceContext::new();
+        ns_ctx.add_alias("core", "game.core");
+
+        let mut compiler = Compiler::with_namespace_context(ns_ctx);
+        let ast = crate::parse("core/foo").unwrap();
+        let prog = compiler.compile(&ast).unwrap();
+
+        // Should emit a constant with the resolved qualified name
+        let has_qualified = prog.constants.iter().any(|c| {
+            if let Value::String(s) = c {
+                s.to_string() == "'game.core/foo"
+            } else {
+                false
+            }
+        });
+        assert!(has_qualified, "Should resolve alias to qualified name");
+    }
+
+    #[test]
+    fn compile_with_referred_symbol() {
+        use crate::namespace::NamespaceContext;
+
+        let mut ns_ctx = NamespaceContext::new();
+        ns_ctx.add_refer("distance", "game.utils/distance");
+
+        let mut compiler = Compiler::with_namespace_context(ns_ctx);
+        let ast = crate::parse("distance").unwrap();
+        let prog = compiler.compile(&ast).unwrap();
+
+        // Should emit a constant with the qualified name from refers
+        let has_qualified = prog.constants.iter().any(|c| {
+            if let Value::String(s) = c {
+                s.to_string() == "'game.utils/distance"
+            } else {
+                false
+            }
+        });
+        assert!(
+            has_qualified,
+            "Should resolve referred symbol to qualified name"
+        );
+    }
+
+    #[test]
+    fn compile_fully_qualified_symbol() {
+        // Already fully qualified symbols should pass through
+        let prog = compile_test("game.core/foo");
+
+        let has_qualified = prog.constants.iter().any(|c| {
+            if let Value::String(s) = c {
+                s.to_string() == "'game.core/foo"
+            } else {
+                false
+            }
+        });
+        assert!(has_qualified, "Fully qualified symbol should be preserved");
     }
 }

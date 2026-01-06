@@ -6,6 +6,7 @@
 //! The flow is: Source → Parser → AST → `DeclarationAnalyzer` → Declaration → Compiler
 
 use crate::ast::Ast;
+use crate::namespace::{LoadDecl, NamespaceDecl, NamespaceName, RequireSpec};
 use crate::span::Span;
 use longtable_foundation::{Error, ErrorKind, Result};
 
@@ -466,6 +467,10 @@ pub enum Declaration {
     Constraint(ConstraintDecl),
     /// A query expression.
     Query(QueryDecl),
+    /// A namespace declaration.
+    Namespace(NamespaceDecl),
+    /// A load directive.
+    Load(LoadDecl),
 }
 
 // =============================================================================
@@ -1897,6 +1902,290 @@ impl DeclarationAnalyzer {
     }
 
     // =========================================================================
+    // Namespace Declaration Analysis
+    // =========================================================================
+
+    /// Analyze a top-level form and return a namespace if it's a namespace declaration.
+    ///
+    /// Handles:
+    /// ```clojure
+    /// (namespace game.combat)
+    /// (namespace game.combat
+    ///   (:require [game.core :as core]
+    ///             [game.utils :refer [distance clamp]]
+    ///             [game.items]))
+    /// ```
+    #[allow(clippy::too_many_lines)]
+    pub fn analyze_namespace(ast: &Ast) -> Result<Option<NamespaceDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (namespace name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "namespace" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "namespace requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get namespace name (can be dotted like game.combat)
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => NamespaceName::parse(s),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("namespace name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut ns_decl = NamespaceDecl::new(name, span);
+
+        // Parse optional clauses like (:require [...])
+        for element in &elements[2..] {
+            if let Ast::List(clause, clause_span) = element {
+                if clause.is_empty() {
+                    continue;
+                }
+
+                // Check for (:require [...]) form
+                if let Ast::Keyword(kw, _) = &clause[0] {
+                    if kw == "require" {
+                        ns_decl.requires =
+                            Self::analyze_require_clause(&clause[1..], *clause_span)?;
+                    } else {
+                        return Err(Error::new(ErrorKind::ParseError {
+                            message: format!("unknown namespace clause :{kw}"),
+                            line: clause_span.line,
+                            column: clause_span.column,
+                            context: String::new(),
+                        }));
+                    }
+                }
+            }
+        }
+
+        Ok(Some(ns_decl))
+    }
+
+    /// Analyze a (:require [...]) clause into `RequireSpec` items.
+    fn analyze_require_clause(items: &[Ast], _span: Span) -> Result<Vec<RequireSpec>> {
+        let mut requires = Vec::new();
+
+        for item in items {
+            let req = Self::analyze_require_spec(item)?;
+            requires.push(req);
+        }
+
+        Ok(requires)
+    }
+
+    /// Analyze a single require spec like [game.core :as core] or [game.utils :refer [foo bar]].
+    fn analyze_require_spec(ast: &Ast) -> Result<RequireSpec> {
+        let elements = match ast {
+            Ast::Vector(elements, _) => elements,
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("require spec must be a vector, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        if elements.is_empty() {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "require spec vector cannot be empty".to_string(),
+                line: ast.span().line,
+                column: ast.span().column,
+                context: String::new(),
+            }));
+        }
+
+        // First element is the namespace name
+        let ns_name = match &elements[0] {
+            Ast::Symbol(s, _) => NamespaceName::parse(s),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!(
+                        "namespace in require must be a symbol, got {}",
+                        other.type_name()
+                    ),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        // If only namespace, it's a Use
+        if elements.len() == 1 {
+            return Ok(RequireSpec::Use { namespace: ns_name });
+        }
+
+        // Parse :as or :refer (require specs have at most one such option)
+        let kw = match &elements[1] {
+            Ast::Keyword(k, _) => k.as_str(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!(
+                        "expected keyword in require spec, got {}",
+                        other.type_name()
+                    ),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        if elements.len() < 3 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: format!("missing value for :{kw} in require spec"),
+                line: ast.span().line,
+                column: ast.span().column,
+                context: String::new(),
+            }));
+        }
+
+        match kw {
+            "as" => {
+                let alias = match &elements[2] {
+                    Ast::Symbol(s, _) => s.clone(),
+                    other => {
+                        return Err(Error::new(ErrorKind::ParseError {
+                            message: format!(
+                                ":as alias must be a symbol, got {}",
+                                other.type_name()
+                            ),
+                            line: other.span().line,
+                            column: other.span().column,
+                            context: String::new(),
+                        }));
+                    }
+                };
+                Ok(RequireSpec::Alias {
+                    namespace: ns_name,
+                    alias,
+                })
+            }
+            "refer" => {
+                let symbols = Self::analyze_refer_symbols(&elements[2])?;
+                Ok(RequireSpec::Refer {
+                    namespace: ns_name,
+                    symbols,
+                })
+            }
+            other => Err(Error::new(ErrorKind::ParseError {
+                message: format!("unknown require option :{other}"),
+                line: elements[1].span().line,
+                column: elements[1].span().column,
+                context: String::new(),
+            })),
+        }
+    }
+
+    /// Analyze the symbols in a :refer clause like [foo bar baz].
+    fn analyze_refer_symbols(ast: &Ast) -> Result<Vec<String>> {
+        let elements = match ast {
+            Ast::Vector(elements, _) => elements,
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!(":refer value must be a vector, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut symbols = Vec::new();
+        for elem in elements {
+            match elem {
+                Ast::Symbol(s, _) => symbols.push(s.clone()),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!(
+                            "symbol in :refer must be a symbol, got {}",
+                            other.type_name()
+                        ),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(symbols)
+    }
+
+    // =========================================================================
+    // Load Directive Analysis
+    // =========================================================================
+
+    /// Analyze a top-level form and return a load directive if it's a load form.
+    ///
+    /// Handles `(load "path/to/file.lt")` syntax.
+    pub fn analyze_load(ast: &Ast) -> Result<Option<LoadDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (load "path") form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "load" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() != 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "load requires exactly one path argument".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        let path = match &elements[1] {
+            Ast::String(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("load path must be a string, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        Ok(Some(LoadDecl::new(path, span)))
+    }
+
+    // =========================================================================
     // Unified Analysis
     // =========================================================================
 
@@ -1920,6 +2209,12 @@ impl DeclarationAnalyzer {
         }
         if let Some(query) = Self::analyze_query(ast)? {
             return Ok(Some(Declaration::Query(query)));
+        }
+        if let Some(ns) = Self::analyze_namespace(ast)? {
+            return Ok(Some(Declaration::Namespace(ns)));
+        }
+        if let Some(load) = Self::analyze_load(ast)? {
+            return Ok(Some(Declaration::Load(load)));
         }
 
         Ok(None)
@@ -2444,5 +2739,157 @@ mod tests {
         let ast = parse("(+ 1 2)");
         let decl = DeclarationAnalyzer::analyze(&ast).unwrap();
         assert!(decl.is_none());
+    }
+
+    // =========================================================================
+    // Namespace Declaration Tests
+    // =========================================================================
+
+    #[test]
+    fn analyze_simple_namespace() {
+        let ast = parse("(namespace game.core)");
+        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(ns.name.full_name(), "game.core");
+        assert!(ns.requires.is_empty());
+    }
+
+    #[test]
+    fn analyze_namespace_with_alias_require() {
+        let ast = parse(
+            r"(namespace game.combat
+                   (:require [game.core :as core]))",
+        );
+        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(ns.name.full_name(), "game.combat");
+        assert_eq!(ns.requires.len(), 1);
+        match &ns.requires[0] {
+            RequireSpec::Alias { namespace, alias } => {
+                assert_eq!(namespace.full_name(), "game.core");
+                assert_eq!(alias, "core");
+            }
+            other => panic!("expected Alias, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn analyze_namespace_with_refer_require() {
+        let ast = parse(
+            r"(namespace game.combat
+                   (:require [game.utils :refer [distance clamp]]))",
+        );
+        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(ns.name.full_name(), "game.combat");
+        assert_eq!(ns.requires.len(), 1);
+        match &ns.requires[0] {
+            RequireSpec::Refer { namespace, symbols } => {
+                assert_eq!(namespace.full_name(), "game.utils");
+                assert_eq!(symbols, &["distance".to_string(), "clamp".to_string()]);
+            }
+            other => panic!("expected Refer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn analyze_namespace_with_use_require() {
+        let ast = parse(
+            r"(namespace game.combat
+                   (:require [game.items]))",
+        );
+        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(ns.name.full_name(), "game.combat");
+        assert_eq!(ns.requires.len(), 1);
+        match &ns.requires[0] {
+            RequireSpec::Use { namespace } => {
+                assert_eq!(namespace.full_name(), "game.items");
+            }
+            other => panic!("expected Use, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn analyze_namespace_with_multiple_requires() {
+        let ast = parse(
+            r"(namespace game.combat
+                   (:require [game.core :as core]
+                             [game.utils :refer [distance]]
+                             [game.items]))",
+        );
+        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(ns.name.full_name(), "game.combat");
+        assert_eq!(ns.requires.len(), 3);
+        assert!(matches!(&ns.requires[0], RequireSpec::Alias { .. }));
+        assert!(matches!(&ns.requires[1], RequireSpec::Refer { .. }));
+        assert!(matches!(&ns.requires[2], RequireSpec::Use { .. }));
+    }
+
+    #[test]
+    fn analyze_namespace_non_namespace_returns_none() {
+        let ast = parse("(def foo 42)");
+        let result = DeclarationAnalyzer::analyze_namespace(&ast).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn unified_analyze_namespace() {
+        let ast = parse("(namespace game.core)");
+        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
+        assert!(matches!(decl, Declaration::Namespace(_)));
+    }
+
+    // =========================================================================
+    // Load Declaration Tests
+    // =========================================================================
+
+    #[test]
+    fn analyze_simple_load() {
+        let ast = parse(r#"(load "game/core.lt")"#);
+        let load = DeclarationAnalyzer::analyze_load(&ast).unwrap().unwrap();
+
+        assert_eq!(load.path, "game/core.lt");
+    }
+
+    #[test]
+    fn analyze_load_non_load_returns_none() {
+        let ast = parse("(def foo 42)");
+        let result = DeclarationAnalyzer::analyze_load(&ast).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn analyze_load_missing_path_error() {
+        let ast = parse("(load)");
+        let result = DeclarationAnalyzer::analyze_load(&ast);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("exactly one path"));
+    }
+
+    #[test]
+    fn analyze_load_non_string_path_error() {
+        let ast = parse("(load 123)");
+        let result = DeclarationAnalyzer::analyze_load(&ast);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must be a string"));
+    }
+
+    #[test]
+    fn unified_analyze_load() {
+        let ast = parse(r#"(load "test.lt")"#);
+        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
+        assert!(matches!(decl, Declaration::Load(_)));
     }
 }

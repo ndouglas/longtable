@@ -3,6 +3,7 @@
 //! The session holds the current world state and session-local variables.
 
 use longtable_foundation::Value;
+use longtable_language::{ModuleRegistry, NamespaceContext};
 use longtable_storage::World;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,6 +22,12 @@ pub struct Session {
 
     /// Whether to auto-commit world mutations.
     auto_commit: bool,
+
+    /// Registry for tracking loaded modules and namespaces.
+    module_registry: ModuleRegistry,
+
+    /// Current namespace context for symbol resolution.
+    namespace_context: NamespaceContext,
 }
 
 impl Session {
@@ -32,6 +39,8 @@ impl Session {
             variables: HashMap::new(),
             load_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             auto_commit: true,
+            module_registry: ModuleRegistry::new(),
+            namespace_context: NamespaceContext::new(),
         }
     }
 
@@ -43,6 +52,8 @@ impl Session {
             variables: HashMap::new(),
             load_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             auto_commit: true,
+            module_registry: ModuleRegistry::new(),
+            namespace_context: NamespaceContext::new(),
         }
     }
 
@@ -99,6 +110,33 @@ impl Session {
     /// Sets the auto-commit mode.
     pub fn set_auto_commit(&mut self, auto_commit: bool) {
         self.auto_commit = auto_commit;
+    }
+
+    /// Returns a reference to the module registry.
+    #[must_use]
+    pub fn module_registry(&self) -> &ModuleRegistry {
+        &self.module_registry
+    }
+
+    /// Returns a mutable reference to the module registry.
+    pub fn module_registry_mut(&mut self) -> &mut ModuleRegistry {
+        &mut self.module_registry
+    }
+
+    /// Returns a reference to the namespace context.
+    #[must_use]
+    pub fn namespace_context(&self) -> &NamespaceContext {
+        &self.namespace_context
+    }
+
+    /// Returns a mutable reference to the namespace context.
+    pub fn namespace_context_mut(&mut self) -> &mut NamespaceContext {
+        &mut self.namespace_context
+    }
+
+    /// Sets the namespace context.
+    pub fn set_namespace_context(&mut self, context: NamespaceContext) {
+        self.namespace_context = context;
     }
 
     /// Resolves a path relative to the current load path.

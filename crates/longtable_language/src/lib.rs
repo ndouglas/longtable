@@ -33,7 +33,12 @@
 pub mod ast;
 pub mod compiler;
 pub mod declaration;
+pub mod gensym;
 pub mod lexer;
+pub mod macro_def;
+pub mod macro_registry;
+pub mod module_registry;
+pub mod namespace;
 pub mod opcode;
 pub mod parser;
 pub mod pretty;
@@ -51,8 +56,15 @@ pub use compiler::{
     CompiledExpr, CompiledFunction, CompiledProgram, Compiler, compile, compile_expr,
     compile_expression,
 };
-pub use declaration::{DeclarationAnalyzer, Pattern, PatternClause, PatternValue, RuleDecl};
+pub use declaration::{
+    Declaration, DeclarationAnalyzer, Pattern, PatternClause, PatternValue, RuleDecl,
+};
+pub use gensym::GensymGenerator;
 pub use lexer::Lexer;
+pub use macro_def::{MacroDef, MacroParam};
+pub use macro_registry::MacroRegistry;
+pub use module_registry::{ModuleRegistry, NamespaceInfo};
+pub use namespace::{LoadDecl, NamespaceContext, NamespaceDecl, NamespaceName, RequireSpec};
 pub use opcode::{Bytecode, Opcode};
 pub use parser::{Parser, parse, parse_one};
 pub use span::Span;
