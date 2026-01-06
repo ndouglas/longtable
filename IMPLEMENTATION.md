@@ -40,13 +40,13 @@ Don't underestimate this when implementing World and caches. "Single-threaded" m
 
 Explicitly documenting limitations prevents scope creep and keeps us honest:
 
-| Bad At | Why | Don't Try To Fix |
-|--------|-----|------------------|
-| Twitch real-time games | Ticks can take seconds; no frame budget | Adding "fast mode" |
-| Very large worlds (100k+ entities) | Initial impl is O(n) matching | Premature optimization |
-| Opaque imperative scripts | Rules are declarative and reactive | Adding "script mode" |
-| Non-deterministic behavior | Determinism is a core guarantee | Adding "random mode" |
-| Tight Rust integration | DSL defines all domain logic | Typed Rust components |
+| Bad At                             | Why                                     | Don't Try To Fix       |
+| ---------------------------------- | --------------------------------------- | ---------------------- |
+| Twitch real-time games             | Ticks can take seconds; no frame budget | Adding "fast mode"     |
+| Very large worlds (100k+ entities) | Initial impl is O(n) matching           | Premature optimization |
+| Opaque imperative scripts          | Rules are declarative and reactive      | Adding "script mode"   |
+| Non-deterministic behavior         | Determinism is a core guarantee         | Adding "random mode"   |
+| Tight Rust integration             | DSL defines all domain logic            | Typed Rust components  |
 
 If someone asks "can Longtable do X?" and X is on this list, the answer is "not well, by design."
 
@@ -60,13 +60,13 @@ This is a substantial solo project. Technical discipline is necessary but not su
 
 **Mitigation strategy**: Ship **tiny vertical wins** early:
 
-| Win | When | Why It Helps |
-|-----|------|--------------|
-| REPL that mutates world (no rules) | Phase 2.5 | Something interactive exists |
-| Queries work | Phase 2.5 | You can explore data |
-| Adventure world exists (static) | Phase 2.5 | The example is real |
-| One rule fires correctly | Phase 4 start | Rules are no longer theoretical |
-| Adventure game plays | Phase 4 end | The system is complete |
+| Win                                | When          | Why It Helps                    |
+| ---------------------------------- | ------------- | ------------------------------- |
+| REPL that mutates world (no rules) | Phase 2.5     | Something interactive exists    |
+| Queries work                       | Phase 2.5     | You can explore data            |
+| Adventure world exists (static)    | Phase 2.5     | The example is real             |
+| One rule fires correctly           | Phase 4 start | Rules are no longer theoretical |
+| Adventure game plays               | Phase 4 end   | The system is complete          |
 
 Use the adventure game example as a **motivational artifact**, not just a test. Seeing "go north" work for the first time is worth more than a dozen passing unit tests.
 
@@ -83,13 +83,13 @@ Be aware: examples become **anchors**. You'll need discipline to prune or rewrit
 
 Not all APIs are equal. We distinguish:
 
-| Tier | Stability | Examples | When Frozen |
-|------|-----------|----------|-------------|
-| **Public Data** | Stable after Phase 1 | `World`, `Value`, `EntityId`, `Error` | API Design phase |
-| **DSL Semantics** | Stable after Phase 1.5 | Rule behavior, query semantics, effect visibility | Semantic Spike |
-| **DSL Syntax** | Provisional until Phase 3 | Exact syntax forms, keywords, sugar | Language phase |
-| **Execution APIs** | Semantic sketches until Phase 4 | `CompiledRule`, `PatternMatcher`, `Opcode`, VM | After Execution works |
-| **Private** | Can change anytime | Storage layout, cache structures | Never |
+| Tier               | Stability                       | Examples                                          | When Frozen           |
+| ------------------ | ------------------------------- | ------------------------------------------------- | --------------------- |
+| **Public Data**    | Stable after Phase 1            | `World`, `Value`, `EntityId`, `Error`             | API Design phase      |
+| **DSL Semantics**  | Stable after Phase 1.5          | Rule behavior, query semantics, effect visibility | Semantic Spike        |
+| **DSL Syntax**     | Provisional until Phase 3       | Exact syntax forms, keywords, sugar               | Language phase        |
+| **Execution APIs** | Semantic sketches until Phase 4 | `CompiledRule`, `PatternMatcher`, `Opcode`, VM    | After Execution works |
+| **Private**        | Can change anytime              | Storage layout, cache structures                  | Never                 |
 
 **Why this matters**: Rule semantics, pattern matching edge cases, and VM behavior will evolve as we discover issues. Freezing internal execution APIs too early forces contortions or breaks our own rules.
 
@@ -1754,38 +1754,38 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 
 Comprehensive benchmarks in `crates/longtable_language/benches/language_benchmarks.rs`:
 
-| Category | Benchmark | Time | Notes |
-|----------|-----------|------|-------|
-| **Lexer** | simple_int | 42 ns | ~45 MiB/s throughput |
-| | expression | 186 ns | |
-| | nested | 1.05 µs | |
-| | collections | 1.36 µs | ~90 MiB/s throughput |
-| **Parser** | expression | 297 ns | |
-| | nested | 1.69 µs | |
-| | function | 1.46 µs | |
-| **Compiler** | simple_add | 6.1 µs | |
-| | arithmetic | 7.2 µs | |
-| | closure | 9.6 µs | |
-| | recursive | 9.9 µs | |
-| **VM Execution** | constant | 480 ns | |
-| | add_simple | 490 ns | |
-| | let_binding | 520 ns | |
-| | vector_create | 1.29 µs | |
-| | map_create | 1.44 µs | |
-| **Function Calls** | identity | 1.23 µs | ~1 µs per call |
-| | higher_order | 2.16 µs | |
-| | closure_capture | 1.48 µs | |
-| **Recursion** | factorial_5 | 5.2 µs | |
-| | factorial_10 | 11.7 µs | |
-| | fibonacci_10 | 168 µs | 177 recursive calls |
-| | fibonacci_15 | 1.87 ms | 1,973 recursive calls |
-| **Native Functions** | nil?, int? | ~505 ns | Type predicates |
-| | count, first, rest | 1.3-2.2 µs | Collection ops |
-| | get, assoc | 1.5-1.6 µs | Map ops |
-| **End-to-End** | eval_simple | 7.2 µs | Full lex→parse→compile→exec |
-| | eval_factorial | 21.6 µs | |
-| **Throughput** | simple_op | **~2M ops/sec** | Target: 1M ✓ |
-| | ten_ops | **~16M ops/sec** | Amortized |
+| Category             | Benchmark          | Time             | Notes                       |
+| -------------------- | ------------------ | ---------------- | --------------------------- |
+| **Lexer**            | simple_int         | 42 ns            | ~45 MiB/s throughput        |
+|                      | expression         | 186 ns           |                             |
+|                      | nested             | 1.05 µs          |                             |
+|                      | collections        | 1.36 µs          | ~90 MiB/s throughput        |
+| **Parser**           | expression         | 297 ns           |                             |
+|                      | nested             | 1.69 µs          |                             |
+|                      | function           | 1.46 µs          |                             |
+| **Compiler**         | simple_add         | 6.1 µs           |                             |
+|                      | arithmetic         | 7.2 µs           |                             |
+|                      | closure            | 9.6 µs           |                             |
+|                      | recursive          | 9.9 µs           |                             |
+| **VM Execution**     | constant           | 480 ns           |                             |
+|                      | add_simple         | 490 ns           |                             |
+|                      | let_binding        | 520 ns           |                             |
+|                      | vector_create      | 1.29 µs          |                             |
+|                      | map_create         | 1.44 µs          |                             |
+| **Function Calls**   | identity           | 1.23 µs          | ~1 µs per call              |
+|                      | higher_order       | 2.16 µs          |                             |
+|                      | closure_capture    | 1.48 µs          |                             |
+| **Recursion**        | factorial_5        | 5.2 µs           |                             |
+|                      | factorial_10       | 11.7 µs          |                             |
+|                      | fibonacci_10       | 168 µs           | 177 recursive calls         |
+|                      | fibonacci_15       | 1.87 ms          | 1,973 recursive calls       |
+| **Native Functions** | nil?, int?         | ~505 ns          | Type predicates             |
+|                      | count, first, rest | 1.3-2.2 µs       | Collection ops              |
+|                      | get, assoc         | 1.5-1.6 µs       | Map ops                     |
+| **End-to-End**       | eval_simple        | 7.2 µs           | Full lex→parse→compile→exec |
+|                      | eval_factorial     | 21.6 µs          |                             |
+| **Throughput**       | simple_op          | **~2M ops/sec**  | Target: 1M ✓                |
+|                      | ten_ops            | **~16M ops/sec** | Amortized                   |
 
 **Performance characteristics**:
 - Function call overhead: ~1 µs per call (consistent across benchmarks)
@@ -1844,13 +1844,13 @@ Bugs look like malicious rules. Without hard ceilings, semantic bugs become hang
 
 **Required limits** (configurable, with sane defaults):
 
-| Limit | Default | What Happens |
-|-------|---------|--------------|
-| Max activations per tick | 10,000 | Error with context |
-| Max effects per tick | 100,000 | Error with context |
-| Max refires per rule per tick | 1,000 | Error naming the rule |
-| Max derived evaluation depth | 100 | Error (cycle detection) |
-| Max query results | 100,000 | Truncate with warning |
+| Limit                         | Default | What Happens            |
+| ----------------------------- | ------- | ----------------------- |
+| Max activations per tick      | 10,000  | Error with context      |
+| Max effects per tick          | 100,000 | Error with context      |
+| Max refires per rule per tick | 1,000   | Error naming the rule   |
+| Max derived evaluation depth  | 100     | Error (cycle detection) |
+| Max query results             | 100,000 | Truncate with warning   |
 
 These are not performance limits—they're **semantic sanity checks**. A legitimate simulation shouldn't hit them. If it does, something is wrong.
 
@@ -2348,32 +2348,32 @@ benches/
 
 **MVP Targets** (Phase 4 complete):
 
-| Operation | Target | Scale | Purpose |
-|-----------|--------|-------|---------|
-| Value clone | <100ns | - | Detect disasters |
-| Entity spawn | <10μs | - | Detect disasters |
-| Full tick | <1s | 1k entities | Usable for development |
-| Query | <100ms | 1k entities | Usable for development |
+| Operation    | Target | Scale       | Purpose                |
+| ------------ | ------ | ----------- | ---------------------- |
+| Value clone  | <100ns | -           | Detect disasters       |
+| Entity spawn | <10μs  | -           | Detect disasters       |
+| Full tick    | <1s    | 1k entities | Usable for development |
+| Query        | <100ms | 1k entities | Usable for development |
 
 **1.0 Targets** (Phase 8 complete):
 
-| Operation | Target | Scale |
-|-----------|--------|-------|
-| Value clone | <10ns | - |
-| Entity spawn | <1μs | - |
-| Component get | <100ns | - |
-| World clone | <100ns | - |
-| Pattern match | <1ms | 10k entities |
-| Rule fire | <10μs | per rule |
-| Full tick | <100ms | 10k entities, 100 rules |
-| Query | <10ms | 10k entities |
+| Operation     | Target | Scale                   |
+| ------------- | ------ | ----------------------- |
+| Value clone   | <10ns  | -                       |
+| Entity spawn  | <1μs   | -                       |
+| Component get | <100ns | -                       |
+| World clone   | <100ns | -                       |
+| Pattern match | <1ms   | 10k entities            |
+| Rule fire     | <10μs  | per rule                |
+| Full tick     | <100ms | 10k entities, 100 rules |
+| Query         | <10ms  | 10k entities            |
 
 **Post-1.0 Targets** (incremental matching):
 
-| Operation | Target | Scale |
-|-----------|--------|-------|
-| Full tick | <10ms | 10k entities (steady state) |
-| Pattern update | <1ms | per changed entity |
+| Operation      | Target | Scale                       |
+| -------------- | ------ | --------------------------- |
+| Full tick      | <10ms  | 10k entities (steady state) |
+| Pattern update | <1ms   | per changed entity          |
 
 ### 8.3 Optimization Priorities
 
@@ -2474,12 +2474,12 @@ For major changes:
 
 ### Benchmark Categories
 
-| Category | Frequency | Purpose |
-|----------|-----------|---------|
-| Micro | Every PR | Catch regressions in hot paths |
-| Integration | Daily | End-to-end tick performance |
-| Scale | Weekly | Behavior at large entity counts |
-| Memory | Weekly | Allocation patterns, memory usage |
+| Category    | Frequency | Purpose                           |
+| ----------- | --------- | --------------------------------- |
+| Micro       | Every PR  | Catch regressions in hot paths    |
+| Integration | Daily     | End-to-end tick performance       |
+| Scale       | Weekly    | Behavior at large entity counts   |
+| Memory      | Weekly    | Allocation patterns, memory usage |
 
 ---
 
