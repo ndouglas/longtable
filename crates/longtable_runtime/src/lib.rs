@@ -1,7 +1,7 @@
 //! REPL, CLI, and serialization for Longtable.
 //!
-//! This crate provides:
-//! - [`Repl`] - Interactive read-eval-print loop
+//! This crate will provide:
+//! - `Repl` - Interactive read-eval-print loop
 //! - CLI argument parsing and execution
 //! - World serialization and deserialization
 

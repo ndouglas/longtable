@@ -232,10 +232,10 @@ pub trait LtDisplay { fn lt_display(&self, f: &mut Formatter) -> fmt::Result; }
 ```
 
 **Design validation tasks**:
-- [ ] Verify Value size (target: ≤32 bytes for inline efficiency)
-- [ ] Verify EntityId can represent 2^64 entities with 2^32 generations
-- [ ] Verify Type can express all spec type annotations
-- [ ] Write property tests for Eq/Hash consistency
+- [x] Verify Value size (target: ≤32 bytes for inline efficiency)
+- [x] Verify EntityId can represent 2^64 entities with 2^32 generations
+- [x] Verify Type can express all spec type annotations
+- [x] Write property tests for Eq/Hash consistency
 
 #### Error System (`lt-foundation::error`)
 
@@ -288,9 +288,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 ```
 
 **Design validation tasks**:
-- [ ] Verify ErrorKind covers all spec error cases
-- [ ] Verify ErrorContext provides sufficient debugging info
-- [ ] Test error display formatting
+- [x] Verify ErrorKind covers all spec error cases
+- [x] Verify ErrorContext provides sufficient debugging info
+- [x] Test error display formatting
 
 #### Persistent Collections (`lt-foundation::collections`)
 
@@ -321,9 +321,9 @@ impl LtVec {
 ```
 
 **Design validation tasks**:
-- [ ] Benchmark structural sharing efficiency
-- [ ] Verify O(log n) access times at 100k elements
-- [ ] Test clone performance (should be O(1))
+- [x] Benchmark structural sharing efficiency
+- [x] Verify O(log n) access times at 100k elements
+- [x] Test clone performance (should be O(1))
 
 ### 1.2 Layer 1: Storage APIs
 

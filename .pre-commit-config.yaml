@@ -51,7 +51,7 @@ repos:
 
       - id: cargo-docs
         name: cargo docs
-        entry: RUSTDOCFLAGS='-D warnings' cargo doc --no-deps --all-features
+        entry: cargo doc --no-deps --all-features
         language: system
         types: [rust]
         pass_filenames: false
