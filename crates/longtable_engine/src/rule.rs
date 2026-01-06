@@ -206,6 +206,7 @@ impl ProductionRuleEngine {
     ///
     /// # Errors
     /// Returns an error if max activations is exceeded.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn fire<F>(
         &mut self,
         activation: &Activation,
@@ -219,6 +220,7 @@ impl ProductionRuleEngine {
         // Check kill switch
         self.activation_count += 1;
         if self.activation_count > self.max_activations {
+            #[allow(clippy::cast_possible_truncation)]
             return Err(Error::limit_exceeded(SemanticLimit::MaxActivations {
                 limit: self.max_activations as u32,
                 context: None,
@@ -423,12 +425,12 @@ mod tests {
         let rule1 = CompiledRule::new(rule1_name, compiled1).with_salience(10);
         let rule2 = CompiledRule::new(rule2_name, compiled2).with_salience(100);
 
-        let rules = vec![rule1, rule2];
+        let rule_list = vec![rule1, rule2];
 
         let mut engine = ProductionRuleEngine::new();
         engine.begin_tick();
 
-        let activations = engine.find_activations(&rules, &world);
+        let activations = engine.find_activations(&rule_list, &world);
 
         // Higher salience should be first
         assert!(!activations.is_empty());

@@ -566,9 +566,9 @@ mod tests {
 
     #[test]
     fn value_float() {
-        let v = Value::Float(2.718);
-        assert_eq!(v.as_float(), Some(2.718));
-        assert_eq!(v.as_number(), Some(2.718));
+        let v = Value::Float(2.5);
+        assert_eq!(v.as_float(), Some(2.5));
+        assert_eq!(v.as_number(), Some(2.5));
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
         assert_eq!(Value::Nil.value_type(), Type::Nil);
         assert_eq!(Value::Bool(true).value_type(), Type::Bool);
         assert_eq!(Value::Int(42).value_type(), Type::Int);
-        assert_eq!(Value::Float(2.718).value_type(), Type::Float);
+        assert_eq!(Value::Float(2.5).value_type(), Type::Float);
     }
 
     #[test]

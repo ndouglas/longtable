@@ -431,7 +431,7 @@ mod tests {
 
     #[test]
     fn lex_floats() {
-        assert_eq!(lex("3.14"), vec![TokenKind::Float(3.14), TokenKind::Eof]);
+        assert_eq!(lex("2.5"), vec![TokenKind::Float(2.5), TokenKind::Eof]);
         assert_eq!(lex("-0.5"), vec![TokenKind::Float(-0.5), TokenKind::Eof]);
         assert_eq!(lex("1.0"), vec![TokenKind::Float(1.0), TokenKind::Eof]);
     }
@@ -549,11 +549,11 @@ mod tests {
 
     #[test]
     fn lex_complex_expression() {
-        let source = r#"
+        let source = r"
             (def x 42)
             (fn: add [a b]
               (+ a b))
-        "#;
+        ";
         let tokens = lex(source);
         // Just verify it lexes without error
         assert!(tokens.iter().all(|t| !matches!(t, TokenKind::Error(_))));

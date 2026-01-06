@@ -1017,8 +1017,8 @@ mod tests {
 
     #[test]
     fn compile_float() {
-        let prog = compile_test("3.14");
-        assert!(matches!(prog.constants[0], Value::Float(f) if (f - 3.14).abs() < 0.001));
+        let prog = compile_test("2.5");
+        assert!(matches!(prog.constants[0], Value::Float(f) if (f - 2.5).abs() < 0.001));
     }
 
     #[test]

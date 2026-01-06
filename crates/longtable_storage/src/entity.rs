@@ -241,7 +241,7 @@ mod tests {
         let mut store = EntityStore::new();
 
         let e1 = store.spawn();
-        let e2 = store.spawn();
+        let _e2 = store.spawn();
         store.destroy(e1).unwrap();
 
         let e3 = store.spawn();

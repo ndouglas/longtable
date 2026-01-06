@@ -25,7 +25,7 @@ fn eval_int() {
 
 #[test]
 fn eval_float() {
-    assert!(matches!(eval_test("3.14"), Value::Float(f) if (f - 3.14).abs() < 0.001));
+    assert!(matches!(eval_test("2.5"), Value::Float(f) if (f - 2.5).abs() < 0.001));
 }
 
 #[test]
@@ -398,7 +398,7 @@ fn eval_str_lower() {
 fn eval_abs() {
     assert_eq!(eval_test("(abs -5)"), Value::Int(5));
     assert_eq!(eval_test("(abs 5)"), Value::Int(5));
-    assert!(matches!(eval_test("(abs -3.14)"), Value::Float(f) if (f - 3.14).abs() < 0.001));
+    assert!(matches!(eval_test("(abs -2.5)"), Value::Float(f) if (f - 2.5).abs() < 0.001));
 }
 
 #[test]

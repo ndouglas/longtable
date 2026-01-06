@@ -27,7 +27,7 @@ fn bench_value_clone(c: &mut Criterion) {
     });
 
     group.bench_function("float", |b| {
-        let v = Value::Float(3.14159);
+        let v = Value::Float(2.5);
         b.iter(|| black_box(v.clone()))
     });
 

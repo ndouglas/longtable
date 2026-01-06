@@ -439,7 +439,7 @@ mod tests {
 
     #[test]
     fn parse_float() {
-        assert!(matches!(parse_one_test("3.14"), Ast::Float(n, _) if (n - 3.14).abs() < 0.001));
+        assert!(matches!(parse_one_test("2.5"), Ast::Float(n, _) if (n - 2.5).abs() < 0.001));
     }
 
     #[test]
@@ -556,9 +556,9 @@ mod tests {
 
     #[test]
     fn parse_complex_expression() {
-        let source = r#"
+        let source = r"
             (def x 42)
-        "#;
+        ";
         let forms = parse_test(source);
         assert_eq!(forms.len(), 1);
         let elems = forms[0].as_list().unwrap();
@@ -569,13 +569,13 @@ mod tests {
 
     #[test]
     fn parse_rule_declaration() {
-        let source = r#"
+        let source = r"
             (rule: apply-damage
               :salience 50
               :where [[?e :health ?hp]
                       [?e :damage ?dmg]]
               :then [(set! ?e :health (- ?hp ?dmg))])
-        "#;
+        ";
         let forms = parse_test(source);
         assert_eq!(forms.len(), 1);
         assert!(forms[0].is_list());

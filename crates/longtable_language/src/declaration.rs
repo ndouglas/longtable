@@ -133,6 +133,7 @@ pub struct DeclarationAnalyzer;
 
 impl DeclarationAnalyzer {
     /// Analyze a top-level form and return a rule if it's a rule declaration.
+    #[allow(clippy::too_many_lines)]
     pub fn analyze_rule(ast: &Ast) -> Result<Option<RuleDecl>> {
         let list = match ast {
             Ast::List(elements, span) => (elements, *span),
@@ -204,20 +205,23 @@ impl DeclarationAnalyzer {
 
             match key {
                 "salience" => {
-                    rule.salience = match value {
-                        Ast::Int(n, _) => *n as i32,
-                        other => {
-                            return Err(Error::new(ErrorKind::ParseError {
-                                message: format!(
-                                    ":salience must be an integer, got {}",
-                                    other.type_name()
-                                ),
-                                line: other.span().line,
-                                column: other.span().column,
-                                context: String::new(),
-                            }));
-                        }
-                    };
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        rule.salience = match value {
+                            Ast::Int(n, _) => *n as i32,
+                            other => {
+                                return Err(Error::new(ErrorKind::ParseError {
+                                    message: format!(
+                                        ":salience must be an integer, got {}",
+                                        other.type_name()
+                                    ),
+                                    line: other.span().line,
+                                    column: other.span().column,
+                                    context: String::new(),
+                                }));
+                            }
+                        };
+                    }
                 }
                 "once" => {
                     rule.once = match value {
@@ -512,9 +516,9 @@ mod tests {
     #[test]
     fn analyze_simple_rule() {
         let ast = parse(
-            r#"(rule: my-rule
+            r"(rule: my-rule
                  :where [[?e :health ?hp]]
-                 :then [(print! ?hp)])"#,
+                 :then [(print! ?hp)])",
         );
 
         let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
@@ -535,11 +539,11 @@ mod tests {
     #[test]
     fn analyze_rule_with_options() {
         let ast = parse(
-            r#"(rule: priority-rule
+            r"(rule: priority-rule
                  :salience 100
                  :once true
                  :where [[?e :tag/player true]]
-                 :then [])"#,
+                 :then [])",
         );
 
         let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
@@ -550,17 +554,17 @@ mod tests {
         // Check that value is a literal Bool(true) regardless of span
         match &rule.pattern.clauses[0].value {
             PatternValue::Literal(Ast::Bool(true, _)) => {}
-            other => panic!("expected Literal(Bool(true, _)), got {:?}", other),
+            other => panic!("expected Literal(Bool(true, _)), got {other:?}"),
         }
     }
 
     #[test]
     fn analyze_rule_with_negation() {
         let ast = parse(
-            r#"(rule: no-velocity
+            r"(rule: no-velocity
                  :where [[?e :position _]
                          (not [?e :velocity])]
-                 :then [])"#,
+                 :then [])",
         );
 
         let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
@@ -591,9 +595,9 @@ mod tests {
     #[test]
     fn analyze_wildcard_pattern() {
         let ast = parse(
-            r#"(rule: wildcard
+            r"(rule: wildcard
                  :where [[?e :position _]]
-                 :then [])"#,
+                 :then [])",
         );
 
         let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
@@ -604,10 +608,10 @@ mod tests {
     #[test]
     fn analyze_multiple_patterns() {
         let ast = parse(
-            r#"(rule: multi
+            r"(rule: multi
                  :where [[?e :position ?pos]
                          [?e :velocity ?vel]]
-                 :then [])"#,
+                 :then [])",
         );
 
         let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();

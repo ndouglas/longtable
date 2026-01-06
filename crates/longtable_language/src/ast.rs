@@ -216,66 +216,77 @@ impl Ast {
 impl Ast {
     /// Creates a nil node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn nil() -> Self {
         Self::Nil(Span::default())
     }
 
     /// Creates a bool node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn bool_lit(b: bool) -> Self {
         Self::Bool(b, Span::default())
     }
 
     /// Creates an int node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn int(n: i64) -> Self {
         Self::Int(n, Span::default())
     }
 
     /// Creates a float node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn float(n: f64) -> Self {
         Self::Float(n, Span::default())
     }
 
     /// Creates a string node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn string(s: impl Into<String>) -> Self {
         Self::String(s.into(), Span::default())
     }
 
     /// Creates a symbol node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn symbol(s: impl Into<String>) -> Self {
         Self::Symbol(s.into(), Span::default())
     }
 
     /// Creates a keyword node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn keyword(s: impl Into<String>) -> Self {
         Self::Keyword(s.into(), Span::default())
     }
 
     /// Creates a list node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn list(elements: Vec<Ast>) -> Self {
         Self::List(elements, Span::default())
     }
 
     /// Creates a vector node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn vector(elements: Vec<Ast>) -> Self {
         Self::Vector(elements, Span::default())
     }
 
     /// Creates a set node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn set(elements: Vec<Ast>) -> Self {
         Self::Set(elements, Span::default())
     }
 
     /// Creates a map node with default span.
     #[cfg(test)]
+    #[must_use]
     pub fn map(entries: Vec<(Ast, Ast)>) -> Self {
         Self::Map(entries, Span::default())
     }
@@ -290,7 +301,7 @@ mod tests {
         assert!(Ast::nil().is_nil());
         assert!(Ast::bool_lit(true).is_bool());
         assert!(Ast::int(42).is_int());
-        assert!(Ast::float(3.14).is_float());
+        assert!(Ast::float(2.5).is_float());
         assert!(Ast::string("hi").is_string());
         assert!(Ast::symbol("foo").is_symbol());
         assert!(Ast::keyword("bar").is_keyword());
@@ -310,10 +321,10 @@ mod tests {
         assert_eq!(Ast::string("hi").as_string(), Some("hi"));
 
         let list = Ast::list(vec![Ast::int(1), Ast::int(2)]);
-        assert_eq!(list.as_list().map(|l| l.len()), Some(2));
+        assert_eq!(list.as_list().map(<[_]>::len), Some(2));
 
         let vec = Ast::vector(vec![Ast::int(1)]);
-        assert_eq!(vec.as_vector().map(|v| v.len()), Some(1));
+        assert_eq!(vec.as_vector().map(<[_]>::len), Some(1));
     }
 
     #[test]
