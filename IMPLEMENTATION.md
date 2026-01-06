@@ -1505,59 +1505,59 @@ If you treat it as "clean proto-impl," you'll miss the point. The goal is **sema
 
 ### 2.1 Value System
 
-- [ ] Implement `Value` enum with all variants
-- [ ] Implement `LtEq`, `LtHash`, `LtDisplay` traits
-- [ ] Implement interning for symbols and keywords
-- [ ] Property tests: Eq/Hash consistency, display round-trip
-- [ ] Benchmark: Value clone, comparison, hashing
+- [x] Implement `Value` enum with all variants
+- [x] Implement `LtEq`, `LtHash`, `LtDisplay` traits
+- [x] Implement interning for symbols and keywords
+- [x] Property tests: Eq/Hash consistency, display round-trip
+- [x] Benchmark: Value clone, comparison, hashing
 
 ### 2.2 Persistent Collections
 
-- [ ] Wrap `im` crate types with Longtable semantics
-- [ ] Implement iteration with spec-compliant ordering
-- [ ] Property tests: structural sharing, modification
-- [ ] Benchmark: insert, lookup, iteration at 10k/100k elements
+- [x] Wrap `im` crate types with Longtable semantics
+- [x] Implement iteration with spec-compliant ordering
+- [x] Property tests: structural sharing, modification
+- [x] Benchmark: insert, lookup, iteration at 10k/100k elements
 
 ### 2.3 Error System
 
-- [ ] Implement `Error` with all `ErrorKind` variants
-- [ ] Implement `Display` with rich formatting
-- [ ] Context builders for ergonomic error construction
-- [ ] Test error messages are actionable
+- [x] Implement `Error` with all `ErrorKind` variants
+- [x] Implement `Display` with rich formatting
+- [x] Context builders for ergonomic error construction
+- [x] Test error messages are actionable
 
 ### 2.4 Entity Store
 
-- [ ] Implement generational index allocator
-- [ ] Implement spawn, destroy, exists, validate
-- [ ] Test stale reference detection
-- [ ] Benchmark: spawn/destroy at high churn
+- [x] Implement generational index allocator
+- [x] Implement spawn, destroy, exists, validate
+- [x] Test stale reference detection
+- [x] Benchmark: spawn/destroy at high churn
 
 ### 2.5 Component Store
 
-- [ ] Implement schema registration and validation
-- [ ] Implement archetype-based storage
-- [ ] Implement component set/get/remove
-- [ ] Implement archetype iteration
-- [ ] Test type validation
-- [ ] Benchmark: iteration with component filter
+- [x] Implement schema registration and validation
+- [x] Implement archetype-based storage
+- [x] Implement component set/get/remove
+- [x] Implement archetype iteration
+- [x] Test type validation
+- [x] Benchmark: iteration with component filter
 
 ### 2.6 Relationship Store
 
-- [ ] Implement relationship schema registration
-- [ ] Implement bidirectional indices
-- [ ] Implement link/unlink with cardinality enforcement
-- [ ] Implement on_target_delete cascade
-- [ ] Test cardinality violations
-- [ ] Benchmark: traversal at scale
+- [x] Implement relationship schema registration
+- [x] Implement bidirectional indices
+- [x] Implement link/unlink with cardinality enforcement
+- [x] Implement on_target_delete cascade
+- [x] Test cardinality violations
+- [x] Benchmark: traversal at scale
 
 ### 2.7 World
 
-- [ ] Implement immutable World with persistent internals
-- [ ] Implement all mutation methods (returning new World)
-- [ ] Implement history chain (previous())
-- [ ] Implement content_hash for speculation
-- [ ] Test O(1) clone
-- [ ] Benchmark: fork + small modification
+- [x] Implement immutable World with persistent internals
+- [x] Implement all mutation methods (returning new World)
+- [x] Implement history chain (previous())
+- [x] Implement content_hash for speculation
+- [x] Test O(1) clone
+- [x] Benchmark: fork + small modification
 
 ### Example: Entity Lifecycle
 

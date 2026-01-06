@@ -355,6 +355,7 @@ dependencies = [
 name = "longtable_foundation"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "im",
  "proptest",
  "serde",
@@ -402,6 +403,7 @@ dependencies = [
 name = "longtable_storage"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "im",
  "longtable_foundation",
  "proptest",

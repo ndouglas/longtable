@@ -16,6 +16,11 @@ serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "foundation_benchmarks"
+harness = false
 
 [features]
 default = []
