@@ -825,7 +825,7 @@ impl Vm {
 - [x] 156 unit tests for lexer, parser, compiler, and VM (including closures and recursive functions)
 - [x] Round-trip test: source → AST → bytecode → execution → expected value
 - [x] Verify all spec expression forms can be represented
-- [ ] Benchmark VM execution (target: 1M simple ops/sec)
+- [x] Benchmark VM execution (target: 1M simple ops/sec) — **Achieved: ~2M ops/sec**
 
 ### 1.4 Layer 3: Execution APIs
 
@@ -1748,7 +1748,50 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
   - [x] Compiler tracks outer_locals and captures during fn compilation
   - [x] compile_let uses three-phase approach for recursive bindings
   - [x] Test: closure capture (5 tests) + recursive functions (2 tests)
-- [ ] Benchmark: 1M ops/sec target
+- [x] Benchmark: 1M ops/sec target — **Achieved: ~2M ops/sec**
+
+#### Benchmark Results (criterion)
+
+Comprehensive benchmarks in `crates/longtable_language/benches/language_benchmarks.rs`:
+
+| Category | Benchmark | Time | Notes |
+|----------|-----------|------|-------|
+| **Lexer** | simple_int | 42 ns | ~45 MiB/s throughput |
+| | expression | 186 ns | |
+| | nested | 1.05 µs | |
+| | collections | 1.36 µs | ~90 MiB/s throughput |
+| **Parser** | expression | 297 ns | |
+| | nested | 1.69 µs | |
+| | function | 1.46 µs | |
+| **Compiler** | simple_add | 6.1 µs | |
+| | arithmetic | 7.2 µs | |
+| | closure | 9.6 µs | |
+| | recursive | 9.9 µs | |
+| **VM Execution** | constant | 480 ns | |
+| | add_simple | 490 ns | |
+| | let_binding | 520 ns | |
+| | vector_create | 1.29 µs | |
+| | map_create | 1.44 µs | |
+| **Function Calls** | identity | 1.23 µs | ~1 µs per call |
+| | higher_order | 2.16 µs | |
+| | closure_capture | 1.48 µs | |
+| **Recursion** | factorial_5 | 5.2 µs | |
+| | factorial_10 | 11.7 µs | |
+| | fibonacci_10 | 168 µs | 177 recursive calls |
+| | fibonacci_15 | 1.87 ms | 1,973 recursive calls |
+| **Native Functions** | nil?, int? | ~505 ns | Type predicates |
+| | count, first, rest | 1.3-2.2 µs | Collection ops |
+| | get, assoc | 1.5-1.6 µs | Map ops |
+| **End-to-End** | eval_simple | 7.2 µs | Full lex→parse→compile→exec |
+| | eval_factorial | 21.6 µs | |
+| **Throughput** | simple_op | **~2M ops/sec** | Target: 1M ✓ |
+| | ten_ops | **~16M ops/sec** | Amortized |
+
+**Performance characteristics**:
+- Function call overhead: ~1 µs per call (consistent across benchmarks)
+- Interpreted VM overhead: ~1,500x vs native for simple ops
+- Recursive performance: ~40,000x slower than native C (expected for bytecode VM without JIT)
+- Suitable for rule engine DSL where hot paths are native Rust functions
 
 ### Example: Expression Evaluation
 
