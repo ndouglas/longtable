@@ -71,29 +71,29 @@ tick : (World, Vec<Input>) -> Result<World, RollbackError>
 Each tick executes as a single transaction against the world:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     TICK EXECUTION                           │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   1. BEGIN TRANSACTION                                       │
-│      • Snapshot current world as "previous" (for `prev`)     │
-│      • Begin mutable transaction                             │
-│                                                              │
-│   2. RULE EXECUTION                                          │
-│      • Rules fire until quiescence (see Section 5)           │
-│      • All reads see current transaction state               │
-│      • All writes modify current transaction state           │
-│                                                              │
-│   3. CONSTRAINT CHECK                                        │
-│      • Evaluate constraints against current state            │
-│      • :rollback violations → abort transaction              │
-│      • :warn violations → log and continue                   │
-│                                                              │
-│   4. COMMIT or ROLLBACK                                      │
-│      • On success: transaction becomes new world, tick++     │
-│      • On error/violation: discard transaction, world unchanged│
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                     TICK EXECUTION                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   1. BEGIN TRANSACTION                                          │
+│      • Snapshot current world as "previous" (for `prev`)        │
+│      • Begin mutable transaction                                │
+│                                                                 │
+│   2. RULE EXECUTION                                             │
+│      • Rules fire until quiescence (see Section 5)              │
+│      • All reads see current transaction state                  │
+│      • All writes modify current transaction state              │
+│                                                                 │
+│   3. CONSTRAINT CHECK                                           │
+│      • Evaluate constraints against current state               │
+│      • :rollback violations → abort transaction                 │
+│      • :warn violations → log and continue                      │
+│                                                                 │
+│   4. COMMIT or ROLLBACK                                         │
+│      • On success: transaction becomes new world, tick++        │
+│      • On error/violation: discard transaction, world unchanged │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 **Read/write semantics are uniform:**
