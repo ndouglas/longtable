@@ -1,4 +1,4 @@
-# Longtable Specification v0.7
+# Longtable Specification v0.8
 
 ## 1. Overview & Goals
 
@@ -20,7 +20,7 @@ Longtable is a rule-based simulation engine combining:
 
 2. **World As Value** - The world state is immutable. Each tick produces a new world. This enables rollback, time-travel debugging, and "what-if" exploration.
 
-3. **Effects, Not Mutations** - Rules don't mutate state directly. They produce effects that are applied to a transaction overlay, then committed atomically.
+3. **Effects, Not Mutations** - Rules produce effects that modify the world within a transaction, committed atomically at tick end.
 
 4. **Explicit Over Implicit** - Strong typing (`nil ≠ false`), explicit optionality, declared component schemas.
 
@@ -66,60 +66,55 @@ A world is **never mutated**. The `tick` function takes a world and inputs, retu
 tick : (World, Vec<Input>) -> Result<World, RollbackError>
 ```
 
-### 2.2 Tick Overlay (Transaction Model)
+### 2.2 Transaction Model
 
-During tick execution, an **Overlay** acts as a mutable transaction buffer on top of the immutable base world:
+Each tick executes as a single transaction against the world:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     TICK EXECUTION                           │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│   Base World (immutable)                                     │
-│   ════════════════════════                                   │
-│   • The committed world state from end of previous tick      │
-│   • Used for: rule activation, pattern matching, `prev`      │
-│   • Never modified during tick execution                     │
+│   1. BEGIN TRANSACTION                                       │
+│      • Snapshot current world as "previous" (for `prev`)     │
+│      • Begin mutable transaction                             │
 │                                                              │
-│   Overlay (mutable transaction buffer)                       │
-│   ════════════════════════════════════                       │
-│   • Collects all effects from rule execution                 │
-│   • Reads: check overlay first, fall back to base world      │
-│   • Writes: always go to overlay                             │
+│   2. RULE EXECUTION                                          │
+│      • Rules fire until quiescence (see Section 5)           │
+│      • All reads see current transaction state               │
+│      • All writes modify current transaction state           │
 │                                                              │
-│   On Commit                                                  │
-│   ═════════                                                  │
-│   • Materialize new World = Base + Overlay diffs             │
-│   • New world becomes base for next tick                     │
-│   • On error: discard overlay, world unchanged               │
+│   3. CONSTRAINT CHECK                                        │
+│      • Evaluate constraints against current state            │
+│      • :rollback violations → abort transaction              │
+│      • :warn violations → log and continue                   │
+│                                                              │
+│   4. COMMIT or ROLLBACK                                      │
+│      • On success: transaction becomes new world, tick++     │
+│      • On error/violation: discard transaction, world unchanged│
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Read semantics during tick:**
-- `(get entity :component)` reads from overlay if present, else base world
-- `(prev entity :component)` always reads from previous tick's committed world
+**Read/write semantics are uniform:**
 
-**Write semantics during tick:**
-- All effects (`set!`, `spawn!`, `destroy!`, etc.) write to overlay
-- Effects are immediately visible to subsequent expressions in the same rule
-- Effects are immediately visible to subsequent rules in execution order
+| Operation | What it sees |
+|-----------|--------------|
+| `get` | Current transaction state |
+| `query` | Current transaction state |
+| `prev` | Previous tick's committed world |
+| `set!`, `update!` | Modifies current transaction state |
+| `spawn!`, `destroy!` | Modifies current transaction state |
 
-### 2.2.1 Evaluation Context Table
+There is no distinction between "activation phase" and "execution phase." Rules see the world as it currently is, including changes made by earlier rules in the same tick.
 
-Different operations read from different views depending on context:
-
-| Operation | Activation Phase | Execution (`:then`) | Outside Tick (REPL) |
-|-----------|------------------|---------------------|---------------------|
-| `get` | base | overlay | committed |
-| `query` | base | overlay | committed |
-| `prev` | prev | prev | prev |
-| `get-base` | base | base | committed |
-| `query-base` | base | base | committed |
-| Pattern matching | base | N/A | committed |
-| Negation (`not`) | base | N/A | committed |
-
-**Key insight**: During activation, ALL query pipeline clauses (`:where`, `:let`, `:aggregate`, `:group-by`, `:guard`, `:order-by`, `:limit`) are evaluated against the **base snapshot** to produce a frozen activation record. Only `:then` runs during execution phase with access to the overlay.
+```clojure
+;; Simple, uniform semantics:
+(rule: example
+  :where [[?e :health ?hp]]
+  :then [(set! ?e :health 50)
+         (print! (get ?e :health))])  ;; Prints 50
+```
 
 ### 2.3 Entity
 
@@ -337,15 +332,7 @@ A derived cache invalidates when:
 - An entity enters or leaves a tracked query's match set
 - Any upstream derived value invalidates
 
-**Evaluation context** (activation vs execution view):
-
-| Context | Derived sees | Use case |
-|---------|--------------|----------|
-| Rule `:where` (activation) | Base snapshot only | Deterministic activation |
-| Rule `:then` (execution) | Overlay | React to in-tick changes |
-| Query (outside tick) | Committed world | REPL inspection |
-
-Derived values used in rule activation are computed once from the base snapshot and cached for that tick. This ensures deterministic matching regardless of rule execution order.
+**Evaluation**: Derived values always see the current world state. They are recomputed when their dependencies change (or served from cache if dependencies are unchanged).
 
 **Cycle Detection**:
 - **Static**: The compiler detects cycles in explicit derived→derived references (derived A references derived B by name)
@@ -896,7 +883,7 @@ All query-like forms (rules, queries, derived, constraints) support these clause
 **Execution order:**
 
 ```
-:where      → Find all pattern matches against base snapshot
+:where      → Find all pattern matches against current world
 :let        → Compute per-match values
 :aggregate  → Compute aggregates (creates new bindings)
 :group-by   → Partition by grouping variables
@@ -1146,22 +1133,120 @@ pi e
 
 ## 5. Rule Engine
 
-### 5.0 Tick Start Reality (Design Principle)
+### 5.0 Rule Execution Semantics
 
-All rule activation decisions are made from a **frozen snapshot** of the world at tick start. This is the core design principle of Longtable's rule engine.
+Longtable uses a **forward-chaining rule engine** inspired by CLIPS/OPS5. Rules react to the current world state, and changes are visible immediately to subsequent rules within the same tick.
 
-**What this means:**
-- All `:where` patterns are evaluated against the same frozen world
-- All negations see the same frozen world
-- All guards see the same frozen world
-- Rule execution order does not affect which rules activate
+#### 5.0.1 The Basic Cycle
 
-**Why this matters:**
-- If rule A runs before rule B and creates an entity that would satisfy B's conditions, B still doesn't fire this tick
-- If rule A destroys an entity that B matched, B still fires with its frozen bindings
-- "Lonely entity" rules don't suddenly stop firing because an earlier rule linked a follower
+The rule engine runs a recognize-act cycle:
 
-This makes the activation set a pure function of the tick-start world state, independent of rule ordering. The only ordering dependency is in effect visibility during `:then` execution.
+1. **Match**: Find all rules whose `:where` patterns match the current world state
+2. **Select**: Choose the highest-priority matching rule that hasn't been refracted
+3. **Fire**: Execute the rule's `:then` block; effects apply immediately
+4. **Repeat**: Go to step 1 until no rules can fire
+
+This continues until **quiescence**—the state where no un-refracted rules match.
+
+#### 5.0.2 Refraction
+
+**Refraction** prevents infinite loops by ensuring a rule cannot fire twice on the same binding tuple within a single tick.
+
+A **binding tuple** is the specific set of variable bindings that satisfied a rule's `:where` clause. For example:
+
+```clojure
+(rule: greet
+  :where [[?person :name ?n]]
+  :then [(print! (str "Hello, " ?n))])
+```
+
+If the world contains `{Alice :name "Alice"}` and `{Bob :name "Bob"}`:
+- First firing: `{?person: Alice, ?n: "Alice"}` → prints "Hello, Alice"
+- Second firing: `{?person: Bob, ?n: "Bob"}` → prints "Hello, Bob"
+- No more firings: both tuples are now refracted
+
+Even if the rule's `:then` block modifies Alice or Bob, the rule will not re-fire on them this tick because those binding tuples have already fired.
+
+**Refraction resets each tick.** A rule that fired on Alice this tick can fire on Alice again next tick (if she still matches).
+
+#### 5.0.3 Why Refraction Works
+
+Refraction prevents the most common infinite loops:
+
+```clojure
+;; WITHOUT refraction, this would loop forever:
+(rule: increment-forever
+  :where [[?e :counter ?n]]
+  :then [(set! ?e :counter (+ ?n 1))])
+
+;; WITH refraction:
+;; - Fires once: {?e: E, ?n: 5} → sets counter to 6
+;; - Won't fire again on E this tick, even though E still has :counter
+```
+
+Refraction tracks the binding tuple at match time, not the resulting values. The rule fired on "entity E with counter," so it won't fire on "entity E with counter" again—regardless of what the counter's value becomes.
+
+#### 5.0.4 Cascading Effects
+
+Because changes are visible immediately, rules naturally chain:
+
+```clojure
+(rule: apply-damage
+  :salience 100
+  :where [[?e :incoming-damage ?dmg]
+          [?e :health ?hp]]
+  :then [(set! ?e :health (- ?hp ?dmg))
+         (destroy! ?dmg)])
+
+(rule: check-death
+  :salience 50
+  :where [[?e :health ?hp]]
+  :guard [(<= ?hp 0)]
+  :then [(spawn! {:event/death :entity ?e})])
+
+(rule: on-death-drop-loot
+  :salience 40
+  :where [[?event :event/death ?corpse]
+          [?corpse :inventory ?items]]
+  :then [(doseq [item ?items]
+           (move-to-room! item (get ?corpse :location)))
+         (destroy! ?event)])
+```
+
+When damage reduces health below zero:
+1. `apply-damage` fires, sets health to -5
+2. `check-death` now matches (health ≤ 0), fires, spawns death event
+3. `on-death-drop-loot` now matches (death event exists), fires, drops items
+
+All within one tick. No multi-tick workarounds needed.
+
+#### 5.0.5 Conflict Resolution
+
+When multiple rules can fire, they are ordered by:
+
+1. **Salience** (higher fires first, default 0)
+2. **Specificity** (more constraints = more specific, fires first)
+3. **Declaration order** (earlier in source fires first)
+
+**Specificity calculation:**
+- Each `:where` pattern clause: +1
+- Each `:guard` condition: +1
+- Each negation (`not`): +1
+- `:let` bindings don't count (computed values, not constraints)
+
+The highest-priority rule fires, then the engine re-evaluates what rules now match (since the world may have changed).
+
+#### 5.0.6 Determinism
+
+Given the same world state and rule definitions, the rule engine produces identical results:
+
+- **Rule ordering** is deterministic (salience → specificity → declaration order)
+- **Refraction** is deterministic (same matches → same refraction set)
+- **RNG** is seeded deterministically (same seed → same random sequence)
+
+What is NOT guaranteed:
+- Bit-exact replay across platforms (floating point, hash iteration)
+- Performance characteristics
 
 ### 5.1 Pattern Syntax
 
@@ -1202,7 +1287,7 @@ Match on absence of patterns:
   :then  [...])
 ```
 
-**Negation semantics**: Evaluated against the **base snapshot** (not the overlay). This ensures deterministic, order-independent evaluation.
+**Negation semantics**: Evaluated against the current world state. If an earlier rule in the same tick created or destroyed entities, negations see those changes.
 
 **Safety rule**: All variables in a negated pattern must be bound by earlier positive patterns. This prevents ambiguous "global negation":
 
@@ -1274,62 +1359,69 @@ When multiple rules can fire, they are ordered by:
 
 When salience and specificity are equal, declaration order (file position) is the final tiebreaker.
 
-### 5.5 Activation & Execution Model (Snapshot Agenda)
+### 5.5 Tick Lifecycle
 
 ```
+tick(world, inputs) -> Result<World, Error>
+
 ┌─────────────────────────────────────────────────────────────┐
 │                         TICK N                               │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│ 1. ACTIVATION PHASE                                          │
-│    • Take snapshot of base world                             │
-│    • For each rule, evaluate ALL query pipeline clauses:     │
-│      :where → :let → :aggregate → :group-by → :guard →       │
-│      :order-by → :limit                                      │
-│    • Produces (rule, frozen-bindings) pairs                  │
-│    • This is the "activation set" - ALL BINDINGS FROZEN      │
+│ 1. SETUP                                                     │
+│    • Store current world as "previous" (for `prev` access)   │
+│    • Inject input entities into world                        │
+│    • Clear refraction set from previous tick                 │
 │                                                              │
-│ 2. EXECUTION PHASE                                           │
-│    • Sort activations by salience/specificity/order          │
-│    • For each (rule, bindings) in sorted order:              │
-│      - Bindings are FROZEN from activation phase             │
-│      - Rule body CAN READ from overlay (sees earlier effects)│
-│      - Rule body WRITES to overlay                           │
-│    • Rules NOT in activation set do NOT fire this tick,      │
-│      even if overlay changes would now make them match       │
+│ 2. RULE EXECUTION LOOP                                       │
+│    ┌────────────────────────────────────────────────────┐   │
+│    │ while true:                                         │   │
+│    │   matches = find_all_matching_rules(world)         │   │
+│    │   candidates = matches - refracted_this_tick       │   │
+│    │                                                     │   │
+│    │   if candidates.is_empty():                        │   │
+│    │     break  // Quiescence reached                   │   │
+│    │                                                     │   │
+│    │   rule, bindings = highest_priority(candidates)    │   │
+│    │   execute(rule.then, bindings)  // Mutates world   │   │
+│    │   refracted_this_tick.add((rule, bindings))        │   │
+│    └────────────────────────────────────────────────────┘   │
 │                                                              │
-│ 3. CONSTRAINT PHASE                                          │
-│    • Evaluate all constraints against overlay                │
-│    • :rollback → discard overlay, tick fails                 │
-│    • :warn → log warning, continue                           │
+│ 3. CONSTRAINT CHECKING                                       │
+│    • For each constraint (ordered by salience, then decl):  │
+│      - Evaluate :check predicates against current world     │
+│      - :rollback violation → return Error, world unchanged  │
+│      - :warn violation → log warning, continue              │
 │                                                              │
-│ 4. COMMIT PHASE                                              │
-│    • Materialize new World = base + overlay                  │
-│    • new_world.previous = base_world                         │
-│    • Flush output buffer                                     │
-│    • tick++                                                  │
+│ 4. COMMIT                                                    │
+│    • Flush output buffer (print! calls)                     │
+│    • Return new world with tick incremented                 │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 **Key properties:**
-- **Deterministic**: Same inputs → same outputs
-- **No infinite loops**: Activation set is fixed at tick start
-- **Immediate visibility**: Rule bodies see overlay changes from earlier rules
-- **Frozen bindings**: Pattern match bindings come from base snapshot
-- **Atomic rollback**: Any error discards overlay, world unchanged
 
-**This is NOT reactive rule-chaining (RETE-style)**:
+| Property | Guarantee |
+|----------|-----------|
+| Termination | Refraction ensures finite rule firings per tick |
+| Atomicity | Entire tick succeeds or fails; no partial commits |
+| Causality | Effects chain naturally; rule A creates entity → rule B reacts |
+| Determinism | Same inputs + same world → same outputs |
 
-> Rules never chain within a tick. If rule A creates a fact that would satisfy rule B's conditions, rule B does NOT fire this tick—it will be considered for activation next tick.
+**Error handling:**
 
-This is a deliberate design choice:
-- Eliminates infinite loop concerns
-- Makes debugging tractable (one activation set per tick)
-- Guarantees termination
-- Simplifies reasoning about rule interactions
+Any unhandled error during rule execution aborts the tick. The transaction is discarded and the world remains unchanged. Errors include full context:
 
-For within-tick reactivity, use the **event log pattern** (see Section 8.8).
+```
+Error during tick 42:
+  Rule: calculate-damage (defined at game/combat.lt:15)
+  Bindings: {?attacker: Entity(5), ?target: Entity(12)}
+  Expression: (/ ?damage ?armor)
+  Cause: Division by zero
+```
+
+Rules can catch errors explicitly with `try`.
 
 ### 5.6 Group-By Semantics in Rules
 
@@ -1351,7 +1443,7 @@ This fires once per faction that has more than 5 members.
 
 ### 5.7 Effects
 
-Effects modify the overlay (visible immediately within the tick):
+Effects modify the world (visible immediately):
 
 ```clojure
 ;; Entity lifecycle
@@ -1368,7 +1460,7 @@ Effects modify the overlay (visible immediately within the tick):
 (link! source :relationship target)
 (unlink! source :relationship target)
 
-;; Output (buffered until commit)
+;; Output (buffered until tick commit)
 (print! "message")
 
 ;; Meta (take effect next tick)
@@ -1376,19 +1468,19 @@ Effects modify the overlay (visible immediately within the tick):
 (disable-rule! rule-entity)
 ```
 
-**Frozen bindings vs overlay reads**: Bindings captured during activation are immutable. To see current overlay state, use explicit reads:
+**Bindings vs current state**: Bindings are captured when a rule matches. Within the `:then` body, you can use bindings (the values that caused the rule to fire) or query current state:
 
 ```clojure
 (rule: example
-  :where [[?e :hp ?hp]]           ;; ?hp is frozen from activation
+  :where [[?e :hp ?hp]]           ;; ?hp bound at match time
   :then [(set! ?e :hp 0)
-         (print! ?hp)             ;; Prints OLD hp (frozen binding)
-         (print! (get ?e :hp))])  ;; Prints 0 (current overlay value)
+         (print! ?hp)             ;; Prints the hp that triggered the match
+         (print! (get ?e :hp))])  ;; Prints 0 (current value)
 ```
 
-This distinction matters when rule logic depends on intermediate state. Bindings reflect "why the rule fired"; `get`/`query` reflect "what's true now."
+Both are useful: bindings tell you "why this rule fired," while `get`/`query` tell you "what's true right now."
 
-**Stale bindings and destroyed entities**: When a rule's frozen binding references an entity that was destroyed earlier in the tick:
+**Stale entity references**: If an earlier rule destroyed an entity that a later rule matched:
 
 ```clojure
 (rule: example-stale
@@ -1425,7 +1517,7 @@ When multiple rules write to the same entity/field within a tick, **last-write-w
 ;; Result: :health/current is 75
 ```
 
-**Rationale**: With frozen activations and deterministic rule ordering (salience → specificity → declaration order), the write order is predictable. Last-write-wins is simple and matches the mental model of "rules execute in order."
+**Rationale**: With deterministic rule ordering (salience → specificity → declaration order), the write order is predictable. Last-write-wins is simple and matches the mental model of "rules execute in order."
 
 **Debugging**: The provenance system tracks all writes, so `(why (get ?e :health/current))` shows the full write history, not just the final value.
 
@@ -1461,26 +1553,23 @@ Queries use the same pattern syntax as rules:
 
 ### 6.2 Query Evaluation Context
 
-Queries follow the same read semantics as `get`:
+Queries always see the current world state:
 
 | Context | View |
 |---------|------|
-| During activation phase | Base snapshot |
-| During rule `:then` execution | Overlay (sees earlier effects) |
-| Outside tick (REPL, external) | Latest committed world |
+| During rule execution | Current transaction state (sees earlier effects) |
+| Outside tick (REPL) | Latest committed world |
 
-To explicitly query the base snapshot during `:then` execution, use `query-base`:
+To compare against the previous tick, use `prev`:
 
 ```clojure
-(rule: check-original-state
+(rule: check-enemy-change
   :where [[?e :tag/enemy]]
-  :then  [(let [current-count (query-count :where [[_ :tag/enemy]])
-                original-count (query-base-count :where [[_ :tag/enemy]])]
-            (when (!= current-count original-count)
-              (print! "Enemy count changed this tick")))])
+  :then [(let [current-count (query-count :where [[_ :tag/enemy]])
+               ;; For previous tick comparison, query against prev values
+               ]
+            (print! (str "Current enemies: " current-count)))])
 ```
-
-**Note**: Pattern matching in `:where` clauses always uses the base snapshot (frozen during activation). Use `query` within `:then` when you need to see overlay changes.
 
 ### 6.3 Aggregation Examples
 
@@ -1680,7 +1769,7 @@ Longtable's "world as value" design enables powerful AI planning. Since `simulat
 ;; Simulate a tick (pure function, no side effects escape)
 (simulate world inputs)  ;; => New world value
 
-;; Query a world value (not the current overlay)
+;; Query a specific world value (for speculation)
 (world-get world entity :component)
 (world-get world entity :component/field)
 (world-query world :where [[?e :tag/enemy]] :return ?e)
@@ -1870,7 +1959,7 @@ Speculative ticks buffer their outputs:
 |-------------|-------------------|-------------------|
 | `print!` | Attached to world value | Flushed to output |
 | `trace!` | Always live (debug channel) | Always live |
-| Effects | Applied to speculative world | Applied to overlay |
+| Effects | Applied to speculative world | Applied to current world |
 
 ```clojure
 ;; Inspect what a speculative tick would have printed
@@ -2030,30 +2119,34 @@ EffectSource = :rule/<name> | :constraint/<name> | :system | :external
 
 The `(why ...)` function traverses the effect log to explain how a value was computed, including intermediate writes that were later overwritten.
 
-### 8.8 Event Log Pattern (Recommended Idiom)
+### 8.8 Event Entity Pattern
 
-Since rules don't chain within a tick, how do you model causality and reactive behavior? Use **explicit event entities**.
+Event entities are a useful pattern for modeling discrete occurrences that multiple rules should react to. While rules chain naturally (a death causes loot to drop), explicit event entities add structure and debuggability.
 
-**The pattern:**
+**When to use event entities:**
+- Multiple independent reactions to the same occurrence
+- You want to query "what happened this tick" after the fact
+- Cross-tick effects (damage over time, delayed reactions)
+- Historical logging for debugging or replay
+
+**Basic pattern:**
 
 ```clojure
-;; 1. Define event components
 (component: event/type :keyword)
 (component: event/tick :int)
 (component: event/source :entity-ref)
 (component: event/data :map)
 
-;; 2. Rules emit events instead of directly causing effects
-(rule: detect-death
+;; Emit an event when something notable happens
+(rule: emit-death-event
   :salience 50
   :where [[?e :health/current ?hp]]
   :guard [(<= ?hp 0)]
   :then [(spawn! {:event/type :entity-died
                   :event/tick (current-tick)
-                  :event/source ?e
-                  :event/data {:final-hp ?hp}})])
+                  :event/source ?e})])
 
-;; 3. Other rules react to events (same tick, via overlay queries)
+;; Multiple rules can react to the same event type
 (rule: on-death-drop-loot
   :salience 40
   :where [[?event :event/type :entity-died]
@@ -2061,23 +2154,16 @@ Since rules don't chain within a tick, how do you model causality and reactive b
           [?corpse :inventory ?items]]
   :then [(doseq [item ?items]
            (spawn! {:item/type item
-                    :position (get ?corpse :position)}))
-         (destroy! ?event)])
+                    :position (get ?corpse :position)}))])
 
-;; 4. Cleanup rule destroys unprocessed events
+;; Cleanup at end of tick
 (rule: cleanup-events
   :salience -1000
   :where [[?event :event/type _]]
   :then [(destroy! ?event)])
 ```
 
-**Why this works:**
-- Events created in `:then` are visible to later rules via overlay queries
-- Salience controls processing order (higher = earlier)
-- Events are debuggable entities with full provenance
-- The cleanup rule prevents event accumulation
-
-**Cross-tick events**: For events that should persist to next tick (e.g., "damage over time"), don't destroy them immediately:
+**Cross-tick events**: For effects that span ticks (damage over time, cooldowns):
 
 ```clojure
 (component: event/expires-at :int)
@@ -2089,7 +2175,7 @@ Since rules don't chain within a tick, how do you model causality and reactive b
   :then [(destroy! ?event)])
 ```
 
-This pattern gives you "reactive feel" without RETE-style chaining, and events become a powerful debugging tool—you can query what happened and why.
+Note that event entities are optional—rules chain naturally without them. Use events when the added structure benefits your game design or debugging.
 
 ---
 
@@ -2466,4 +2552,4 @@ User-defined namespaces should use project-specific prefixes (e.g., `:game/*`, `
 
 ---
 
-*End of Specification v0.7*
+*End of Specification v0.8*
