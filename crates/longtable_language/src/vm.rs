@@ -310,7 +310,12 @@ impl Vm {
 
     /// Executes a compiled program and returns the result.
     pub fn execute(&mut self, program: &CompiledProgram) -> Result<Value> {
-        self.execute_bytecode(&program.code, &program.constants)
+        self.execute_internal::<NoContext>(
+            &program.code,
+            &program.constants,
+            &program.functions,
+            None,
+        )
     }
 
     /// Executes a compiled program with World context.
@@ -319,19 +324,25 @@ impl Vm {
         program: &CompiledProgram,
         ctx: &C,
     ) -> Result<Value> {
-        self.execute_bytecode_with_context(&program.code, &program.constants, Some(ctx))
+        self.execute_internal(
+            &program.code,
+            &program.constants,
+            &program.functions,
+            Some(ctx),
+        )
     }
 
-    /// Executes bytecode with a constants pool.
+    /// Executes bytecode with a constants pool (no functions available).
     pub fn execute_bytecode(&mut self, code: &Bytecode, constants: &[Value]) -> Result<Value> {
-        self.execute_bytecode_with_context::<NoContext>(code, constants, None)
+        self.execute_internal::<NoContext>(code, constants, &[], None)
     }
 
     /// Executes bytecode with optional World context.
-    fn execute_bytecode_with_context<C: VmContext>(
+    fn execute_internal<C: VmContext>(
         &mut self,
         code: &Bytecode,
         constants: &[Value],
+        functions: &[crate::compiler::CompiledFunction],
         ctx: Option<&C>,
     ) -> Result<Value> {
         self.ip = 0;
@@ -408,11 +419,67 @@ impl Vm {
                         self.ip = ((self.ip as i32) + (*offset as i32)) as usize;
                     }
                 }
-                Opcode::Call(_) => {
-                    // User-defined functions not yet supported
-                    return Err(Error::new(ErrorKind::Internal(
-                        "user-defined functions not yet supported".to_string(),
-                    )));
+                Opcode::Call(arg_count) => {
+                    // Pop arguments in reverse order
+                    let arg_count = *arg_count as usize;
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
+
+                    // Pop the function value
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Look up the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Check arity
+                    if args.len() != func.arity as usize {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "expected {} arguments, got {}",
+                            func.arity,
+                            args.len()
+                        ))));
+                    }
+
+                    // Save current VM state
+                    let saved_ip = self.ip;
+                    let saved_locals: Vec<Value> = self.locals.clone();
+
+                    // Set up arguments as locals
+                    for (i, arg) in args.into_iter().enumerate() {
+                        self.locals[i] = arg;
+                    }
+
+                    // Execute the function body
+                    let result =
+                        self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                    // Restore VM state
+                    self.ip = saved_ip;
+                    self.locals = saved_locals;
+
+                    // Push result
+                    self.push(result);
                 }
                 Opcode::CallNative(idx, arg_count) => {
                     self.call_native(*idx, *arg_count)?;
@@ -2243,5 +2310,83 @@ mod tests {
         assert_eq!(eval_test("(type [1 2])"), Value::String(":vector".into()));
         assert_eq!(eval_test("(type {:a 1})"), Value::String(":map".into()));
         assert_eq!(eval_test("(type #{1})"), Value::String(":set".into()));
+    }
+
+    // =========================================================================
+    // User-Defined Function Tests
+    // =========================================================================
+
+    #[test]
+    fn eval_fn_simple() {
+        // Define and immediately call a function
+        let result = eval_test("((fn [x] x) 42)");
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn eval_fn_with_body() {
+        // Function with arithmetic in body
+        let result = eval_test("((fn [x] (+ x 1)) 5)");
+        assert_eq!(result, Value::Int(6));
+    }
+
+    #[test]
+    fn eval_fn_multiple_params() {
+        // Function with two parameters
+        let result = eval_test("((fn [a b] (+ a b)) 3 4)");
+        assert_eq!(result, Value::Int(7));
+    }
+
+    #[test]
+    fn eval_fn_no_params() {
+        // Function with no parameters
+        let result = eval_test("((fn [] 42))");
+        assert_eq!(result, Value::Int(42));
+    }
+
+    #[test]
+    fn eval_fn_nested_call() {
+        // Nested function calls
+        let result = eval_test("((fn [x] ((fn [y] (+ y 1)) x)) 10)");
+        assert_eq!(result, Value::Int(11));
+    }
+
+    #[test]
+    fn eval_fn_with_let() {
+        // Function with let binding
+        let result = eval_test("((fn [x] (let [y 10] (+ x y))) 5)");
+        assert_eq!(result, Value::Int(15));
+    }
+
+    #[test]
+    fn eval_fn_stored_in_let() {
+        // Store function in let binding and call it
+        let result = eval_test("(let [f (fn [x] (* x 2))] (f 5))");
+        assert_eq!(result, Value::Int(10));
+    }
+
+    #[test]
+    fn eval_fn_higher_order() {
+        // Function that takes a function and applies it
+        let result =
+            eval_test("(let [apply (fn [f x] (f x)) double (fn [n] (* n 2))] (apply double 7))");
+        assert_eq!(result, Value::Int(14));
+    }
+
+    #[test]
+    #[ignore = "recursive functions require closures, not yet implemented"]
+    fn eval_fn_recursive_with_def() {
+        // Recursive function using let binding
+        // Note: This requires the function to be accessible from its own body via closures
+        let result =
+            eval_test("(let [fact (fn [n] (if (<= n 1) 1 (* n (fact (- n 1)))))] (fact 5))");
+        assert_eq!(result, Value::Int(120));
+    }
+
+    #[test]
+    fn eval_fn_multi_body() {
+        // Function with multiple expressions in body (implicit do)
+        let result = eval_test("((fn [x] (+ 1 1) (+ x 10)) 5)");
+        assert_eq!(result, Value::Int(15));
     }
 }

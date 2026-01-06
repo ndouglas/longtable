@@ -41,7 +41,7 @@ pub mod vm;
 
 // Re-exports for convenience
 pub use ast::Ast;
-pub use compiler::{CompiledProgram, Compiler, compile, compile_expr};
+pub use compiler::{CompiledFunction, CompiledProgram, Compiler, compile, compile_expr};
 pub use lexer::Lexer;
 pub use opcode::{Bytecode, Opcode};
 pub use parser::{Parser, parse, parse_one};

@@ -822,7 +822,7 @@ impl Vm {
 - [x] Span and Token types implemented with proper source tracking
 - [x] Lexer tokenizes all spec literals (integers, floats, strings, symbols, keywords, collections)
 - [x] Parser builds AST for all expression forms (lists, vectors, sets, maps, quotes, tags)
-- [x] 140 unit tests for lexer, parser, compiler, and VM (including native functions)
+- [x] 150 unit tests for lexer, parser, compiler, and VM (including native and user-defined functions)
 - [x] Round-trip test: source → AST → bytecode → execution → expected value
 - [x] Verify all spec expression forms can be represented
 - [ ] Benchmark VM execution (target: 1M simple ops/sec)
@@ -1736,7 +1736,11 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 - [x] Implement VmEffect enum for deferred effect application
 - [x] Test: expression evaluation (33 tests)
 - [x] Test: native function evaluation (33 tests)
-- [ ] Implement user-defined function calls (Call)
+- [x] Implement user-defined function calls (Call opcode)
+- [x] Implement CompiledFunction structure for function bytecode
+- [x] Implement fn compilation (anonymous functions)
+- [x] Test: function calls (9 tests)
+- [ ] Implement closures (captured variables)
 - [ ] Benchmark: 1M ops/sec target
 
 ### Example: Expression Evaluation

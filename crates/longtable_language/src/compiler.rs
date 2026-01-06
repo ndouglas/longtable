@@ -31,6 +31,8 @@ pub struct Compiler {
     next_local: u16,
     /// Native function name -> index mapping.
     natives: HashMap<String, u16>,
+    /// Compiled functions.
+    functions: Vec<CompiledFunction>,
 }
 
 /// Key for constant deduplication.
@@ -63,6 +65,19 @@ impl ConstKey {
     }
 }
 
+/// A compiled function ready for execution.
+#[derive(Clone, Debug)]
+pub struct CompiledFunction {
+    /// Number of parameters.
+    pub arity: u8,
+    /// Parameter names (for debugging).
+    pub params: Vec<String>,
+    /// Function bytecode.
+    pub code: Bytecode,
+    /// Number of local variable slots needed.
+    pub locals_count: u16,
+}
+
 /// Compiled program ready for execution.
 #[derive(Clone, Debug, Default)]
 pub struct CompiledProgram {
@@ -70,6 +85,8 @@ pub struct CompiledProgram {
     pub code: Bytecode,
     /// Constants pool.
     pub constants: Vec<Value>,
+    /// Compiled functions.
+    pub functions: Vec<CompiledFunction>,
 }
 
 impl Default for Compiler {
@@ -88,6 +105,7 @@ impl Compiler {
             locals: HashMap::new(),
             next_local: 0,
             natives: HashMap::new(),
+            functions: Vec::new(),
         };
 
         // Register built-in native functions
@@ -192,6 +210,7 @@ impl Compiler {
         Ok(CompiledProgram {
             code,
             constants: self.constants.clone(),
+            functions: self.functions.clone(),
         })
     }
 
@@ -560,10 +579,95 @@ impl Compiler {
     }
 
     /// Compiles a fn expression (lambda).
-    fn compile_fn(&mut self, _args: &[Ast], span: Span, _code: &mut Bytecode) -> Result<()> {
-        // For now, we don't support first-class functions
-        // This would require function objects and closures
-        Err(self.error(span, "fn not yet supported"))
+    fn compile_fn(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        // (fn [params...] body...)
+        if args.is_empty() {
+            return Err(self.error(span, "fn requires parameters vector"));
+        }
+
+        // Extract parameters
+        let params = match &args[0] {
+            Ast::Vector(params, _) => params,
+            _ => return Err(self.error(span, "fn parameters must be a vector")),
+        };
+
+        // Extract parameter names
+        let mut param_names = Vec::new();
+        for param in params {
+            match param {
+                Ast::Symbol(name, _) => param_names.push(name.clone()),
+                _ => return Err(self.error(span, "fn parameter must be a symbol")),
+            }
+        }
+
+        let arity =
+            u8::try_from(param_names.len()).map_err(|_| self.error(span, "too many parameters"))?;
+
+        // Save current compiler state
+        let saved_locals = self.locals.clone();
+        let saved_next = self.next_local;
+
+        // Reset locals for function compilation
+        self.locals.clear();
+        self.next_local = 0;
+
+        // Add parameters as locals
+        for name in &param_names {
+            let slot = self.next_local;
+            self.next_local += 1;
+            self.locals.insert(name.clone(), slot);
+        }
+
+        // Compile function body
+        let mut fn_code = Bytecode::new();
+        let body = &args[1..];
+
+        if body.is_empty() {
+            let idx = self.add_constant(Value::Nil);
+            fn_code.emit(Opcode::Const(idx));
+        } else {
+            for (i, expr) in body.iter().enumerate() {
+                self.compile_node(expr, &mut fn_code)?;
+                if i < body.len() - 1 {
+                    fn_code.emit(Opcode::Pop);
+                }
+            }
+        }
+
+        // Add return instruction
+        fn_code.emit(Opcode::Return);
+
+        let locals_count = self.next_local;
+
+        // Restore compiler state
+        self.locals = saved_locals;
+        self.next_local = saved_next;
+
+        // Create compiled function
+        let func = CompiledFunction {
+            arity,
+            params: param_names,
+            code: fn_code,
+            locals_count,
+        };
+
+        // Add to functions table
+        let fn_index = u32::try_from(self.functions.len())
+            .map_err(|_| self.error(span, "too many functions"))?;
+        self.functions.push(func);
+
+        // Create function value
+        let fn_value = Value::Fn(longtable_foundation::LtFn::Compiled(
+            longtable_foundation::CompiledFn {
+                index: fn_index,
+                captures: None, // No closures yet
+            },
+        ));
+
+        let idx = self.add_constant(fn_value);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
     }
 
     /// Compiles a def expression (global definition).
