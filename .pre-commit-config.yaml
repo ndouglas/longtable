@@ -1,0 +1,50 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: rustfmt
+        name: rustfmt
+        entry: rustfmt
+        language: system
+        types: [rust]
+        args: ["--edition=2024"]
+        pass_filenames: true
+
+      - id: clippy
+        name: clippy
+        entry: cargo clippy
+        language: system
+        types: [rust]
+        pass_filenames: false
+        args: ["--fix", "--allow-dirty", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+      - id: cargo-check
+        name: cargo check
+        entry: cargo check
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test
+        name: cargo test
+        entry: cargo test
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: cargo-test-examples
+        name: cargo test examples
+        entry: bash -c 'if ls examples/*.rs 1> /dev/null 2>&1; then cargo test --examples; else echo "No examples to test"; fi'
+        language: system
+        types: [rust]
+        pass_filenames: false
