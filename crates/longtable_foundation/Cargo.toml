@@ -1,0 +1,22 @@
+[package]
+name = "longtable_foundation"
+description = "Core types, values, and persistent collections for Longtable"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+im.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "im/serde"]

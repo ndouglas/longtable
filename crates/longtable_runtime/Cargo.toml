@@ -1,0 +1,23 @@
+[package]
+name = "longtable_runtime"
+description = "REPL, CLI, and serialization for Longtable"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+longtable_foundation.workspace = true
+longtable_storage.workspace = true
+longtable_language.workspace = true
+longtable_engine.workspace = true
+longtable_stdlib.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

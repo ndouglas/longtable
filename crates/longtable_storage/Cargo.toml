@@ -1,0 +1,23 @@
+[package]
+name = "longtable_storage"
+description = "Entity-component storage, relationships, and world state for Longtable"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+longtable_foundation.workspace = true
+im.workspace = true
+thiserror.workspace = true
+serde = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "longtable_foundation/serde"]

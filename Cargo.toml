@@ -1,0 +1,58 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/longtable_foundation",
+    "crates/longtable_storage",
+    "crates/longtable_language",
+    "crates/longtable_engine",
+    "crates/longtable_stdlib",
+    "crates/longtable_runtime",
+    "crates/longtable_debug",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85.0"
+license = "Unlicense"
+repository = "https://github.com/ndouglas/longtable"
+keywords = ["simulation", "rules-engine", "ecs", "lisp", "game"]
+categories = ["game-development", "simulation"]
+
+[workspace.dependencies]
+# Workspace crates
+longtable_foundation = { path = "crates/longtable_foundation" }
+longtable_storage = { path = "crates/longtable_storage" }
+longtable_language = { path = "crates/longtable_language" }
+longtable_engine = { path = "crates/longtable_engine" }
+longtable_stdlib = { path = "crates/longtable_stdlib" }
+longtable_runtime = { path = "crates/longtable_runtime" }
+longtable_debug = { path = "crates/longtable_debug" }
+
+# Persistent data structures
+im = "15"
+
+# Error handling
+thiserror = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+rmp-serde = "1"
+
+# Random number generation (deterministic)
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Testing
+proptest = "1"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[profile.bench]
+lto = true
+codegen-units = 1

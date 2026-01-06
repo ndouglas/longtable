@@ -155,19 +155,19 @@ longtable/
 
 ### Tasks
 
-- [ ] Initialize Cargo workspace with crate structure
-- [ ] Configure CI/CD (test, lint, format, benchmark on PR)
-- [ ] Set up criterion benchmarks infrastructure
-- [ ] Create `CHANGELOG.md` with semantic versioning plan
-- [ ] Establish code style guidelines (rustfmt.toml, clippy.toml)
-- [ ] Create initial README with project overview
+- [x] Initialize Cargo workspace with crate structure
+- [x] Configure CI/CD (test, lint, format, benchmark on PR)
+- [x] Set up criterion benchmarks infrastructure
+- [x] Create `CHANGELOG.md` with semantic versioning plan
+- [x] Establish code style guidelines (rustfmt.toml, clippy.toml)
+- [x] Create initial README with project overview
 
 ### Success Criteria
 
-- `cargo build` succeeds with empty crates
-- `cargo test` runs (no tests yet)
-- `cargo bench` infrastructure ready
-- CI pipeline runs on push
+- [x] `cargo build` succeeds with empty crates
+- [x] `cargo test` runs (no tests yet)
+- [x] `cargo bench` infrastructure ready
+- [x] CI pipeline runs on push
 
 ---
 
