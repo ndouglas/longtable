@@ -1321,13 +1321,16 @@ tests/
 │   ├── rules.rs
 │   ├── queries.rs
 │   └── constraints.rs
-└── integration/        47 tests
-    ├── tick_cycle.rs
-    ├── speculation.rs
-    └── time_travel.rs
+├── integration/        47 tests
+│   ├── tick_cycle.rs
+│   ├── speculation.rs
+│   └── time_travel.rs
+└── examples/           26 tests
+    ├── counter.rs      11 tests
+    └── adventure.rs    15 tests
 ```
 
-**Total: 345 tests** — All passing with clean clippy.
+**Total: 371 tests** — All passing with clean clippy.
 
 ### 7.2 Example: Counter Machine (Deliberately Ugly) ✓
 
@@ -1383,7 +1386,7 @@ This example should feel boring. That's the point.
 
 **Implemented**: 11 tests in `tests/examples/counter.rs` covering all test cases using the spike API.
 
-### 7.3 Example: Adventure Game
+### 7.3 Example: Adventure Game ✓
 
 Full implementation of spec's adventure game example:
 
@@ -1402,6 +1405,13 @@ examples/adventure/
 └── tests/
     └── adventure_test.rs  # Rust integration tests
 ```
+
+**Implemented**: 15 tests in `tests/examples/adventure.rs` demonstrating:
+- Spatial model with rooms connected by exits (relationships)
+- Player movement between rooms via link/unlink
+- Item pickup, inventory management, and drop
+- Enemy entities and combat rule patterns
+- Command entities consumed by rules
 
 ### 7.4 Example: Combat Simulation
 
