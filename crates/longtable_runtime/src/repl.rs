@@ -519,6 +519,12 @@ impl<E: LineEditor> Repl<E> {
                 }
             }
 
+            // (why entity :component) or (why entity :component :depth N)
+            Ast::Symbol(s, _) if s == "why" => self.handle_why(&list[1..]),
+
+            // (explain-query (query ...)) or (explain-query (query ...) entity)
+            Ast::Symbol(s, _) if s == "explain-query" => self.handle_explain_query(&list[1..]),
+
             _ => Ok(None),
         }
     }
@@ -742,6 +748,314 @@ impl<E: LineEditor> Repl<E> {
 
         // Return as a vector
         Ok(Some(Value::Vec(results.into_iter().collect())))
+    }
+
+    /// Handles the (why entity :component) or (why entity :component :depth N) form.
+    ///
+    /// Returns information about why an entity has a particular component value,
+    /// tracing back through the provenance chain.
+    fn handle_why(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::WhyQuery;
+        use longtable_language::Ast;
+
+        if args.len() < 2 || args.len() > 4 {
+            return Err(Error::new(ErrorKind::Internal(
+                "why requires 2-4 arguments: (why entity :component) or (why entity :component :depth N)".to_string(),
+            )));
+        }
+
+        // Parse entity - support named entities from session
+        let entity = if let Ast::Symbol(name, _) = &args[0] {
+            // Try to resolve as a named entity
+            self.session
+                .get_entity(name)
+                .ok_or_else(|| Error::new(ErrorKind::Internal(format!("unknown entity: {name}"))))?
+        } else {
+            let entity_val = self.eval_form(&args[0])?;
+            match entity_val {
+                Value::EntityRef(id) => id,
+                Value::Int(idx) if idx >= 0 =>
+                {
+                    #[allow(clippy::cast_sign_loss)]
+                    EntityId::new(idx as u64, 0)
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::Internal(format!(
+                        "why entity must be an entity reference, got {:?}",
+                        other.value_type()
+                    ))));
+                }
+            }
+        };
+
+        // Parse component
+        let component = match &args[1] {
+            Ast::Keyword(name, _) => self.session.world_mut().interner_mut().intern_keyword(name),
+            other => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "why component must be a keyword, got {}",
+                    other.type_name()
+                ))));
+            }
+        };
+
+        // Parse optional :depth N
+        let depth = if args.len() >= 4 {
+            match (&args[2], &args[3]) {
+                (Ast::Keyword(k, _), Ast::Int(n, _)) if k == "depth" => {
+                    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                    {
+                        *n as usize
+                    }
+                }
+                _ => {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "expected :depth N after component".to_string(),
+                    )));
+                }
+            }
+        } else {
+            1
+        };
+
+        // Perform the why query
+        let tracker = self.tick_executor.provenance();
+        let query = WhyQuery::new(tracker);
+
+        // Get current value for context (ignore errors - just for display)
+        let current_value = self.session.world().get(entity, component).ok().flatten();
+
+        let result = query.why_depth(entity, component, depth, current_value);
+
+        // Format the result
+        self.format_why_result(&result, entity, component);
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Formats and prints a `WhyResult`.
+    fn format_why_result(
+        &self,
+        result: &longtable_debug::WhyResult,
+        entity: EntityId,
+        component: longtable_foundation::KeywordId,
+    ) {
+        use longtable_debug::WhyResult;
+
+        let component_name = self
+            .session
+            .world()
+            .interner()
+            .get_keyword(component)
+            .unwrap_or("?");
+
+        match result {
+            WhyResult::Unknown => {
+                println!("No provenance information for {entity} :{component_name}");
+            }
+            WhyResult::Single(None) => {
+                println!("No write recorded for {entity} :{component_name}");
+            }
+            WhyResult::Single(Some(link)) => {
+                let rule_name = self
+                    .session
+                    .world()
+                    .interner()
+                    .get_keyword(link.rule)
+                    .unwrap_or("?");
+                println!("Why {entity} :{component_name}?");
+                println!("  Rule: :{rule_name}");
+                println!("  Tick: {}", link.tick);
+                if let Some(ref value) = link.value {
+                    println!("  Value: {value}");
+                }
+                if let Some(ref prev) = link.previous_value {
+                    println!("  Previous: {prev}");
+                }
+                if !link.context.is_empty() {
+                    println!("  Context:");
+                    for (var, eid) in &link.context {
+                        println!("    {var} = {eid}");
+                    }
+                }
+            }
+            WhyResult::Chain(chain) => {
+                println!("Why {entity} :{component_name}? (causal chain)");
+                for (i, link) in chain.links.iter().enumerate() {
+                    let rule_name = self
+                        .session
+                        .world()
+                        .interner()
+                        .get_keyword(link.rule)
+                        .unwrap_or("?");
+                    let comp_name = self
+                        .session
+                        .world()
+                        .interner()
+                        .get_keyword(link.component)
+                        .unwrap_or("?");
+                    println!("  [{i}] {} :{comp_name}", link.entity);
+                    println!("      Rule: :{rule_name}, Tick: {}", link.tick);
+                    if let Some(ref value) = link.value {
+                        println!("      Value: {value}");
+                    }
+                }
+                if chain.truncated {
+                    println!("  ... (chain truncated at depth limit)");
+                }
+            }
+        }
+    }
+
+    /// Handles the (explain-query (query ...)) form.
+    ///
+    /// Shows how a query was executed through its pipeline of clauses.
+    fn handle_explain_query(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_language::Ast;
+
+        if args.is_empty() || args.len() > 2 {
+            return Err(Error::new(ErrorKind::Internal(
+                "explain-query requires 1-2 arguments: (explain-query (query ...)) or (explain-query (query ...) entity)".to_string(),
+            )));
+        }
+
+        // Parse the query
+        let query_form = &args[0];
+        let Some(Declaration::Query(query_decl)) = DeclarationAnalyzer::analyze(query_form)? else {
+            return Err(Error::new(ErrorKind::Internal(
+                "explain-query first argument must be a query form".to_string(),
+            )));
+        };
+
+        // Optional: specific entity to explain - support named entities
+        let target_entity = if args.len() == 2 {
+            if let Ast::Symbol(name, _) = &args[1] {
+                Some(self.session.get_entity(name).ok_or_else(|| {
+                    Error::new(ErrorKind::Internal(format!("unknown entity: {name}")))
+                })?)
+            } else {
+                let entity_val = self.eval_form(&args[1])?;
+                match entity_val {
+                    Value::EntityRef(id) => Some(id),
+                    Value::Int(idx) if idx >= 0 =>
+                    {
+                        #[allow(clippy::cast_sign_loss)]
+                        Some(EntityId::new(idx as u64, 0))
+                    }
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "explain-query entity must be an entity reference, got {:?}",
+                            other.value_type()
+                        ))));
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        // Compile the query
+        let compiled =
+            QueryCompiler::compile(&query_decl, self.session.world_mut().interner_mut())?;
+
+        // Execute the query (needed for statistics)
+        let results = QueryExecutor::execute(&compiled, self.session.world())?;
+
+        // Print explanation
+        println!("Query Explanation:");
+        println!("  Clauses: {}", compiled.pattern.clauses.len());
+        println!("  Results: {}", results.len());
+
+        if let Some(entity) = target_entity {
+            self.print_entity_match_explanation(entity, &compiled);
+        }
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Prints entity-specific match explanation.
+    fn print_entity_match_explanation(
+        &self,
+        entity: EntityId,
+        compiled: &longtable_engine::CompiledQuery,
+    ) {
+        use longtable_engine::PatternMatcher;
+
+        println!("\n  Entity {entity} match analysis:");
+
+        let result =
+            PatternMatcher::explain_entity(&compiled.pattern, entity, self.session.world());
+
+        if result.matched {
+            println!("    Status: MATCHED");
+            for (var, val) in result.partial_bindings.iter() {
+                println!("    ?{var} = {val}");
+            }
+        } else {
+            println!("    Status: NOT MATCHED");
+            if let Some(clause_idx) = result.failed_at_clause {
+                println!("    Failed at clause: {clause_idx}");
+                if clause_idx < compiled.pattern.clauses.len() {
+                    let clause = &compiled.pattern.clauses[clause_idx];
+                    let comp_name = self
+                        .session
+                        .world()
+                        .interner()
+                        .get_keyword(clause.component)
+                        .unwrap_or("?");
+                    println!("      [?{} :{comp_name} ...]", clause.entity_var);
+                }
+            }
+            if let Some(ref reason) = result.failure_reason {
+                self.print_match_failure_reason(reason);
+            }
+        }
+    }
+
+    /// Prints match failure reason.
+    fn print_match_failure_reason(&self, reason: &longtable_engine::MatchFailure) {
+        use longtable_engine::MatchFailure;
+
+        match reason {
+            MatchFailure::MissingComponent { component } => {
+                let comp_name = self
+                    .session
+                    .world()
+                    .interner()
+                    .get_keyword(*component)
+                    .unwrap_or("?");
+                println!("    Reason: Entity missing component :{comp_name}");
+            }
+            MatchFailure::ValueMismatch { expected, actual } => {
+                println!("    Reason: Value mismatch");
+                println!("      Expected: {expected}");
+                println!("      Actual: {actual}");
+            }
+            MatchFailure::UnificationFailure {
+                var,
+                expected,
+                actual,
+            } => {
+                println!("    Reason: Unification failure for ?{var}");
+                println!("      Previously bound to: {expected}");
+                println!("      New value: {actual}");
+            }
+            MatchFailure::NegationMatched { component } => {
+                let comp_name = self
+                    .session
+                    .world()
+                    .interner()
+                    .get_keyword(*component)
+                    .unwrap_or("?");
+                println!("    Reason: Entity has negated component :{comp_name}");
+            }
+            MatchFailure::GuardFailed { guard_index } => {
+                println!("    Reason: Guard {guard_index} returned false");
+            }
+            MatchFailure::EntityNotFound => {
+                println!("    Reason: Entity does not exist");
+            }
+        }
     }
 
     /// Loads and evaluates a file.
@@ -1326,5 +1640,107 @@ mod tests {
             .unwrap();
 
         // Should not error - relationship is registered
+    }
+
+    // ==================== Explain System Tests ====================
+
+    #[test]
+    fn why_unknown_entity() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // why with unknown entity name should error
+        let result = repl.eval("(why player :health)");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown entity"));
+    }
+
+    #[test]
+    fn why_requires_component() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // why with no component should error
+        let result = repl.eval("(why 0)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn why_with_entity_ref() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define component
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+
+        // Spawn entity
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+
+        // why with entity by name should work (even if no provenance recorded)
+        let result = repl.eval("(why player :tag/player)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn why_with_depth() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define component
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+
+        // Spawn entity
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+
+        // why with depth should work
+        let result = repl.eval("(why player :tag/player :depth 3)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn explain_query_basic() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define component
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+
+        // Spawn entity
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+
+        // explain-query should work
+        let result = repl.eval("(explain-query (query :where [[?e :tag/player]] :return ?e))");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn explain_query_with_entity() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define component
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+
+        // Spawn entity
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+
+        // explain-query with entity should work
+        let result =
+            repl.eval("(explain-query (query :where [[?e :tag/player]] :return ?e) player)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn explain_query_invalid_form() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // explain-query with non-query should error
+        let result = repl.eval("(explain-query 42)");
+        assert!(result.is_err());
     }
 }

@@ -472,6 +472,220 @@ impl PatternMatcher {
         }
         true
     }
+
+    /// Explain why a specific entity matched or didn't match a pattern.
+    ///
+    /// Returns the clause index where matching failed (if any), the reason for failure,
+    /// and the partial bindings at the point of failure.
+    #[must_use]
+    pub fn explain_entity(
+        pattern: &CompiledPattern,
+        entity: EntityId,
+        world: &World,
+    ) -> EntityMatchResult {
+        if pattern.clauses.is_empty() {
+            return EntityMatchResult::matched(entity, Bindings::new());
+        }
+
+        // Check if entity exists
+        if !world.exists(entity) {
+            return EntityMatchResult::not_matched(
+                entity,
+                0,
+                MatchFailure::EntityNotFound,
+                Bindings::new(),
+            );
+        }
+
+        let mut bindings = Bindings::new();
+        let entity_var = &pattern.clauses[0].entity_var;
+        bindings.set(entity_var.clone(), Value::EntityRef(entity));
+
+        // Check each positive clause
+        for (idx, clause) in pattern.clauses.iter().enumerate() {
+            // Check if entity variable is the target entity or already bound
+            if clause.entity_var != *entity_var {
+                // For join variables, we need different handling
+                // For now, skip non-matching entity variables
+                continue;
+            }
+
+            // Check if entity has this component
+            if !world.has(entity, clause.component) {
+                return EntityMatchResult::not_matched(
+                    entity,
+                    idx,
+                    MatchFailure::MissingComponent {
+                        component: clause.component,
+                    },
+                    bindings,
+                );
+            }
+
+            // Get the value
+            let Ok(Some(value)) = world.get(entity, clause.component) else {
+                return EntityMatchResult::not_matched(
+                    entity,
+                    idx,
+                    MatchFailure::MissingComponent {
+                        component: clause.component,
+                    },
+                    bindings,
+                );
+            };
+
+            // Check the binding
+            match &clause.binding {
+                CompiledBinding::Variable(var) => {
+                    if let Some(existing) = bindings.get(var) {
+                        if existing != &value {
+                            return EntityMatchResult::not_matched(
+                                entity,
+                                idx,
+                                MatchFailure::UnificationFailure {
+                                    var: var.clone(),
+                                    expected: existing.clone(),
+                                    actual: value,
+                                },
+                                bindings,
+                            );
+                        }
+                    } else {
+                        bindings.set(var.clone(), value);
+                    }
+                }
+                CompiledBinding::Literal(lit) => {
+                    if &value != lit {
+                        return EntityMatchResult::not_matched(
+                            entity,
+                            idx,
+                            MatchFailure::ValueMismatch {
+                                expected: lit.clone(),
+                                actual: value,
+                            },
+                            bindings,
+                        );
+                    }
+                }
+                CompiledBinding::Wildcard => {
+                    // Always matches
+                }
+            }
+        }
+
+        // Check negations
+        for (idx, clause) in pattern.negations.iter().enumerate() {
+            if clause.entity_var != *entity_var {
+                continue;
+            }
+
+            if world.has(entity, clause.component) {
+                return EntityMatchResult::not_matched(
+                    entity,
+                    pattern.clauses.len() + idx, // Negation index after positive clauses
+                    MatchFailure::NegationMatched {
+                        component: clause.component,
+                    },
+                    bindings,
+                );
+            }
+        }
+
+        EntityMatchResult::matched(entity, bindings)
+    }
+}
+
+// =============================================================================
+// Entity Match Explanation Types
+// =============================================================================
+
+/// Reason why an entity failed to match a pattern clause.
+#[derive(Clone, Debug, PartialEq)]
+pub enum MatchFailure {
+    /// Entity doesn't have the required component.
+    MissingComponent {
+        /// The component that was expected.
+        component: KeywordId,
+    },
+
+    /// Component value doesn't match the pattern literal.
+    ValueMismatch {
+        /// The expected value from the pattern.
+        expected: Value,
+        /// The actual value found.
+        actual: Value,
+    },
+
+    /// Variable unification failed (same var bound to different values).
+    UnificationFailure {
+        /// The variable name.
+        var: String,
+        /// The previously bound value.
+        expected: Value,
+        /// The new value that conflicted.
+        actual: Value,
+    },
+
+    /// Negation clause matched when it shouldn't have.
+    NegationMatched {
+        /// The component that was found but shouldn't exist.
+        component: KeywordId,
+    },
+
+    /// Guard expression returned false.
+    GuardFailed {
+        /// Index of the guard that failed (0-based).
+        guard_index: usize,
+    },
+
+    /// Entity doesn't exist.
+    EntityNotFound,
+}
+
+/// Result of explaining why an entity did or didn't match a pattern.
+#[derive(Clone, Debug)]
+pub struct EntityMatchResult {
+    /// The entity being explained.
+    pub entity: EntityId,
+    /// Did it match the pattern?
+    pub matched: bool,
+    /// Which clause failed (if any) - 0-indexed.
+    pub failed_at_clause: Option<usize>,
+    /// Why the clause failed (if applicable).
+    pub failure_reason: Option<MatchFailure>,
+    /// Partial bindings at point of failure.
+    pub partial_bindings: Bindings,
+}
+
+impl EntityMatchResult {
+    /// Create a result for a matched entity.
+    #[must_use]
+    pub fn matched(entity: EntityId, bindings: Bindings) -> Self {
+        Self {
+            entity,
+            matched: true,
+            failed_at_clause: None,
+            failure_reason: None,
+            partial_bindings: bindings,
+        }
+    }
+
+    /// Create a result for a non-matched entity.
+    #[must_use]
+    pub fn not_matched(
+        entity: EntityId,
+        clause_idx: usize,
+        reason: MatchFailure,
+        bindings: Bindings,
+    ) -> Self {
+        Self {
+            entity,
+            matched: false,
+            failed_at_clause: Some(clause_idx),
+            failure_reason: Some(reason),
+            partial_bindings: bindings,
+        }
+    }
 }
 
 // =============================================================================

@@ -40,7 +40,8 @@ pub use tick::{InputEvent, TickExecutor, TickResult};
 
 // Production pattern matching
 pub use pattern::{
-    Bindings, CompiledBinding, CompiledClause, CompiledPattern, PatternCompiler, PatternMatcher,
+    Bindings, CompiledBinding, CompiledClause, CompiledPattern, EntityMatchResult, MatchFailure,
+    PatternCompiler, PatternMatcher,
 };
 
 // Query system
