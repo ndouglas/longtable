@@ -1712,9 +1712,9 @@ This is a **major morale checkpoint**. If Phase 2.5 feels like a real system, yo
 
 **Primary goal**: Correct semantics, deterministic behavior, usable development experience.
 
-- [ ] Adventure game example runs end-to-end
+- [x] Adventure game example runs end-to-end (Phase 5.5 complete - relationship queries work!)
 - [ ] All spec sections have basic implementation
-- [ ] REPL is usable for development
+- [x] REPL is usable for development (Phase 5.2 complete)
 - [ ] Semantic spike tests all pass
 - [ ] VM mutation model decision documented
 - [ ] Performance usable at 1k entities (not optimized)
