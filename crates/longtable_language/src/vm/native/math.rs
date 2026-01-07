@@ -928,3 +928,579 @@ pub(crate) fn native_vec_angle(args: &[Value]) -> Result<Value> {
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::PI;
+
+    // Helper to create a float vector
+    fn float_vec(values: &[f64]) -> Value {
+        Value::Vec(values.iter().map(|&v| Value::Float(v)).collect())
+    }
+
+    // Helper to extract float from result
+    fn as_float(v: &Value) -> f64 {
+        match v {
+            Value::Float(f) => *f,
+            Value::Int(i) => *i as f64,
+            _ => panic!("Expected float, got {v:?}"),
+        }
+    }
+
+    // Helper to extract vec of floats from result
+    fn as_float_vec(v: &Value) -> Vec<f64> {
+        match v {
+            Value::Vec(vec) => vec.iter().map(|v| as_float(v)).collect(),
+            _ => panic!("Expected vec, got {v:?}"),
+        }
+    }
+
+    // ==================== Stage S4: Basic Math Tests ====================
+
+    #[test]
+    fn test_pow_basic() {
+        let result = native_pow(&[Value::Float(2.0), Value::Float(3.0)]).unwrap();
+        assert!((as_float(&result) - 8.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pow_with_ints() {
+        let result = native_pow(&[Value::Int(2), Value::Int(10)]).unwrap();
+        assert!((as_float(&result) - 1024.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_pow_fractional() {
+        let result = native_pow(&[Value::Float(4.0), Value::Float(0.5)]).unwrap();
+        assert!((as_float(&result) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exp_basic() {
+        let result = native_exp(&[Value::Float(0.0)]).unwrap();
+        assert!((as_float(&result) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_exp_one() {
+        let result = native_exp(&[Value::Float(1.0)]).unwrap();
+        assert!((as_float(&result) - std::f64::consts::E).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log_basic() {
+        let result = native_log(&[Value::Float(std::f64::consts::E)]).unwrap();
+        assert!((as_float(&result) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log_one() {
+        let result = native_log(&[Value::Float(1.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log10_basic() {
+        let result = native_log10(&[Value::Float(100.0)]).unwrap();
+        assert!((as_float(&result) - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_log2_basic() {
+        let result = native_log2(&[Value::Float(8.0)]).unwrap();
+        assert!((as_float(&result) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cbrt_basic() {
+        let result = native_cbrt(&[Value::Float(27.0)]).unwrap();
+        assert!((as_float(&result) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cbrt_negative() {
+        let result = native_cbrt(&[Value::Float(-8.0)]).unwrap();
+        assert!((as_float(&result) - (-2.0)).abs() < 1e-10);
+    }
+
+    // ==================== Trigonometric Functions ====================
+
+    #[test]
+    fn test_sin_zero() {
+        let result = native_sin(&[Value::Float(0.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sin_pi_half() {
+        let result = native_sin(&[Value::Float(PI / 2.0)]).unwrap();
+        assert!((as_float(&result) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cos_zero() {
+        let result = native_cos(&[Value::Float(0.0)]).unwrap();
+        assert!((as_float(&result) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cos_pi() {
+        let result = native_cos(&[Value::Float(PI)]).unwrap();
+        assert!((as_float(&result) - (-1.0)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tan_zero() {
+        let result = native_tan(&[Value::Float(0.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tan_pi_quarter() {
+        let result = native_tan(&[Value::Float(PI / 4.0)]).unwrap();
+        assert!((as_float(&result) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_asin_zero() {
+        let result = native_asin(&[Value::Float(0.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_asin_one() {
+        let result = native_asin(&[Value::Float(1.0)]).unwrap();
+        assert!((as_float(&result) - PI / 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_acos_one() {
+        let result = native_acos(&[Value::Float(1.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_acos_zero() {
+        let result = native_acos(&[Value::Float(0.0)]).unwrap();
+        assert!((as_float(&result) - PI / 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan_zero() {
+        let result = native_atan(&[Value::Float(0.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan_one() {
+        let result = native_atan(&[Value::Float(1.0)]).unwrap();
+        assert!((as_float(&result) - PI / 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan2_basic() {
+        let result = native_atan2(&[Value::Float(1.0), Value::Float(1.0)]).unwrap();
+        assert!((as_float(&result) - PI / 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_atan2_y_axis() {
+        let result = native_atan2(&[Value::Float(1.0), Value::Float(0.0)]).unwrap();
+        assert!((as_float(&result) - PI / 2.0).abs() < 1e-10);
+    }
+
+    // ==================== Stage S7: Hyperbolic Functions ====================
+
+    #[test]
+    fn test_sinh_zero() {
+        let result = native_sinh(&[Value::Float(0.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sinh_one() {
+        let result = native_sinh(&[Value::Float(1.0)]).unwrap();
+        // sinh(1) ≈ 1.1752
+        assert!((as_float(&result) - 1.0_f64.sinh()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_sinh_negative() {
+        let result = native_sinh(&[Value::Float(-1.0)]).unwrap();
+        // sinh(-x) = -sinh(x)
+        let positive = native_sinh(&[Value::Float(1.0)]).unwrap();
+        assert!((as_float(&result) + as_float(&positive)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cosh_zero() {
+        let result = native_cosh(&[Value::Float(0.0)]).unwrap();
+        assert!((as_float(&result) - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cosh_one() {
+        let result = native_cosh(&[Value::Float(1.0)]).unwrap();
+        // cosh(1) ≈ 1.5431
+        assert!((as_float(&result) - 1.0_f64.cosh()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_cosh_symmetric() {
+        // cosh(-x) = cosh(x)
+        let positive = native_cosh(&[Value::Float(2.0)]).unwrap();
+        let negative = native_cosh(&[Value::Float(-2.0)]).unwrap();
+        assert!((as_float(&positive) - as_float(&negative)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tanh_zero() {
+        let result = native_tanh(&[Value::Float(0.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tanh_one() {
+        let result = native_tanh(&[Value::Float(1.0)]).unwrap();
+        // tanh(1) ≈ 0.7616
+        assert!((as_float(&result) - 1.0_f64.tanh()).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_tanh_large_approaches_one() {
+        let result = native_tanh(&[Value::Float(10.0)]).unwrap();
+        // tanh approaches 1 for large positive values
+        assert!((as_float(&result) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_tanh_large_negative_approaches_negative_one() {
+        let result = native_tanh(&[Value::Float(-10.0)]).unwrap();
+        // tanh approaches -1 for large negative values
+        assert!((as_float(&result) + 1.0).abs() < 1e-5);
+    }
+
+    // ==================== Stage S6: Vector Math Tests ====================
+
+    #[test]
+    fn test_vec_add_basic() {
+        let a = float_vec(&[1.0, 2.0, 3.0]);
+        let b = float_vec(&[4.0, 5.0, 6.0]);
+        let result = native_vec_add(&[a, b]).unwrap();
+        let vals = as_float_vec(&result);
+        assert_eq!(vals.len(), 3);
+        assert!((vals[0] - 5.0).abs() < 1e-10);
+        assert!((vals[1] - 7.0).abs() < 1e-10);
+        assert!((vals[2] - 9.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_add_2d() {
+        let a = float_vec(&[10.0, 20.0]);
+        let b = float_vec(&[-3.0, 7.0]);
+        let result = native_vec_add(&[a, b]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 7.0).abs() < 1e-10);
+        assert!((vals[1] - 27.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_add_unequal_lengths_fails() {
+        let a = float_vec(&[1.0, 2.0]);
+        let b = float_vec(&[1.0, 2.0, 3.0]);
+        assert!(native_vec_add(&[a, b]).is_err());
+    }
+
+    #[test]
+    fn test_vec_sub_basic() {
+        let a = float_vec(&[5.0, 7.0, 9.0]);
+        let b = float_vec(&[1.0, 2.0, 3.0]);
+        let result = native_vec_sub(&[a, b]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 4.0).abs() < 1e-10);
+        assert!((vals[1] - 5.0).abs() < 1e-10);
+        assert!((vals[2] - 6.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_mul_basic() {
+        let a = float_vec(&[2.0, 3.0, 4.0]);
+        let b = float_vec(&[3.0, 4.0, 5.0]);
+        let result = native_vec_mul(&[a, b]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 6.0).abs() < 1e-10);
+        assert!((vals[1] - 12.0).abs() < 1e-10);
+        assert!((vals[2] - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_scale_basic() {
+        let v = float_vec(&[2.0, 4.0, 6.0]);
+        let result = native_vec_scale(&[v, Value::Float(0.5)]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 1.0).abs() < 1e-10);
+        assert!((vals[1] - 2.0).abs() < 1e-10);
+        assert!((vals[2] - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_scale_negative() {
+        let v = float_vec(&[1.0, 2.0]);
+        let result = native_vec_scale(&[v, Value::Float(-2.0)]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] + 2.0).abs() < 1e-10);
+        assert!((vals[1] + 4.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_dot_basic() {
+        let a = float_vec(&[1.0, 2.0, 3.0]);
+        let b = float_vec(&[4.0, 5.0, 6.0]);
+        let result = native_vec_dot(&[a, b]).unwrap();
+        // 1*4 + 2*5 + 3*6 = 4 + 10 + 18 = 32
+        assert!((as_float(&result) - 32.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_dot_perpendicular() {
+        let a = float_vec(&[1.0, 0.0]);
+        let b = float_vec(&[0.0, 1.0]);
+        let result = native_vec_dot(&[a, b]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_cross_basic() {
+        let a = float_vec(&[1.0, 0.0, 0.0]);
+        let b = float_vec(&[0.0, 1.0, 0.0]);
+        let result = native_vec_cross(&[a, b]).unwrap();
+        let vals = as_float_vec(&result);
+        // i × j = k
+        assert!(vals[0].abs() < 1e-10);
+        assert!(vals[1].abs() < 1e-10);
+        assert!((vals[2] - 1.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_cross_anti_commutative() {
+        let a = float_vec(&[1.0, 2.0, 3.0]);
+        let b = float_vec(&[4.0, 5.0, 6.0]);
+        let ab = native_vec_cross(&[a.clone(), b.clone()]).unwrap();
+        let ba = native_vec_cross(&[b, a]).unwrap();
+        let ab_vals = as_float_vec(&ab);
+        let ba_vals = as_float_vec(&ba);
+        // a × b = -(b × a)
+        for i in 0..3 {
+            assert!((ab_vals[i] + ba_vals[i]).abs() < 1e-10);
+        }
+    }
+
+    #[test]
+    fn test_vec_cross_non_3d_fails() {
+        let a = float_vec(&[1.0, 2.0]);
+        let b = float_vec(&[3.0, 4.0]);
+        assert!(native_vec_cross(&[a, b]).is_err());
+    }
+
+    #[test]
+    fn test_vec_length_basic() {
+        let v = float_vec(&[3.0, 4.0]);
+        let result = native_vec_length(&[v]).unwrap();
+        assert!((as_float(&result) - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_length_3d() {
+        let v = float_vec(&[1.0, 2.0, 2.0]);
+        let result = native_vec_length(&[v]).unwrap();
+        // sqrt(1 + 4 + 4) = 3
+        assert!((as_float(&result) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_length_zero() {
+        let v = float_vec(&[0.0, 0.0, 0.0]);
+        let result = native_vec_length(&[v]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_length_sq_basic() {
+        let v = float_vec(&[3.0, 4.0]);
+        let result = native_vec_length_sq(&[v]).unwrap();
+        // 9 + 16 = 25
+        assert!((as_float(&result) - 25.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_normalize_basic() {
+        let v = float_vec(&[3.0, 4.0]);
+        let result = native_vec_normalize(&[v]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 0.6).abs() < 1e-10);
+        assert!((vals[1] - 0.8).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_normalize_unit() {
+        let v = float_vec(&[1.0, 0.0, 0.0]);
+        let result = native_vec_normalize(&[v]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 1.0).abs() < 1e-10);
+        assert!(vals[1].abs() < 1e-10);
+        assert!(vals[2].abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_normalize_zero_returns_zero() {
+        let v = float_vec(&[0.0, 0.0]);
+        let result = native_vec_normalize(&[v]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!(vals[0].abs() < 1e-10);
+        assert!(vals[1].abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_distance_basic() {
+        let a = float_vec(&[0.0, 0.0]);
+        let b = float_vec(&[3.0, 4.0]);
+        let result = native_vec_distance(&[a, b]).unwrap();
+        assert!((as_float(&result) - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_distance_same_point() {
+        let a = float_vec(&[5.0, 5.0, 5.0]);
+        let b = float_vec(&[5.0, 5.0, 5.0]);
+        let result = native_vec_distance(&[a, b]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_lerp_t0() {
+        let a = float_vec(&[0.0, 0.0]);
+        let b = float_vec(&[10.0, 20.0]);
+        let result = native_vec_lerp(&[a, b, Value::Float(0.0)]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!(vals[0].abs() < 1e-10);
+        assert!(vals[1].abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_lerp_t1() {
+        let a = float_vec(&[0.0, 0.0]);
+        let b = float_vec(&[10.0, 20.0]);
+        let result = native_vec_lerp(&[a, b, Value::Float(1.0)]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 10.0).abs() < 1e-10);
+        assert!((vals[1] - 20.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_lerp_t_half() {
+        let a = float_vec(&[0.0, 0.0]);
+        let b = float_vec(&[10.0, 20.0]);
+        let result = native_vec_lerp(&[a, b, Value::Float(0.5)]).unwrap();
+        let vals = as_float_vec(&result);
+        assert!((vals[0] - 5.0).abs() < 1e-10);
+        assert!((vals[1] - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_angle_perpendicular() {
+        let a = float_vec(&[1.0, 0.0]);
+        let b = float_vec(&[0.0, 1.0]);
+        let result = native_vec_angle(&[a, b]).unwrap();
+        assert!((as_float(&result) - PI / 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_angle_same_direction() {
+        let a = float_vec(&[1.0, 0.0]);
+        let b = float_vec(&[2.0, 0.0]);
+        let result = native_vec_angle(&[a, b]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_angle_opposite() {
+        let a = float_vec(&[1.0, 0.0]);
+        let b = float_vec(&[-1.0, 0.0]);
+        let result = native_vec_angle(&[a, b]).unwrap();
+        assert!((as_float(&result) - PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_vec_angle_zero_vector() {
+        let a = float_vec(&[0.0, 0.0]);
+        let b = float_vec(&[1.0, 0.0]);
+        let result = native_vec_angle(&[a, b]).unwrap();
+        // Zero vector returns 0 angle
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    // ==================== Math Constants ====================
+
+    #[test]
+    fn test_pi_constant() {
+        let result = native_pi(&[]).unwrap();
+        assert!((as_float(&result) - PI).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_e_constant() {
+        let result = native_e(&[]).unwrap();
+        assert!((as_float(&result) - std::f64::consts::E).abs() < 1e-10);
+    }
+
+    // ==================== Utility Math Functions ====================
+
+    #[test]
+    fn test_clamp_within_range() {
+        let result =
+            native_clamp(&[Value::Float(5.0), Value::Float(0.0), Value::Float(10.0)]).unwrap();
+        assert!((as_float(&result) - 5.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_clamp_below_min() {
+        let result =
+            native_clamp(&[Value::Float(-5.0), Value::Float(0.0), Value::Float(10.0)]).unwrap();
+        assert!(as_float(&result).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_clamp_above_max() {
+        let result =
+            native_clamp(&[Value::Float(15.0), Value::Float(0.0), Value::Float(10.0)]).unwrap();
+        assert!((as_float(&result) - 10.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_trunc_positive() {
+        let result = native_trunc(&[Value::Float(3.7)]).unwrap();
+        assert!((as_float(&result) - 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_trunc_negative() {
+        let result = native_trunc(&[Value::Float(-3.7)]).unwrap();
+        assert!((as_float(&result) + 3.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_rem_positive() {
+        let result = native_rem(&[Value::Int(10), Value::Int(3)]).unwrap();
+        match result {
+            Value::Int(v) => assert_eq!(v, 1),
+            _ => panic!("Expected int"),
+        }
+    }
+
+    #[test]
+    fn test_rem_float() {
+        let result = native_rem(&[Value::Float(10.5), Value::Float(3.0)]).unwrap();
+        assert!((as_float(&result) - 1.5).abs() < 1e-10);
+    }
+}

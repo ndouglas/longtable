@@ -523,6 +523,313 @@ fn bench_native_functions(c: &mut Criterion) {
 }
 
 // =============================================================================
+// Standard Library Benchmarks
+// =============================================================================
+
+fn bench_stdlib(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stdlib");
+
+    // Higher-order functions: map, filter, reduce
+    let map_small = compile("(map inc [1 2 3 4 5])").unwrap();
+    group.bench_function("map_small", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&map_small))
+        })
+    });
+
+    let map_medium = compile("(map inc (range 100))").unwrap();
+    group.bench_function("map_medium", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&map_medium))
+        })
+    });
+
+    let filter_small = compile("(filter even? [1 2 3 4 5 6 7 8 9 10])").unwrap();
+    group.bench_function("filter_small", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&filter_small))
+        })
+    });
+
+    let filter_medium = compile("(filter even? (range 100))").unwrap();
+    group.bench_function("filter_medium", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&filter_medium))
+        })
+    });
+
+    let reduce_sum = compile("(reduce + 0 (range 100))").unwrap();
+    group.bench_function("reduce_sum", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&reduce_sum))
+        })
+    });
+
+    let reduce_product = compile("(reduce * 1 [1 2 3 4 5 6 7 8 9 10])").unwrap();
+    group.bench_function("reduce_product", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&reduce_product))
+        })
+    });
+
+    // Sequence operations
+    let take_drop = compile("(take 50 (drop 25 (range 100)))").unwrap();
+    group.bench_function("take_drop", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&take_drop))
+        })
+    });
+
+    let concat_vecs = compile("(concat [1 2 3] [4 5 6] [7 8 9])").unwrap();
+    group.bench_function("concat", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&concat_vecs))
+        })
+    });
+
+    let reverse_vec = compile("(reverse (range 100))").unwrap();
+    group.bench_function("reverse", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&reverse_vec))
+        })
+    });
+
+    let sort_vec = compile("(sort [5 2 8 1 9 3 7 4 6 10])").unwrap();
+    group.bench_function("sort", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&sort_vec))
+        })
+    });
+
+    // Range generation
+    let range_100 = compile("(range 100)").unwrap();
+    group.bench_function("range_100", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&range_100))
+        })
+    });
+
+    let range_step = compile("(range 0 100 2)").unwrap();
+    group.bench_function("range_step", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&range_step))
+        })
+    });
+
+    // String operations
+    let str_split = compile(r#"(str/split "a,b,c,d,e,f,g,h,i,j" ",")"#).unwrap();
+    group.bench_function("str_split", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&str_split))
+        })
+    });
+
+    let str_join = compile(r#"(str/join "," ["a" "b" "c" "d" "e" "f" "g" "h" "i" "j"])"#).unwrap();
+    group.bench_function("str_join", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&str_join))
+        })
+    });
+
+    let str_replace = compile(r#"(str/replace-all "hello world hello" "hello" "hi")"#).unwrap();
+    group.bench_function("str_replace_all", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&str_replace))
+        })
+    });
+
+    let format_str = compile(r#"(format "x={} y={} z={}" 1 2 3)"#).unwrap();
+    group.bench_function("format", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&format_str))
+        })
+    });
+
+    // Math operations
+    let trig_sin = compile("(sin 1.5)").unwrap();
+    group.bench_function("sin", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&trig_sin))
+        })
+    });
+
+    let trig_cos = compile("(cos 1.5)").unwrap();
+    group.bench_function("cos", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&trig_cos))
+        })
+    });
+
+    let pow_calc = compile("(pow 2 10)").unwrap();
+    group.bench_function("pow", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&pow_calc))
+        })
+    });
+
+    let log_calc = compile("(log 100)").unwrap();
+    group.bench_function("log", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&log_calc))
+        })
+    });
+
+    // Vector math
+    let vec_add = compile("(vec+ [1.0 2.0 3.0] [4.0 5.0 6.0])").unwrap();
+    group.bench_function("vec_add", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vec_add))
+        })
+    });
+
+    let vec_dot = compile("(vec-dot [1.0 2.0 3.0] [4.0 5.0 6.0])").unwrap();
+    group.bench_function("vec_dot", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vec_dot))
+        })
+    });
+
+    let vec_normalize = compile("(vec-normalize [3.0 4.0 0.0])").unwrap();
+    group.bench_function("vec_normalize", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vec_normalize))
+        })
+    });
+
+    let vec_cross = compile("(vec-cross [1.0 0.0 0.0] [0.0 1.0 0.0])").unwrap();
+    group.bench_function("vec_cross", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vec_cross))
+        })
+    });
+
+    // Collection predicates
+    let every_check = compile("(every? even? [2 4 6 8 10])").unwrap();
+    group.bench_function("every?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&every_check))
+        })
+    });
+
+    let some_check = compile("(some even? [1 3 5 7 8 9])").unwrap();
+    group.bench_function("some", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&some_check))
+        })
+    });
+
+    // Extended collections
+    let flatten_vec = compile("(flatten [[1 2] [3 [4 5]] [6]])").unwrap();
+    group.bench_function("flatten", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&flatten_vec))
+        })
+    });
+
+    let distinct_vec = compile("(distinct [1 2 1 3 2 4 3 5 4 1])").unwrap();
+    group.bench_function("distinct", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&distinct_vec))
+        })
+    });
+
+    let partition_vec = compile("(partition 3 [1 2 3 4 5 6 7 8 9])").unwrap();
+    group.bench_function("partition", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&partition_vec))
+        })
+    });
+
+    let interleave_vecs = compile("(interleave [1 2 3] [:a :b :c])").unwrap();
+    group.bench_function("interleave", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&interleave_vecs))
+        })
+    });
+
+    let zip_vecs = compile("(zip [1 2 3] [:a :b :c])").unwrap();
+    group.bench_function("zip", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&zip_vecs))
+        })
+    });
+
+    // Chained operations (realistic use)
+    let chain_ops = compile("(reduce + 0 (filter even? (map inc (range 100))))").unwrap();
+    group.bench_function("chain_ops", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&chain_ops))
+        })
+    });
+
+    group.finish();
+}
+
+// =============================================================================
 // End-to-End Benchmarks
 // =============================================================================
 
@@ -585,6 +892,7 @@ criterion_group!(
     bench_function_calls,
     bench_recursion,
     bench_native_functions,
+    bench_stdlib,
     bench_end_to_end,
     bench_throughput,
 );

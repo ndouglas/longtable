@@ -998,3 +998,321 @@ pub(crate) fn native_repeat(args: &[Value]) -> Result<Value> {
         })),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper to create a vector from values
+    fn vec_of(values: &[Value]) -> Value {
+        Value::Vec(values.iter().cloned().collect())
+    }
+
+    // ==========================================================================
+    // Stage S5: Extended Collection Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_flatten_nested_vectors() {
+        let inner1 = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let inner2 = vec_of(&[Value::Int(3), Value::Int(4)]);
+        let outer = vec_of(&[inner1, inner2]);
+
+        let result = native_flatten(&[outer]).unwrap();
+        let expected = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_flatten_mixed() {
+        let inner = vec_of(&[Value::Int(2), Value::Int(3)]);
+        let outer = vec_of(&[Value::Int(1), inner, Value::Int(4)]);
+
+        let result = native_flatten(&[outer]).unwrap();
+        let expected = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_flatten_empty() {
+        let empty = vec_of(&[]);
+        let result = native_flatten(&[empty]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_flatten_nil() {
+        let result = native_flatten(&[Value::Nil]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_distinct_removes_duplicates() {
+        let input = vec_of(&[
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(1),
+            Value::Int(3),
+            Value::Int(2),
+        ]);
+        let result = native_distinct(&[input]).unwrap();
+        let expected = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_distinct_preserves_order() {
+        let input = vec_of(&[Value::Int(3), Value::Int(1), Value::Int(2), Value::Int(1)]);
+        let result = native_distinct(&[input]).unwrap();
+        let expected = vec_of(&[Value::Int(3), Value::Int(1), Value::Int(2)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_distinct_empty() {
+        let result = native_distinct(&[vec_of(&[])]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_dedupe_consecutive() {
+        let input = vec_of(&[
+            Value::Int(1),
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(2),
+            Value::Int(1),
+        ]);
+        let result = native_dedupe(&[input]).unwrap();
+        let expected = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(1)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_dedupe_no_consecutive() {
+        let input = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let result = native_dedupe(&[input.clone()]).unwrap();
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_dedupe_all_same() {
+        let input = vec_of(&[Value::Int(5), Value::Int(5), Value::Int(5)]);
+        let result = native_dedupe(&[input]).unwrap();
+        assert_eq!(result, vec_of(&[Value::Int(5)]));
+    }
+
+    #[test]
+    fn test_partition_exact() {
+        let input = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]);
+        let result = native_partition(&[Value::Int(2), input]).unwrap();
+
+        let g1 = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let g2 = vec_of(&[Value::Int(3), Value::Int(4)]);
+        let expected = vec_of(&[g1, g2]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_partition_drops_incomplete() {
+        let input = vec_of(&[
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4),
+            Value::Int(5),
+        ]);
+        let result = native_partition(&[Value::Int(2), input]).unwrap();
+
+        let g1 = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let g2 = vec_of(&[Value::Int(3), Value::Int(4)]);
+        let expected = vec_of(&[g1, g2]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_partition_all_includes_incomplete() {
+        let input = vec_of(&[
+            Value::Int(1),
+            Value::Int(2),
+            Value::Int(3),
+            Value::Int(4),
+            Value::Int(5),
+        ]);
+        let result = native_partition_all(&[Value::Int(2), input]).unwrap();
+
+        let g1 = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let g2 = vec_of(&[Value::Int(3), Value::Int(4)]);
+        let g3 = vec_of(&[Value::Int(5)]);
+        let expected = vec_of(&[g1, g2, g3]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_partition_size_larger_than_input() {
+        let input = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let result = native_partition(&[Value::Int(5), input]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_partition_all_size_larger_than_input() {
+        let input = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let result = native_partition_all(&[Value::Int(5), input]).unwrap();
+        let expected = vec_of(&[vec_of(&[Value::Int(1), Value::Int(2)])]);
+        assert_eq!(result, expected);
+    }
+
+    // ==========================================================================
+    // Stage S7: Combining Function Tests
+    // ==========================================================================
+
+    #[test]
+    fn test_interleave_two_vectors() {
+        let v1 = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let v2 = vec_of(&[Value::Int(10), Value::Int(20), Value::Int(30)]);
+        let result = native_interleave(&[v1, v2]).unwrap();
+
+        let expected = vec_of(&[
+            Value::Int(1),
+            Value::Int(10),
+            Value::Int(2),
+            Value::Int(20),
+            Value::Int(3),
+            Value::Int(30),
+        ]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interleave_three_vectors() {
+        let v1 = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let v2 = vec_of(&[Value::Int(10), Value::Int(20)]);
+        let v3 = vec_of(&[Value::Int(100), Value::Int(200)]);
+        let result = native_interleave(&[v1, v2, v3]).unwrap();
+
+        let expected = vec_of(&[
+            Value::Int(1),
+            Value::Int(10),
+            Value::Int(100),
+            Value::Int(2),
+            Value::Int(20),
+            Value::Int(200),
+        ]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interleave_unequal_lengths() {
+        let v1 = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let v2 = vec_of(&[Value::Int(10)]);
+        let result = native_interleave(&[v1, v2]).unwrap();
+
+        // Stops at shortest
+        let expected = vec_of(&[Value::Int(1), Value::Int(10)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interleave_empty() {
+        let result = native_interleave(&[]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_interpose_basic() {
+        let input = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let result = native_interpose(&[Value::Int(0), input]).unwrap();
+
+        let expected = vec_of(&[
+            Value::Int(1),
+            Value::Int(0),
+            Value::Int(2),
+            Value::Int(0),
+            Value::Int(3),
+        ]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_interpose_single_element() {
+        let input = vec_of(&[Value::Int(1)]);
+        let result = native_interpose(&[Value::Int(0), input]).unwrap();
+        assert_eq!(result, vec_of(&[Value::Int(1)]));
+    }
+
+    #[test]
+    fn test_interpose_empty() {
+        let input = vec_of(&[]);
+        let result = native_interpose(&[Value::Int(0), input]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_zip_two_vectors() {
+        let v1 = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let v2 = vec_of(&[Value::Int(10), Value::Int(20), Value::Int(30)]);
+        let result = native_zip(&[v1, v2]).unwrap();
+
+        let t1 = vec_of(&[Value::Int(1), Value::Int(10)]);
+        let t2 = vec_of(&[Value::Int(2), Value::Int(20)]);
+        let t3 = vec_of(&[Value::Int(3), Value::Int(30)]);
+        let expected = vec_of(&[t1, t2, t3]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_zip_three_vectors() {
+        let v1 = vec_of(&[Value::Int(1), Value::Int(2)]);
+        let v2 = vec_of(&[Value::Int(10), Value::Int(20)]);
+        let v3 = vec_of(&[Value::Int(100), Value::Int(200)]);
+        let result = native_zip(&[v1, v2, v3]).unwrap();
+
+        let t1 = vec_of(&[Value::Int(1), Value::Int(10), Value::Int(100)]);
+        let t2 = vec_of(&[Value::Int(2), Value::Int(20), Value::Int(200)]);
+        let expected = vec_of(&[t1, t2]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_zip_unequal_lengths() {
+        let v1 = vec_of(&[Value::Int(1), Value::Int(2), Value::Int(3)]);
+        let v2 = vec_of(&[Value::Int(10)]);
+        let result = native_zip(&[v1, v2]).unwrap();
+
+        let expected = vec_of(&[vec_of(&[Value::Int(1), Value::Int(10)])]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_zip_empty() {
+        let result = native_zip(&[]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_repeat_basic() {
+        let result = native_repeat(&[Value::Int(3), Value::Int(42)]).unwrap();
+        let expected = vec_of(&[Value::Int(42), Value::Int(42), Value::Int(42)]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_repeat_zero() {
+        let result = native_repeat(&[Value::Int(0), Value::Int(42)]).unwrap();
+        assert_eq!(result, vec_of(&[]));
+    }
+
+    #[test]
+    fn test_repeat_with_string() {
+        let result = native_repeat(&[Value::Int(2), Value::String("hi".into())]).unwrap();
+        let expected = vec_of(&[Value::String("hi".into()), Value::String("hi".into())]);
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_repeat_negative_fails() {
+        let result = native_repeat(&[Value::Int(-1), Value::Int(42)]);
+        assert!(result.is_err());
+    }
+}

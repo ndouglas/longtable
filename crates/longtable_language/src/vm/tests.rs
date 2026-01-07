@@ -1267,3 +1267,317 @@ fn eval_constants() {
         _ => panic!("Expected Float"),
     }
 }
+
+// =============================================================================
+// Higher-Order Function Opcode Tests
+// =============================================================================
+
+// Helper predicates as lambdas (native functions can't be passed directly)
+// even? = (fn [x] (= (mod x 2) 0))
+// pos? = (fn [x] (> x 0))
+// neg? = (fn [x] (< x 0))
+
+#[test]
+fn eval_take_while_basic() {
+    // Take elements while predicate is true (even numbers)
+    let result = eval_test("(take-while (fn [x] (= (mod x 2) 0)) [2 4 6 1 8 10])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], &Value::Int(2));
+            assert_eq!(items[1], &Value::Int(4));
+            assert_eq!(items[2], &Value::Int(6));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_take_while_all_match() {
+    // All elements match predicate (positive)
+    let result = eval_test("(take-while (fn [x] (> x 0)) [1 2 3 4 5])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 5);
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_take_while_none_match() {
+    // First element doesn't match (no negative numbers)
+    let result = eval_test("(take-while (fn [x] (< x 0)) [1 2 3])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_take_while_empty() {
+    // Empty input
+    let result = eval_test("(take-while (fn [x] (= (mod x 2) 0)) [])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_drop_while_basic() {
+    // Drop elements while predicate is true (even numbers)
+    let result = eval_test("(drop-while (fn [x] (= (mod x 2) 0)) [2 4 6 1 8 10])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], &Value::Int(1));
+            assert_eq!(items[1], &Value::Int(8));
+            assert_eq!(items[2], &Value::Int(10));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_drop_while_all_match() {
+    // All elements match predicate - result is empty
+    let result = eval_test("(drop-while (fn [x] (> x 0)) [1 2 3 4 5])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_drop_while_none_match() {
+    // First element doesn't match - keep all
+    let result = eval_test("(drop-while (fn [x] (< x 0)) [1 2 3])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_drop_while_empty() {
+    // Empty input
+    let result = eval_test("(drop-while (fn [x] (= (mod x 2) 0)) [])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_remove_basic() {
+    // Remove where predicate is true (inverse of filter)
+    let result = eval_test("(remove (fn [x] (= (mod x 2) 0)) [1 2 3 4 5 6])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], &Value::Int(1));
+            assert_eq!(items[1], &Value::Int(3));
+            assert_eq!(items[2], &Value::Int(5));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_remove_all() {
+    // All elements match - result is empty
+    let result = eval_test("(remove (fn [x] (= (mod x 2) 0)) [2 4 6])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_remove_none() {
+    // No elements match - keep all
+    let result = eval_test("(remove (fn [x] (= (mod x 2) 0)) [1 3 5])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_remove_empty() {
+    // Empty input
+    let result = eval_test("(remove (fn [x] (= (mod x 2) 0)) [])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_group_by_basic() {
+    // Group by even/odd
+    let result = eval_test("(group-by (fn [x] (= (mod x 2) 0)) [1 2 3 4 5 6])");
+    match result {
+        Value::Map(m) => {
+            assert_eq!(m.len(), 2);
+            // Check true group (even numbers)
+            let true_group = m.get(&Value::Bool(true)).expect("missing true group");
+            match true_group {
+                Value::Vec(v) => {
+                    let items: Vec<_> = v.iter().collect();
+                    assert_eq!(items.len(), 3);
+                    assert!(items.contains(&&Value::Int(2)));
+                    assert!(items.contains(&&Value::Int(4)));
+                    assert!(items.contains(&&Value::Int(6)));
+                }
+                _ => panic!("Expected Vec"),
+            }
+            // Check false group (odd numbers)
+            let false_group = m.get(&Value::Bool(false)).expect("missing false group");
+            match false_group {
+                Value::Vec(v) => {
+                    let items: Vec<_> = v.iter().collect();
+                    assert_eq!(items.len(), 3);
+                    assert!(items.contains(&&Value::Int(1)));
+                    assert!(items.contains(&&Value::Int(3)));
+                    assert!(items.contains(&&Value::Int(5)));
+                }
+                _ => panic!("Expected Vec"),
+            }
+        }
+        _ => panic!("Expected Map"),
+    }
+}
+
+#[test]
+fn eval_group_by_empty() {
+    // Empty input
+    let result = eval_test("(group-by (fn [x] (= (mod x 2) 0)) [])");
+    match result {
+        Value::Map(m) => assert!(m.is_empty()),
+        _ => panic!("Expected Map"),
+    }
+}
+
+#[test]
+fn eval_group_by_single_group() {
+    // All elements in same group
+    let result = eval_test("(group-by (fn [x] (= (mod x 2) 0)) [2 4 6])");
+    match result {
+        Value::Map(m) => {
+            assert_eq!(m.len(), 1);
+            assert!(m.contains_key(&Value::Bool(true)));
+        }
+        _ => panic!("Expected Map"),
+    }
+}
+
+#[test]
+fn eval_zip_with_basic() {
+    // Zip with addition
+    let result = eval_test("(zip-with (fn [a b] (+ a b)) [1 2 3] [10 20 30])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], &Value::Int(11));
+            assert_eq!(items[1], &Value::Int(22));
+            assert_eq!(items[2], &Value::Int(33));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_zip_with_different_lengths() {
+    // Stops at shorter
+    let result = eval_test("(zip-with (fn [a b] (+ a b)) [1 2] [10 20 30])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0], &Value::Int(11));
+            assert_eq!(items[1], &Value::Int(22));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_zip_with_empty() {
+    // Empty input
+    let result = eval_test("(zip-with (fn [a b] (+ a b)) [] [1 2 3])");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_zip_with_multiply() {
+    // Zip with multiplication
+    let result = eval_test("(zip-with (fn [a b] (* a b)) [2 3 4] [5 6 7])");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], &Value::Int(10));
+            assert_eq!(items[1], &Value::Int(18));
+            assert_eq!(items[2], &Value::Int(28));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_repeatedly_basic() {
+    // Generate values
+    let result = eval_test("(repeatedly 5 (fn [] 42))");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 5);
+            for item in items {
+                assert_eq!(item, &Value::Int(42));
+            }
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_repeatedly_zero() {
+    // Zero times
+    let result = eval_test("(repeatedly 0 (fn [] 42))");
+    match result {
+        Value::Vec(v) => assert!(v.is_empty()),
+        _ => panic!("Expected Vec"),
+    }
+}
+
+#[test]
+fn eval_repeatedly_with_closure() {
+    // The function is called repeatedly (each call is independent)
+    let result = eval_test("(repeatedly 3 (fn [] (+ 1 2)))");
+    match result {
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().collect();
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], &Value::Int(3));
+            assert_eq!(items[1], &Value::Int(3));
+            assert_eq!(items[2], &Value::Int(3));
+        }
+        _ => panic!("Expected Vec"),
+    }
+}
