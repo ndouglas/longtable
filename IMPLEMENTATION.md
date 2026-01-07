@@ -1190,11 +1190,11 @@ struct CompositeIndex {
 
 ### Performance Targets
 
-| Operation | Without Index | With Single Index | With Composite |
-|-----------|---------------|-------------------|----------------|
-| `has_outgoing(e, rel)` | O(n) | O(k) | O(1) |
-| `find_relationships(type, source, _)` | O(n) | O(k) | O(1) |
-| Cardinality check | O(n) | O(k) | O(1) |
+| Operation                             | Without Index | With Single Index | With Composite |
+| ------------------------------------- | ------------- | ----------------- | -------------- |
+| `has_outgoing(e, rel)`                | O(n)          | O(k)              | O(1)           |
+| `find_relationships(type, source, _)` | O(n)          | O(k)              | O(1)           |
+| Cardinality check                     | O(n)          | O(k)              | O(1)           |
 
 Where n = total entities, k = relationships from/to specific entity.
 

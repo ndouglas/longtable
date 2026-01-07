@@ -830,6 +830,422 @@ fn bench_stdlib(c: &mut Criterion) {
 }
 
 // =============================================================================
+// Additional Stdlib Benchmarks (Stage 2)
+// =============================================================================
+
+fn bench_stdlib_extended(c: &mut Criterion) {
+    let mut group = c.benchmark_group("stdlib_extended");
+
+    // Additional collection functions
+    let empty_vec = compile("(empty? [])").unwrap();
+    group.bench_function("empty?_vec", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&empty_vec))
+        })
+    });
+
+    let last_vec = compile("(last [1 2 3 4 5])").unwrap();
+    group.bench_function("last", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&last_vec))
+        })
+    });
+
+    let nth_vec = compile("(nth [1 2 3 4 5] 3)").unwrap();
+    group.bench_function("nth", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&nth_vec))
+        })
+    });
+
+    let cons_vec = compile("(cons 0 [1 2 3])").unwrap();
+    group.bench_function("cons", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&cons_vec))
+        })
+    });
+
+    let dissoc_map = compile("(dissoc {:a 1 :b 2 :c 3} :b)").unwrap();
+    group.bench_function("dissoc", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&dissoc_map))
+        })
+    });
+
+    let contains_map = compile("(contains? {:a 1 :b 2} :b)").unwrap();
+    group.bench_function("contains?_map", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&contains_map))
+        })
+    });
+
+    let contains_set = compile("(contains? #{1 2 3 4 5} 3)").unwrap();
+    group.bench_function("contains?_set", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&contains_set))
+        })
+    });
+
+    let keys_map = compile("(keys {:a 1 :b 2 :c 3 :d 4 :e 5})").unwrap();
+    group.bench_function("keys", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&keys_map))
+        })
+    });
+
+    let vals_map = compile("(vals {:a 1 :b 2 :c 3 :d 4 :e 5})").unwrap();
+    group.bench_function("vals", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vals_map))
+        })
+    });
+
+    let merge_maps = compile("(merge {:a 1 :b 2} {:c 3 :d 4} {:e 5})").unwrap();
+    group.bench_function("merge", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&merge_maps))
+        })
+    });
+
+    let into_vec = compile("(into [1 2 3] [4 5 6])").unwrap();
+    group.bench_function("into", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&into_vec))
+        })
+    });
+
+    // Extended sequence ops
+    let dedupe_vec = compile("(dedupe [1 1 2 2 3 3 2 2 1 1])").unwrap();
+    group.bench_function("dedupe", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&dedupe_vec))
+        })
+    });
+
+    let partition_all = compile("(partition-all 3 [1 2 3 4 5 6 7 8])").unwrap();
+    group.bench_function("partition-all", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&partition_all))
+        })
+    });
+
+    let interpose_vec = compile("(interpose :sep [1 2 3 4 5])").unwrap();
+    group.bench_function("interpose", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&interpose_vec))
+        })
+    });
+
+    let repeat_val = compile("(repeat 10 :x)").unwrap();
+    group.bench_function("repeat", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&repeat_val))
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_type_predicates(c: &mut Criterion) {
+    let mut group = c.benchmark_group("type_predicates");
+
+    let bool_check = compile("(bool? true)").unwrap();
+    group.bench_function("bool?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&bool_check))
+        })
+    });
+
+    let string_check = compile(r#"(string? "hello")"#).unwrap();
+    group.bench_function("string?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&string_check))
+        })
+    });
+
+    let keyword_check = compile("(keyword? :test)").unwrap();
+    group.bench_function("keyword?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&keyword_check))
+        })
+    });
+
+    let vector_check = compile("(vector? [1 2 3])").unwrap();
+    group.bench_function("vector?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vector_check))
+        })
+    });
+
+    let map_check = compile("(map? {:a 1})").unwrap();
+    group.bench_function("map?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&map_check))
+        })
+    });
+
+    let set_check = compile("(set? #{1 2 3})").unwrap();
+    group.bench_function("set?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&set_check))
+        })
+    });
+
+    let number_check = compile("(number? 42)").unwrap();
+    group.bench_function("number?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&number_check))
+        })
+    });
+
+    let coll_check = compile("(coll? [1 2 3])").unwrap();
+    group.bench_function("coll?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&coll_check))
+        })
+    });
+
+    let fn_check = compile("(fn? inc)").unwrap();
+    group.bench_function("fn?", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&fn_check))
+        })
+    });
+
+    let type_of = compile("(type [1 2 3])").unwrap();
+    group.bench_function("type", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&type_of))
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_math_extended(c: &mut Criterion) {
+    let mut group = c.benchmark_group("math_extended");
+
+    let abs_int = compile("(abs -42)").unwrap();
+    group.bench_function("abs", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&abs_int))
+        })
+    });
+
+    let floor_float = compile("(floor 3.7)").unwrap();
+    group.bench_function("floor", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&floor_float))
+        })
+    });
+
+    let ceil_float = compile("(ceil 3.2)").unwrap();
+    group.bench_function("ceil", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&ceil_float))
+        })
+    });
+
+    let round_float = compile("(round 3.5)").unwrap();
+    group.bench_function("round", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&round_float))
+        })
+    });
+
+    let tan_calc = compile("(tan 0.5)").unwrap();
+    group.bench_function("tan", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&tan_calc))
+        })
+    });
+
+    let clamp_calc = compile("(clamp 15 0 10)").unwrap();
+    group.bench_function("clamp", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&clamp_calc))
+        })
+    });
+
+    let rem_calc = compile("(rem 17 5)").unwrap();
+    group.bench_function("rem", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&rem_calc))
+        })
+    });
+
+    let inc_val = compile("(inc 41)").unwrap();
+    group.bench_function("inc", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&inc_val))
+        })
+    });
+
+    let dec_val = compile("(dec 43)").unwrap();
+    group.bench_function("dec", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&dec_val))
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_scale_operations(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scale_operations");
+
+    // Map at various scales
+    let map_1k = compile("(map inc (range 1000))").unwrap();
+    group.bench_function("map_1k", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&map_1k))
+        })
+    });
+
+    // Filter at various scales
+    let filter_1k = compile("(filter even? (range 1000))").unwrap();
+    group.bench_function("filter_1k", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&filter_1k))
+        })
+    });
+
+    // Reduce at various scales
+    let reduce_1k = compile("(reduce + 0 (range 1000))").unwrap();
+    group.bench_function("reduce_1k", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&reduce_1k))
+        })
+    });
+
+    // Sort at various scales
+    let sort_100 = compile("(sort (reverse (range 100)))").unwrap();
+    group.bench_function("sort_100", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&sort_100))
+        })
+    });
+
+    let sort_1k = compile("(sort (reverse (range 1000)))").unwrap();
+    group.bench_function("sort_1k", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&sort_1k))
+        })
+    });
+
+    // Chained operations at scale
+    let chain_1k = compile("(reduce + 0 (filter even? (map inc (range 1000))))").unwrap();
+    group.bench_function("chain_1k", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&chain_1k))
+        })
+    });
+
+    // Distinct at scale
+    let distinct_with_dups =
+        compile("(distinct (concat (range 100) (range 100) (range 100)))").unwrap();
+    group.bench_function("distinct_300_to_100", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&distinct_with_dups))
+        })
+    });
+
+    // Range generation
+    let range_1k = compile("(range 1000)").unwrap();
+    group.bench_function("range_1k", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&range_1k))
+        })
+    });
+
+    group.finish();
+}
+
+// =============================================================================
 // End-to-End Benchmarks
 // =============================================================================
 
@@ -893,6 +1309,10 @@ criterion_group!(
     bench_recursion,
     bench_native_functions,
     bench_stdlib,
+    bench_stdlib_extended,
+    bench_type_predicates,
+    bench_math_extended,
+    bench_scale_operations,
     bench_end_to_end,
     bench_throughput,
 );
