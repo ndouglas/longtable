@@ -1844,8 +1844,11 @@ pub fn compile_expression(ast: &Ast, binding_vars: &[String]) -> Result<Compiled
     let mut compiler = Compiler::new();
     // Pre-populate locals with binding vars - they'll be treated as locals
     // but we'll post-process to convert LoadLocal to LoadBinding
+    // Register both with and without ? prefix to support pattern variable syntax
     for (idx, var) in binding_vars.iter().enumerate() {
         compiler.locals.insert(var.clone(), idx as u16);
+        // Also register ?var for pattern variable syntax in return expressions
+        compiler.locals.insert(format!("?{var}"), idx as u16);
     }
     compiler.next_local = binding_vars.len() as u16;
 

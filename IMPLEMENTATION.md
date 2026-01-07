@@ -819,6 +819,7 @@ This matters especially for onboarding. A beginner shouldn't need to understand 
 - [x] Implement order-by and limit
 - [x] Implement query-one, query-count, query-exists?
 - [x] **Implement entity ordering warnings** (QueryWarning::EntityOrderingUnstable in query.rs)
+- [x] **Pattern variable syntax in return expressions** — `?var` syntax now works in :return, :let, :guard (compile_expression handles `?` prefix)
 - [x] Test with spec query examples (spec_query_* tests in query.rs)
 - [x] Benchmark: query at scale (query_execution/*/10000 benchmarks)
 
@@ -833,6 +834,19 @@ We allow ordered queries and entity iteration, but ordering on `EntityId` is alm
 - Consider requiring explicit opt-in: `:order-by [?e :entity-id]` vs implicit ordering
 - Document heavily that entity order is not stable across serialization/deserialization
 - In examples, always use explicit ordering criteria (`:order-by [?e :name/value]`)
+
+#### Known Limitation: Relationship Queries
+
+Pattern matching currently only supports component queries, not relationship queries. A pattern like `[?e :exit/north ?target]` is interpreted as a component lookup, not a relationship traversal.
+
+**Workaround**: Use native functions to query relationships:
+- `(targets world entity :relationship)` — get relationship targets
+- `(sources world entity :relationship)` — get reverse relationship sources
+
+**Future work**: Extend PatternMatcher to recognize relationship keywords and emit relationship traversal code. This requires:
+1. Schema awareness in pattern compiler (distinguish components vs relationships)
+2. New pattern clause type for relationships
+3. Cross-entity join logic in pattern matcher
 
 ### 4.4 Derived Components
 
@@ -962,6 +976,7 @@ Implement all spec functions organized by category:
 - [x] Special commands (inspect, tick!, save!, load-world!) — save world state, load world state, advance tick, inspect entity
 - [x] **DSL declaration execution** (component:, relationship:, spawn:, link:) — enables world construction via DSL
 - [x] Entity name registry for spawn:/link: resolution
+- [x] **Query execution** (query form) — compiles and executes queries, returns results as vectors
 - [x] Test: basic evaluation tests (7 tests)
 - [x] Test: interactive scenarios (7 tests for arithmetic chains, def/use, collections, strings, HOFs, math)
 - [x] Test: error recovery (4 tests for syntax errors, undefined vars, division by zero, type errors)
@@ -1009,6 +1024,174 @@ Rolled back to tick 0.
 > (save! "checkpoint.lt")
 Saved to checkpoint.lt
 ```
+
+---
+
+## Phase 5.5: Relationship Reification
+
+**Goal**: Unify relationships with entities for consistent query semantics.
+
+> **Context**: Pattern matching currently only supports component queries. Relationship queries like `[?e :exit/north ?target]` fail because the pattern matcher doesn't recognize relationships. Rather than add special-case code for relationships, we reify relationships as entities—making them queryable like any other data.
+>
+> **Priority**: This is being implemented NOW before Phase 6, as it's blocking the "adventure game runs end-to-end" MVP criterion. Relationship queries are essential for navigation rules.
+
+### Motivation
+
+Current state:
+- Relationships stored separately from components
+- Pattern matcher only iterates entities and checks components
+- `[?e :exit/north ?target]` interpreted as component lookup, fails
+
+After reification:
+- Every relationship is an entity with `:rel/type`, `:rel/source`, `:rel/target` components
+- Pattern matching "just works"—relationships are data like everything else
+- Can attach metadata to relationships (weight, locked?, bidirectional?)
+- Uniform query model, no special cases
+
+### Design Decisions
+
+**D1: Relationships are visible entities**
+Users can query `:rel/source` directly. Transparency over magic.
+
+**D2: Cardinality enforced at mutation time**
+`link:` checks cardinality BEFORE creating relationship entity. Synchronous errors, same UX as current system. The `relationship:` declaration registers cardinality rules that `link:` enforces.
+
+**D3: Garbage collection for orphaned relationships**
+When source or target entity is deleted, relationship entities must be cleaned up. Implemented via deletion hooks or constraints.
+
+**D4: Syntax sugar for relationship patterns**
+`[?e :exit/north ?t]` desugars to `[?r :rel/type :exit/north] [?r :rel/source ?e] [?r :rel/target ?t]` when `:exit/north` is a registered relationship.
+
+### 5.5.1 Infrastructure
+
+- [x] Add reserved components: `:rel/type`, `:rel/source`, `:rel/target` — plus `:value` field keyword
+- [x] Add `World::spawn_relationship(rel, source, target) -> Result<(World, EntityId)>`
+- [x] Add `World::find_relationships(rel_type?, source?, target?) -> Vec<EntityId>`
+- [x] Add `World::has_outgoing(source, rel) -> bool` (O(n) initially)
+- [x] Add `World::has_incoming(target, rel) -> bool` (O(n) initially)
+- [x] Test: infrastructure helpers work correctly (6 new tests in world.rs)
+
+### 5.5.2 Cardinality Enforcement
+
+- [x] Add `World::create_relationship(rel_type, source, target)` with cardinality enforcement
+- [x] OneToOne: check no existing outgoing OR incoming
+- [x] ManyToOne: check no existing outgoing
+- [x] OneToMany: check no existing incoming
+- [x] ManyToMany: no check needed
+- [x] Support `OnViolation::Error` and `OnViolation::Replace` strategies
+- [x] Test: cardinality violations return errors at link time (12 new tests)
+
+### 5.5.3 Dual-Write Migration
+
+- [ ] `link:` creates BOTH old-style relationship AND new relationship entity
+- [ ] Verify both storages stay in sync
+- [ ] Test: existing relationship tests still pass
+
+### 5.5.4 Query Migration
+
+- [ ] Update pattern compiler to recognize relationship keywords
+- [ ] Desugar `[?e :rel ?t]` to three-clause pattern when `:rel` is a relationship
+- [ ] Test: relationship queries return correct results
+- [ ] Test: adventure game relationship queries work
+
+### 5.5.5 Read Migration
+
+- [ ] Switch `targets()` to read from relationship entities
+- [ ] Switch `sources()` to read from relationship entities
+- [ ] Old storage becomes write-only
+- [ ] Test: relationship reads return same results
+
+### 5.5.6 Orphan Cleanup
+
+- [ ] On entity deletion, find and delete relationship entities where source OR target matches
+- [ ] Respect `on-target-delete` semantics (cascade vs remove)
+- [ ] Test: deleting entity cleans up relationships
+
+### 5.5.7 Remove Old Storage
+
+- [ ] Delete `RelationshipStore`
+- [ ] Remove dual-write from `link:`
+- [ ] Clean up unused code
+- [ ] Test: all tests pass with only new storage
+
+### Exit Criteria
+
+- [ ] Relationship queries work in pattern matcher
+- [ ] Cardinality enforced at `link:` time (synchronous errors)
+- [ ] Adventure game navigation queries work
+- [ ] No regression in existing relationship functionality
+- [ ] Old `RelationshipStore` deleted
+
+---
+
+## Phase 5.6: Component Value Indexing (Future)
+
+**Goal**: Efficient lookup of entities by component value.
+
+> **Note**: This phase is NOT required for MVP. It's documented here for future reference when O(n) scans become a bottleneck. Implement when relationship queries or cardinality checks are measurably slow (likely at 10k+ entities with many relationships).
+
+### Motivation
+
+Without indexes, queries like "find all relationships from Entity(5)" require O(n) scan over all entities. With indexes, this becomes O(1) lookup + O(k) iteration where k = number of matches.
+
+### 5.6.1 Single-Column Indexes
+
+Inverted index: `(component, value) → Set<EntityId>`
+
+```rust
+struct ComponentIndex {
+    index: HashMap<(KeywordId, Value), HashSet<EntityId>>,
+}
+```
+
+- [ ] Add `ComponentIndex` to World
+- [ ] Update `set()` to maintain index
+- [ ] Update `remove_component()` to maintain index
+- [ ] Add `World::find_by_value(component, value) -> Vec<EntityId>`
+- [ ] Index `:rel/type`, `:rel/source`, `:rel/target` by default
+- [ ] Benchmark: cardinality check performance improvement
+
+### 5.6.2 Composite Indexes
+
+For multi-column lookups: `(source, rel_type) → Set<EntityId>`
+
+```rust
+struct CompositeIndex {
+    // (source_entity, rel_type) -> relationship entities
+    by_source_and_type: HashMap<(EntityId, KeywordId), HashSet<EntityId>>,
+    // (target_entity, rel_type) -> relationship entities
+    by_target_and_type: HashMap<(EntityId, KeywordId), HashSet<EntityId>>,
+}
+```
+
+- [ ] Add composite index for relationship queries
+- [ ] `has_outgoing(source, rel)` becomes O(1)
+- [ ] `has_incoming(target, rel)` becomes O(1)
+- [ ] Benchmark: relationship query performance at 100k entities
+
+### 5.6.3 User-Defined Indexes (Aspirational)
+
+```clojure
+;; Explicit index declaration
+(index: :faction)  ; index entities by faction value
+
+;; Query uses index automatically
+(query :where [[?e :faction :rebels]] :return ?e)  ; O(1) + O(k)
+```
+
+- [ ] Add `index:` declaration form
+- [ ] Pattern compiler uses indexes when available
+- [ ] Document index trade-offs (memory vs query speed)
+
+### Performance Targets
+
+| Operation | Without Index | With Single Index | With Composite |
+|-----------|---------------|-------------------|----------------|
+| `has_outgoing(e, rel)` | O(n) | O(k) | O(1) |
+| `find_relationships(type, source, _)` | O(n) | O(k) | O(1) |
+| Cardinality check | O(n) | O(k) | O(1) |
+
+Where n = total entities, k = relationships from/to specific entity.
 
 ---
 

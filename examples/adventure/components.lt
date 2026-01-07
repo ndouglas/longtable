@@ -6,21 +6,21 @@
 ;; =============================================================================
 
 ;; Entity type markers
-(component: tag/player)
-(component: tag/room)
-(component: tag/item)
-(component: tag/container)
-(component: tag/npc)
-(component: tag/door)
+(component: tag/player :bool :default true)
+(component: tag/room :bool :default true)
+(component: tag/item :bool :default true)
+(component: tag/container :bool :default true)
+(component: tag/npc :bool :default true)
+(component: tag/door :bool :default true)
 
 ;; State markers
-(component: tag/takeable)
-(component: tag/openable)
-(component: tag/open)
-(component: tag/locked)
-(component: tag/lit)
-(component: tag/dark)
-(component: tag/visited)
+(component: tag/takeable :bool :default true)
+(component: tag/openable :bool :default true)
+(component: tag/open :bool :default true)
+(component: tag/locked :bool :default true)
+(component: tag/lit :bool :default true)
+(component: tag/dark :bool :default true)
+(component: tag/visited :bool :default true)
 
 ;; =============================================================================
 ;; Identity Components

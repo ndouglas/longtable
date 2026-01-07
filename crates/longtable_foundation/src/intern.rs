@@ -46,6 +46,23 @@ impl KeywordId {
     pub const fn index(self) -> u32 {
         self.0
     }
+
+    // =========================================================================
+    // Reserved Keywords
+    // =========================================================================
+    // These are always interned at startup with fixed indices.
+
+    /// Reserved keyword for relationship type: `:rel/type`
+    pub const REL_TYPE: KeywordId = KeywordId(0);
+
+    /// Reserved keyword for relationship source: `:rel/source`
+    pub const REL_SOURCE: KeywordId = KeywordId(1);
+
+    /// Reserved keyword for relationship target: `:rel/target`
+    pub const REL_TARGET: KeywordId = KeywordId(2);
+
+    /// Reserved keyword for generic value field: `:value`
+    pub const VALUE: KeywordId = KeywordId(3);
 }
 
 impl fmt::Debug for KeywordId {
@@ -76,10 +93,30 @@ pub struct Interner {
 }
 
 impl Interner {
-    /// Creates a new empty interner.
+    /// Reserved keywords that are pre-interned at startup.
+    const RESERVED_KEYWORDS: &'static [&'static str] = &[
+        "rel/type",   // KeywordId(0) = REL_TYPE
+        "rel/source", // KeywordId(1) = REL_SOURCE
+        "rel/target", // KeywordId(2) = REL_TARGET
+        "value",      // KeywordId(3) = VALUE
+    ];
+
+    /// Creates a new interner with reserved keywords pre-interned.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        let mut interner = Self::default();
+
+        // Pre-intern reserved keywords at fixed indices
+        for (i, &kw) in Self::RESERVED_KEYWORDS.iter().enumerate() {
+            let id = interner.intern_keyword(kw);
+            debug_assert_eq!(
+                id.0 as usize, i,
+                "Reserved keyword '{}' should have index {}, got {}",
+                kw, i, id.0
+            );
+        }
+
+        interner
     }
 
     /// Interns a string, returning its index.
@@ -192,6 +229,7 @@ mod tests {
     #[test]
     fn intern_keyword_deduplicates() {
         let mut interner = Interner::new();
+        let reserved_count = Interner::RESERVED_KEYWORDS.len();
 
         let a = interner.intern_keyword("health");
         let b = interner.intern_keyword("health");
@@ -199,7 +237,49 @@ mod tests {
 
         assert_eq!(a, b);
         assert_ne!(a, c);
-        assert_eq!(interner.keyword_count(), 2);
+        // 3 reserved + 2 new = 5
+        assert_eq!(interner.keyword_count(), reserved_count + 2);
+    }
+
+    #[test]
+    fn reserved_keywords_have_fixed_indices() {
+        let interner = Interner::new();
+
+        // Reserved keywords should be pre-interned with fixed indices
+        assert_eq!(KeywordId::REL_TYPE.index(), 0);
+        assert_eq!(KeywordId::REL_SOURCE.index(), 1);
+        assert_eq!(KeywordId::REL_TARGET.index(), 2);
+        assert_eq!(KeywordId::VALUE.index(), 3);
+
+        // And resolve to the correct strings
+        assert_eq!(interner.get_keyword(KeywordId::REL_TYPE), Some("rel/type"));
+        assert_eq!(
+            interner.get_keyword(KeywordId::REL_SOURCE),
+            Some("rel/source")
+        );
+        assert_eq!(
+            interner.get_keyword(KeywordId::REL_TARGET),
+            Some("rel/target")
+        );
+        assert_eq!(interner.get_keyword(KeywordId::VALUE), Some("value"));
+    }
+
+    #[test]
+    fn re_interning_reserved_keyword_returns_same_id() {
+        let mut interner = Interner::new();
+
+        // Re-interning a reserved keyword should return the same ID
+        let rel_type = interner.intern_keyword("rel/type");
+        assert_eq!(rel_type, KeywordId::REL_TYPE);
+
+        let rel_source = interner.intern_keyword("rel/source");
+        assert_eq!(rel_source, KeywordId::REL_SOURCE);
+
+        let rel_target = interner.intern_keyword("rel/target");
+        assert_eq!(rel_target, KeywordId::REL_TARGET);
+
+        let value = interner.intern_keyword("value");
+        assert_eq!(value, KeywordId::VALUE);
     }
 
     #[test]
@@ -221,14 +301,17 @@ mod tests {
     #[test]
     fn symbols_and_keywords_independent() {
         let mut interner = Interner::new();
+        #[allow(clippy::cast_possible_truncation)]
+        let reserved_count = Interner::RESERVED_KEYWORDS.len() as u32;
 
         // Same string can be both a symbol and keyword
         let sym = interner.intern_symbol("foo");
         let kw = interner.intern_keyword("foo");
 
-        // They have independent ID spaces
+        // Symbols start at 0 (no reserved symbols)
         assert_eq!(sym.0, 0);
-        assert_eq!(kw.0, 0);
+        // Keywords start after reserved keywords
+        assert_eq!(kw.0, reserved_count);
 
         // But resolve to same string
         assert_eq!(interner.get_symbol(sym), interner.get_keyword(kw));

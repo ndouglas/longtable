@@ -3,7 +3,7 @@
 use crate::editor::{LineEditor, ReadResult, RustylineEditor};
 use crate::serialize;
 use crate::session::Session;
-use longtable_engine::{InputEvent, TickExecutor};
+use longtable_engine::{InputEvent, QueryCompiler, QueryExecutor, TickExecutor};
 use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
 use longtable_foundation::{LtMap, Type};
 use longtable_language::{
@@ -508,6 +508,17 @@ impl<E: LineEditor> Repl<E> {
                 }
             }
 
+            // (query :where [...] :return ...) - execute query
+            Ast::Symbol(s, _) if s == "query" => {
+                if let Some(Declaration::Query(query_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_query(&query_decl)
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid query form".to_string(),
+                    )))
+                }
+            }
+
             _ => Ok(None),
         }
     }
@@ -616,6 +627,9 @@ impl<E: LineEditor> Repl<E> {
             // Evaluate the value AST to get a Value
             let value = self.eval_form(value_ast)?;
 
+            // Convert map values: string keys like ":field" need to become proper keywords
+            let value = self.convert_string_keys_to_keywords(value)?;
+
             // Intern the component keyword
             let keyword = self
                 .session
@@ -635,6 +649,44 @@ impl<E: LineEditor> Repl<E> {
         self.session.register_entity(spawn.name.clone(), entity_id);
 
         Ok(())
+    }
+
+    /// Converts string keys that look like keywords (":foo") to proper `Value::Keyword`.
+    /// This is needed because the compiler currently emits keywords as strings.
+    fn convert_string_keys_to_keywords(&mut self, value: Value) -> Result<Value> {
+        match value {
+            Value::Map(map) => {
+                let mut new_map = LtMap::new();
+                for (k, v) in map.iter() {
+                    let new_key = if let Value::String(s) = k {
+                        if let Some(keyword_name) = s.strip_prefix(':') {
+                            let kid = self
+                                .session
+                                .world_mut()
+                                .interner_mut()
+                                .intern_keyword(keyword_name);
+                            Value::Keyword(kid)
+                        } else {
+                            k.clone()
+                        }
+                    } else {
+                        k.clone()
+                    };
+                    // Recursively convert nested maps
+                    let new_val = self.convert_string_keys_to_keywords(v.clone())?;
+                    new_map = new_map.insert(new_key, new_val);
+                }
+                Ok(Value::Map(new_map))
+            }
+            Value::Vec(vec) => {
+                let new_vec: Result<Vec<_>> = vec
+                    .iter()
+                    .map(|v| self.convert_string_keys_to_keywords(v.clone()))
+                    .collect();
+                Ok(Value::Vec(new_vec?.into_iter().collect()))
+            }
+            other => Ok(other),
+        }
     }
 
     /// Executes a link declaration to create a relationship.
@@ -670,6 +722,26 @@ impl<E: LineEditor> Repl<E> {
         self.session.set_world(new_world);
 
         Ok(())
+    }
+
+    /// Executes a query and returns results.
+    fn execute_query(
+        &mut self,
+        query_decl: &longtable_language::declaration::QueryDecl,
+    ) -> Result<Option<Value>> {
+        // Compile the query
+        let compiled = QueryCompiler::compile(query_decl, self.session.world_mut().interner_mut())?;
+
+        // Print any warnings
+        for warning in &compiled.warnings {
+            eprintln!("Warning: {warning}");
+        }
+
+        // Execute the query
+        let results = QueryExecutor::execute(&compiled, self.session.world())?;
+
+        // Return as a vector
+        Ok(Some(Value::Vec(results.into_iter().collect())))
     }
 
     /// Loads and evaluates a file.
