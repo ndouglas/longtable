@@ -1521,6 +1521,419 @@ fn bench_world_operations(c: &mut Criterion) {
 }
 
 // =============================================================================
+// Pattern Edge Cases (Stage 4)
+// =============================================================================
+
+fn bench_pattern_edge_cases(c: &mut Criterion) {
+    let mut group = c.benchmark_group("pattern_edge_cases");
+
+    // Many variables in pattern (tests binding map overhead)
+    for var_count in [5, 10, 20] {
+        let mut world = create_world_with_entities(1000);
+
+        // Create pattern with N variable bindings
+        let clauses: Vec<_> = (0..var_count)
+            .map(|i| {
+                make_clause(
+                    "e",
+                    if i % 5 == 0 {
+                        "health"
+                    } else if i % 5 == 1 {
+                        "position"
+                    } else if i % 5 == 2 {
+                        "name"
+                    } else if i % 5 == 3 {
+                        "tag/player"
+                    } else {
+                        "tag/enemy"
+                    },
+                    PatternValue::Variable(format!("var{i}")),
+                )
+            })
+            .collect();
+
+        let pattern = make_pattern(clauses);
+        let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("many_variables", var_count),
+            &(world, compiled),
+            |b, (w, p)| {
+                b.iter(|| {
+                    let results = PatternMatcher::match_pattern(p, w);
+                    black_box(results.len())
+                })
+            },
+        );
+    }
+
+    // Pattern with multiple negations
+    for neg_count in [1, 3, 5] {
+        let mut world = create_world_with_entities(1000);
+
+        // Pattern with N negations
+        let positive = vec![make_clause("e", "health", PatternValue::Wildcard)];
+        let negations: Vec<_> = (0..neg_count)
+            .map(|i| {
+                make_clause(
+                    "e",
+                    if i == 0 { "processed" } else { "nonexistent" },
+                    PatternValue::Wildcard,
+                )
+            })
+            .collect();
+
+        let pattern = make_pattern_with_negations(positive, negations);
+        let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("multiple_negations", neg_count),
+            &(world, compiled),
+            |b, (w, p)| {
+                b.iter(|| {
+                    let results = PatternMatcher::match_pattern(p, w);
+                    black_box(results.len())
+                })
+            },
+        );
+    }
+
+    // Pattern selectivity: highly selective vs broad
+    let mut world = create_world_with_entities(10_000);
+
+    // Highly selective (10% match)
+    let selective_pattern =
+        make_pattern(vec![make_clause("e", "tag/player", PatternValue::Wildcard)]);
+    let selective_compiled =
+        PatternCompiler::compile(&selective_pattern, world.interner_mut()).unwrap();
+
+    group.bench_with_input(
+        "selectivity_10_percent",
+        &(world.clone(), selective_compiled),
+        |b, (w, p)| {
+            b.iter(|| {
+                let results = PatternMatcher::match_pattern(p, w);
+                black_box(results.len())
+            })
+        },
+    );
+
+    // Broad (90% match)
+    let broad_pattern = make_pattern(vec![make_clause("e", "tag/enemy", PatternValue::Wildcard)]);
+    let broad_compiled = PatternCompiler::compile(&broad_pattern, world.interner_mut()).unwrap();
+
+    group.bench_with_input(
+        "selectivity_90_percent",
+        &(world.clone(), broad_compiled),
+        |b, (w, p)| {
+            b.iter(|| {
+                let results = PatternMatcher::match_pattern(p, w);
+                black_box(results.len())
+            })
+        },
+    );
+
+    // Full match (100%)
+    let full_pattern = make_pattern(vec![make_clause("e", "health", PatternValue::Wildcard)]);
+    let full_compiled = PatternCompiler::compile(&full_pattern, world.interner_mut()).unwrap();
+
+    group.bench_with_input(
+        "selectivity_100_percent",
+        &(world, full_compiled),
+        |b, (w, p)| {
+            b.iter(|| {
+                let results = PatternMatcher::match_pattern(p, w);
+                black_box(results.len())
+            })
+        },
+    );
+
+    group.finish();
+}
+
+// =============================================================================
+// Query Optimization Benchmarks (Stage 4)
+// =============================================================================
+
+fn bench_query_optimization(c: &mut Criterion) {
+    let mut group = c.benchmark_group("query_optimization");
+
+    // Query clause ordering impact: selective first vs last
+    // This measures whether clause ordering affects performance
+
+    for entity_count in [1_000, 10_000] {
+        let mut world = create_world_with_entities(entity_count);
+
+        // Selective clause first: [?e :tag/player] [?e :health _]
+        let selective_first = make_pattern(vec![
+            make_clause("e", "tag/player", PatternValue::Wildcard),
+            make_clause("e", "health", PatternValue::Wildcard),
+        ]);
+        let selective_first_query = make_query(selective_first, "e");
+        let compiled_sf =
+            QueryCompiler::compile(&selective_first_query, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("selective_first", entity_count),
+            &(world.clone(), compiled_sf),
+            |b, (w, q)| {
+                b.iter(|| {
+                    let results = QueryExecutor::execute(q, w).unwrap();
+                    black_box(results.len())
+                })
+            },
+        );
+
+        // Broad clause first: [?e :health _] [?e :tag/player]
+        let broad_first = make_pattern(vec![
+            make_clause("e", "health", PatternValue::Wildcard),
+            make_clause("e", "tag/player", PatternValue::Wildcard),
+        ]);
+        let broad_first_query = make_query(broad_first, "e");
+        let compiled_bf = QueryCompiler::compile(&broad_first_query, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("broad_first", entity_count),
+            &(world, compiled_bf),
+            |b, (w, q)| {
+                b.iter(|| {
+                    let results = QueryExecutor::execute(q, w).unwrap();
+                    black_box(results.len())
+                })
+            },
+        );
+    }
+
+    // Query with limit vs without (early termination)
+    for entity_count in [1_000, 10_000] {
+        let mut world = create_world_with_entities(entity_count);
+
+        let pattern = make_pattern(vec![make_clause("e", "health", PatternValue::Wildcard)]);
+
+        // Without limit
+        let query_no_limit = make_query(pattern.clone(), "e");
+        let compiled_no_limit =
+            QueryCompiler::compile(&query_no_limit, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("no_limit", entity_count),
+            &(world.clone(), compiled_no_limit),
+            |b, (w, q)| {
+                b.iter(|| {
+                    let results = QueryExecutor::execute(q, w).unwrap();
+                    black_box(results.len())
+                })
+            },
+        );
+
+        // With limit
+        let mut query_limit = make_query(pattern, "e");
+        query_limit.limit = Some(10);
+        let compiled_limit = QueryCompiler::compile(&query_limit, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("with_limit_10", entity_count),
+            &(world, compiled_limit),
+            |b, (w, q)| {
+                b.iter(|| {
+                    let results = QueryExecutor::execute(q, w).unwrap();
+                    black_box(results.len())
+                })
+            },
+        );
+    }
+
+    // Exists check (short-circuit on first match)
+    for entity_count in [1_000, 10_000] {
+        let mut world = create_world_with_entities(entity_count);
+
+        // Exists on common component (should find immediately)
+        let common_pattern = make_pattern(vec![make_clause("e", "health", PatternValue::Wildcard)]);
+        let common_query = make_query(common_pattern, "e");
+        let compiled_common = QueryCompiler::compile(&common_query, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("exists_common", entity_count),
+            &(world.clone(), compiled_common),
+            |b, (w, q)| b.iter(|| black_box(QueryExecutor::exists(q, w).unwrap())),
+        );
+
+        // Exists on rare component (10% of entities)
+        let rare_pattern =
+            make_pattern(vec![make_clause("e", "tag/player", PatternValue::Wildcard)]);
+        let rare_query = make_query(rare_pattern, "e");
+        let compiled_rare = QueryCompiler::compile(&rare_query, world.interner_mut()).unwrap();
+
+        group.bench_with_input(
+            BenchmarkId::new("exists_rare", entity_count),
+            &(world, compiled_rare),
+            |b, (w, q)| b.iter(|| black_box(QueryExecutor::exists(q, w).unwrap())),
+        );
+    }
+
+    group.finish();
+}
+
+// =============================================================================
+// Rule Priority and Conflict Resolution (Stage 4)
+// =============================================================================
+
+fn bench_rule_priority(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rule_priority");
+
+    // Rule count scaling: measure overhead of having many rules
+    for rule_count in [10, 50, 100] {
+        let mut world = create_world_with_entities(1000);
+
+        // Create N rules all matching health component
+        let rules: Vec<_> = (0..rule_count)
+            .map(|i| {
+                let pattern =
+                    make_pattern(vec![make_clause("e", "health", PatternValue::Wildcard)]);
+                let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+                let rule_name = world.interner_mut().intern_keyword(&format!("rule-{i}"));
+                CompiledRule::new(rule_name, compiled).with_salience(i % 100)
+            })
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("find_activations", rule_count),
+            &(world, rules),
+            |b, (w, r)| {
+                b.iter(|| {
+                    let mut engine = ProductionRuleEngine::new();
+                    engine.begin_tick();
+                    let activations = engine.find_activations(r, w);
+                    black_box(activations.len())
+                })
+            },
+        );
+    }
+
+    // Salience sorting overhead
+    // All rules match, test sorting cost
+    for rule_count in [10, 50, 100] {
+        let mut world = create_world_with_entities(100);
+
+        // Create rules with varied saliences
+        let rules: Vec<_> = (0..rule_count)
+            .map(|i| {
+                let pattern =
+                    make_pattern(vec![make_clause("e", "health", PatternValue::Wildcard)]);
+                let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+                let rule_name = world
+                    .interner_mut()
+                    .intern_keyword(&format!("priority-rule-{i}"));
+                // Varied saliences to test sorting
+                let salience = (i * 7 + 13) % 100;
+                CompiledRule::new(rule_name, compiled).with_salience(salience)
+            })
+            .collect();
+
+        // Expected: 100 entities * rule_count activations
+        let expected = 100 * rule_count;
+        group.throughput(Throughput::Elements(expected as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("salience_sorting", rule_count),
+            &(world, rules),
+            |b, (w, r)| {
+                b.iter(|| {
+                    let mut engine = ProductionRuleEngine::new();
+                    engine.begin_tick();
+                    let activations = engine.find_activations(r, w);
+                    black_box(activations.len())
+                })
+            },
+        );
+    }
+
+    // Selectivity impact: rules that match few vs many entities
+    let mut world = create_world_with_entities(10_000);
+
+    // Selective rules (10% match each)
+    let selective_rules: Vec<_> = (0..10)
+        .map(|i| {
+            let pattern =
+                make_pattern(vec![make_clause("e", "tag/player", PatternValue::Wildcard)]);
+            let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+            let rule_name = world
+                .interner_mut()
+                .intern_keyword(&format!("selective-{i}"));
+            CompiledRule::new(rule_name, compiled)
+        })
+        .collect();
+
+    // 10% * 10000 * 10 rules = 10000 activations
+    group.throughput(Throughput::Elements(10000));
+    group.bench_with_input(
+        "10_selective_rules",
+        &(world.clone(), selective_rules),
+        |b, (w, r)| {
+            b.iter(|| {
+                let mut engine = ProductionRuleEngine::new();
+                engine.begin_tick();
+                let activations = engine.find_activations(r, w);
+                black_box(activations.len())
+            })
+        },
+    );
+
+    // Broad rules (90% match each)
+    let broad_rules: Vec<_> = (0..10)
+        .map(|i| {
+            let pattern = make_pattern(vec![make_clause("e", "tag/enemy", PatternValue::Wildcard)]);
+            let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+            let rule_name = world.interner_mut().intern_keyword(&format!("broad-{i}"));
+            CompiledRule::new(rule_name, compiled)
+        })
+        .collect();
+
+    // 90% * 10000 * 10 rules = 90000 activations
+    group.throughput(Throughput::Elements(90000));
+    group.bench_with_input("10_broad_rules", &(world, broad_rules), |b, (w, r)| {
+        b.iter(|| {
+            let mut engine = ProductionRuleEngine::new();
+            engine.begin_tick();
+            let activations = engine.find_activations(r, w);
+            black_box(activations.len())
+        })
+    });
+
+    // Refraction: track and skip already-fired rule/entity combinations
+    for entity_count in [100, 500] {
+        let mut world = create_world_with_entities(entity_count);
+
+        let pattern = make_pattern_with_negations(
+            vec![make_clause("e", "health", PatternValue::Wildcard)],
+            vec![make_clause("e", "processed", PatternValue::Wildcard)],
+        );
+        let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+        let rule_name = world.interner_mut().intern_keyword("refraction-test");
+        let rule = CompiledRule::new(rule_name, compiled);
+        let rules = vec![rule];
+
+        group.bench_with_input(
+            BenchmarkId::new("refraction_overhead", entity_count),
+            &(world, rules),
+            |b, (w, r)| {
+                b.iter(|| {
+                    let mut engine = ProductionRuleEngine::new();
+                    engine.begin_tick();
+
+                    // Find activations twice - second time should see same results
+                    let act1 = engine.find_activations(r, w);
+                    let act2 = engine.find_activations(r, w);
+                    black_box((act1.len(), act2.len()))
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// =============================================================================
 // Criterion Groups
 // =============================================================================
 
@@ -1538,6 +1951,9 @@ criterion_group!(
     bench_throughput,
     bench_bindings,
     bench_world_operations,
+    bench_pattern_edge_cases,
+    bench_query_optimization,
+    bench_rule_priority,
 );
 
 criterion_main!(benches);

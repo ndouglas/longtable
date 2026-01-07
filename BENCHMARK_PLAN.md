@@ -2,15 +2,17 @@
 
 ## Current Status
 
-| Crate | Benchmark File | Coverage |
-|-------|----------------|----------|
-| `longtable_foundation` | `foundation_benchmarks.rs` (363 LOC) | Good - Value, LtVec, LtSet, LtMap, Interner |
-| `longtable_storage` | `storage_benchmarks.rs` (549 LOC) | Good - EntityStore, ComponentStore, RelationshipStore, World |
-| `longtable_language` | `language_benchmarks.rs` (1320 LOC) | **Complete** - Lexer, Parser, Compiler, VM, Stdlib (expanded) |
-| `longtable_engine` | `engine_benchmarks.rs` (1544 LOC) | Comprehensive - Patterns, Queries, Rules, Derived, Constraints, Tick |
-| `longtable_runtime` | `serialization_benchmarks.rs` (320 LOC) + `runtime_benchmarks.rs` (485 LOC) | **Complete** - Serialization, Session, REPL eval, Pipeline |
-| `longtable_stdlib` | N/A (placeholder crate) | Stdlib in language crate |
-| `longtable_debug` | `debug_benchmarks.rs` (1450 LOC) | **Complete** - Timeline, Diff, Merge, Trace, Debug, Explain |
+| Crate                  | Benchmark File                                          | Benchmarks | Coverage                                                                                                      |
+| ---------------------- | ------------------------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------- |
+| `longtable_foundation` | `foundation_benchmarks.rs`                              | 96         | **Complete** - Value, LtVec, LtSet, LtMap, Interner + Stage 4 expansions                                      |
+| `longtable_storage`    | `storage_benchmarks.rs`                                 | 66         | **Complete** - EntityStore, ComponentStore, RelationshipStore, World + Archetype/Relationship Stage 4         |
+| `longtable_language`   | `language_benchmarks.rs`                                | 161        | **Complete** - Lexer, Parser, Compiler, VM, Stdlib + VM edge cases + Compiler optimization Stage 4            |
+| `longtable_engine`     | `engine_benchmarks.rs`                                  | 142        | **Complete** - Patterns, Queries, Rules, Derived, Constraints, Tick + Edge cases + Query optimization Stage 4 |
+| `longtable_runtime`    | `serialization_benchmarks.rs` + `runtime_benchmarks.rs` | 45         | **Complete** - Serialization, Session, REPL eval, Pipeline                                                    |
+| `longtable_stdlib`     | N/A (placeholder crate)                                 | -          | Stdlib in language crate                                                                                      |
+| `longtable_debug`      | `debug_benchmarks.rs`                                   | 124        | **Complete** - Timeline, Diff, Merge, Trace, Debug, Explain                                                   |
+
+**Total benchmarks: 634**
 
 ---
 
@@ -332,13 +334,13 @@ Expand beyond serialization to cover REPL and session operations.
 
 ## Implementation Order
 
-| Priority | Stage | Crate | Rationale | Status |
-|----------|-------|-------|-----------|--------|
-| 1 | Stage 1 | `longtable_debug` | Phase 6 code completely unbenchmarked | ✅ Complete |
-| 2 | Stage 2 | `longtable_language` | Stdlib coverage (was stdlib placeholder) | ✅ Complete |
-| 3 | Stage 3 | `longtable_runtime` | User-facing operations need measurement | ✅ Complete |
-| 4 | Stage 4 | All | Polish and edge case coverage | ⏳ Pending |
-| 5 | Stage 5 | All | Memory profiling & large-scale (10K-1M) | ⏳ Pending |
+| Priority | Stage   | Crate                | Rationale                                | Status     |
+| -------- | ------- | -------------------- | ---------------------------------------- | ---------- |
+| 1        | Stage 1 | `longtable_debug`    | Phase 6 code completely unbenchmarked    | ✅ Complete |
+| 2        | Stage 2 | `longtable_language` | Stdlib coverage (was stdlib placeholder) | ✅ Complete |
+| 3        | Stage 3 | `longtable_runtime`  | User-facing operations need measurement  | ✅ Complete |
+| 4        | Stage 4 | All                  | Polish and edge case coverage            | ✅ Complete |
+| 5        | Stage 5 | All                  | Memory profiling & large-scale (10K-1M)  | ⏳ Pending  |
 
 ---
 
@@ -554,11 +556,11 @@ harness = false
 
 ## Estimated Total New Benchmarks
 
-| Stage | Benchmarks | LOC | Status |
-|-------|------------|-----|--------|
-| Stage 1 (debug) | ~100 | 1450 | ✅ Complete |
-| Stage 2 (stdlib) | ~42 | 420 | ✅ Complete |
-| Stage 3 (runtime) | ~50 | 485 | ✅ Complete |
-| Stage 4 (expansions) | ~25 | ~500 | ⏳ Pending |
-| Stage 5 (scale/memory) | ~60 | ~800 | ⏳ Pending |
-| **Total** | **~247** | **~3570** |
+| Stage                  | Benchmarks | LOC       | Status     |
+| ---------------------- | ---------- | --------- | ---------- |
+| Stage 1 (debug)        | 124        | ~1450     | ✅ Complete |
+| Stage 2 (stdlib)       | ~42        | ~420      | ✅ Complete |
+| Stage 3 (runtime)      | 45         | ~485      | ✅ Complete |
+| Stage 4 (expansions)   | ~100       | ~800      | ✅ Complete |
+| Stage 5 (scale/memory) | ~60        | ~800      | ⏳ Pending  |
+| **Total**              | **634**    | **~4000** |

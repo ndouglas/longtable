@@ -1299,6 +1299,366 @@ fn bench_throughput(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// VM Edge Cases (Stage 4)
+// =============================================================================
+
+fn bench_vm_edge_cases(c: &mut Criterion) {
+    let mut group = c.benchmark_group("vm_edge_cases");
+
+    // Deep recursion: test stack handling at various depths
+    // Using linear recursion (countdown) to avoid exponential blowup
+    let deep_50 =
+        compile("(let [count (fn [n] (if (<= n 0) 0 (count (- n 1))))] (count 50))").unwrap();
+    group.bench_function("deep_recursion_50", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&deep_50))
+        })
+    });
+
+    let deep_100 =
+        compile("(let [count (fn [n] (if (<= n 0) 0 (count (- n 1))))] (count 100))").unwrap();
+    group.bench_function("deep_recursion_100", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&deep_100))
+        })
+    });
+
+    let deep_500 =
+        compile("(let [count (fn [n] (if (<= n 0) 0 (count (- n 1))))] (count 500))").unwrap();
+    group.bench_function("deep_recursion_500", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&deep_500))
+        })
+    });
+
+    // Large closures: closures capturing many variables
+    let closure_1_capture = compile("(let [a 1] ((fn [x] (+ a x)) 10))").unwrap();
+    group.bench_function("closure_1_capture", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&closure_1_capture))
+        })
+    });
+
+    let closure_5_captures =
+        compile("(let [a 1 b 2 c 3 d 4 e 5] ((fn [x] (+ a b c d e x)) 10))").unwrap();
+    group.bench_function("closure_5_captures", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&closure_5_captures))
+        })
+    });
+
+    let closure_10_captures = compile(
+        "(let [a 1 b 2 c 3 d 4 e 5 f 6 g 7 h 8 i 9 j 10] ((fn [x] (+ a b c d e f g h i j x)) 10))",
+    )
+    .unwrap();
+    group.bench_function("closure_10_captures", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&closure_10_captures))
+        })
+    });
+
+    // Nested closures (closure returning closure)
+    // Simpler version that avoids closure capture issues
+    let nested_closure =
+        compile("(let [make-adder (fn [x] (fn [y] (+ x y)))] ((make-adder 10) 5))").unwrap();
+    group.bench_function("nested_closure_2_deep", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&nested_closure))
+        })
+    });
+
+    // Repeated closure application (tests closure overhead)
+    let repeated_closure =
+        compile("(let [add1 (fn [x] (+ x 1))] (add1 (add1 (add1 (add1 (add1 0))))))").unwrap();
+    group.bench_function("repeated_closure_5_calls", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&repeated_closure))
+        })
+    });
+
+    // Many local bindings in one let
+    let many_bindings = compile(
+        "(let [a 1 b 2 c 3 d 4 e 5 f 6 g 7 h 8 i 9 j 10 k 11 l 12 m 13 n 14 o 15 p 16 q 17 r 18 s 19 t 20] (+ a b c d e f g h i j k l m n o p q r s t))",
+    )
+    .unwrap();
+    group.bench_function("let_20_bindings", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&many_bindings))
+        })
+    });
+
+    // Deeply nested let expressions
+    let nested_let_5 = compile(
+        "(let [a 1] (let [b (+ a 1)] (let [c (+ b 1)] (let [d (+ c 1)] (let [e (+ d 1)] e)))))",
+    )
+    .unwrap();
+    group.bench_function("nested_let_5_deep", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&nested_let_5))
+        })
+    });
+
+    // Many function arguments
+    let fn_5_args = compile("((fn [a b c d e] (+ a b c d e)) 1 2 3 4 5)").unwrap();
+    group.bench_function("fn_5_args", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&fn_5_args))
+        })
+    });
+
+    let fn_10_args =
+        compile("((fn [a b c d e f g h i j] (+ a b c d e f g h i j)) 1 2 3 4 5 6 7 8 9 10)")
+            .unwrap();
+    group.bench_function("fn_10_args", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&fn_10_args))
+        })
+    });
+
+    group.finish();
+}
+
+// =============================================================================
+// Compiler Optimization Benchmarks (Stage 4)
+// =============================================================================
+
+fn bench_compiler_optimization(c: &mut Criterion) {
+    let mut group = c.benchmark_group("compiler_optimization");
+
+    // Constant folding potential: expressions that could be folded at compile time
+    // These measure how well the compiler handles constant expressions
+
+    // Pure constant expression
+    let const_expr = compile("(+ 1 2 3 4 5)").unwrap();
+    group.bench_function("constant_folding_add", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&const_expr))
+        })
+    });
+
+    // Nested constant expression
+    let nested_const = compile("(* (+ 1 2) (- 10 5))").unwrap();
+    group.bench_function("constant_folding_nested", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&nested_const))
+        })
+    });
+
+    // Constant boolean expression
+    let const_bool = compile("(and true true (not false))").unwrap();
+    group.bench_function("constant_folding_boolean", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&const_bool))
+        })
+    });
+
+    // Constant comparison
+    let const_cmp = compile("(if (> 10 5) :yes :no)").unwrap();
+    group.bench_function("constant_folding_comparison", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&const_cmp))
+        })
+    });
+
+    // Dead code potential: unreachable branches
+    // If compiler eliminates dead code, these should be faster
+
+    // Dead else branch (condition always true)
+    let dead_else = compile("(if true 42 (+ 1 2 3 4 5 6 7 8 9 10))").unwrap();
+    group.bench_function("dead_code_else_branch", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&dead_else))
+        })
+    });
+
+    // Dead then branch (condition always false)
+    let dead_then = compile("(if false (+ 1 2 3 4 5 6 7 8 9 10) 42)").unwrap();
+    group.bench_function("dead_code_then_branch", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&dead_then))
+        })
+    });
+
+    // Compare: dynamic condition (can't optimize)
+    let dynamic_cond = compile("(let [x 5] (if (> x 3) 42 0))").unwrap();
+    group.bench_function("dynamic_condition", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&dynamic_cond))
+        })
+    });
+
+    // Identity operations (could be optimized away)
+    let add_zero = compile("(+ 42 0)").unwrap();
+    group.bench_function("identity_add_zero", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&add_zero))
+        })
+    });
+
+    let mul_one = compile("(* 42 1)").unwrap();
+    group.bench_function("identity_mul_one", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&mul_one))
+        })
+    });
+
+    // Let binding unused (could be optimized away)
+    let unused_binding = compile("(let [unused 999] 42)").unwrap();
+    group.bench_function("unused_binding", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&unused_binding))
+        })
+    });
+
+    // String constant handling
+    let string_const = compile(r#""hello world""#).unwrap();
+    group.bench_function("string_constant", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&string_const))
+        })
+    });
+
+    // Keyword constant handling (should be interned)
+    let keyword_const = compile(":my-keyword").unwrap();
+    group.bench_function("keyword_constant", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&keyword_const))
+        })
+    });
+
+    // Collection literals (compile-time construction)
+    let vec_literal = compile("[1 2 3 4 5]").unwrap();
+    group.bench_function("vector_literal", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&vec_literal))
+        })
+    });
+
+    let map_literal = compile("{:a 1 :b 2 :c 3}").unwrap();
+    group.bench_function("map_literal", |b| {
+        let mut vm = Vm::new();
+        b.iter(|| {
+            vm.reset();
+            vm.execute(black_box(&map_literal))
+        })
+    });
+
+    group.finish();
+}
+
+// =============================================================================
+// Compilation Cost Benchmarks (Stage 4)
+// =============================================================================
+
+fn bench_compilation_cost(c: &mut Criterion) {
+    let mut group = c.benchmark_group("compilation_cost");
+
+    // Measure compilation overhead for various expression sizes
+    // This helps understand when bytecode caching would help
+
+    // Tiny expression
+    group.bench_function("compile_tiny", |b| b.iter(|| compile(black_box("42"))));
+
+    // Small expression
+    group.bench_function("compile_small", |b| {
+        b.iter(|| compile(black_box("(+ 1 2)")))
+    });
+
+    // Medium expression
+    group.bench_function("compile_medium", |b| {
+        b.iter(|| compile(black_box("(let [x 10 y 20] (if (> x 5) (+ x y) (* x y)))")))
+    });
+
+    // Large expression with function
+    group.bench_function("compile_large", |b| {
+        b.iter(|| {
+            compile(black_box(
+                "(let [f (fn [n] (if (<= n 1) 1 (* n (f (- n 1)))))] (f 10))",
+            ))
+        })
+    });
+
+    // Very large expression with collections
+    let very_large = r#"
+        (let [data {:name "test"
+                    :values [1 2 3 4 5 6 7 8 9 10]
+                    :nested {:a 1 :b 2 :c 3}}
+              f (fn [x] (+ x 1))
+              g (fn [x y] (* x y))]
+          (if (> (count (get data :values)) 5)
+              (reduce + 0 (map f (get data :values)))
+              (g 10 20)))
+    "#;
+    group.bench_function("compile_very_large", |b| {
+        b.iter(|| compile(black_box(very_large)))
+    });
+
+    // Expression with many symbols (tests symbol resolution)
+    let many_symbols = "(let [a 1 b 2 c 3 d 4 e 5 f 6 g 7 h 8 i 9 j 10] (+ a b c d e f g h i j))";
+    group.bench_function("compile_many_symbols", |b| {
+        b.iter(|| compile(black_box(many_symbols)))
+    });
+
+    // Expression with many native calls
+    let many_natives = "(+ (- (* (/ (inc (dec (abs (min (max 1 2) 3)))) 2) 3) 4) 5)";
+    group.bench_function("compile_many_natives", |b| {
+        b.iter(|| compile(black_box(many_natives)))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_lexer,
@@ -1315,6 +1675,9 @@ criterion_group!(
     bench_scale_operations,
     bench_end_to_end,
     bench_throughput,
+    bench_vm_edge_cases,
+    bench_compiler_optimization,
+    bench_compilation_cost,
 );
 
 criterion_main!(benches);

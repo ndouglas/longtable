@@ -537,12 +537,339 @@ fn bench_world(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// Archetype Transition Benchmarks (Stage 4)
+// =============================================================================
+
+fn bench_archetype_transitions(c: &mut Criterion) {
+    let mut group = c.benchmark_group("archetype_transitions");
+
+    // Add component causing archetype change
+    group.bench_function("add_component_archetype_change", |b| {
+        let mut world = World::new(42);
+        let health = world.interner_mut().intern_keyword("health");
+        let current = world.interner_mut().intern_keyword("current");
+        let armor = world.interner_mut().intern_keyword("armor");
+        let defense = world.interner_mut().intern_keyword("defense");
+
+        let health_schema =
+            ComponentSchema::new(health).with_field(FieldSchema::required(current, Type::Int));
+        let armor_schema =
+            ComponentSchema::new(armor).with_field(FieldSchema::required(defense, Type::Int));
+
+        world = world.register_component(health_schema).unwrap();
+        world = world.register_component(armor_schema).unwrap();
+
+        // Create entity with health only
+        let mut health_data = LtMap::new();
+        health_data = health_data.insert(Value::Keyword(current), Value::Int(100));
+        let mut components = LtMap::new();
+        components = components.insert(Value::Keyword(health), Value::Map(health_data));
+        let (world, entity) = world.spawn(&components).unwrap();
+
+        // Benchmark adding armor (archetype transition: {health} -> {health, armor})
+        let mut armor_data = LtMap::new();
+        armor_data = armor_data.insert(Value::Keyword(defense), Value::Int(50));
+
+        b.iter_batched(
+            || world.clone(),
+            |w| black_box(w.set(entity, armor, Value::Map(armor_data.clone()))),
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Add second component to entity (another archetype transition case)
+    group.bench_function("add_second_component", |b| {
+        let mut world = World::new(42);
+        let health = world.interner_mut().intern_keyword("health");
+        let current = world.interner_mut().intern_keyword("current");
+        let position = world.interner_mut().intern_keyword("position");
+        let x = world.interner_mut().intern_keyword("x");
+        let y = world.interner_mut().intern_keyword("y");
+
+        let health_schema =
+            ComponentSchema::new(health).with_field(FieldSchema::required(current, Type::Int));
+        let pos_schema = ComponentSchema::new(position)
+            .with_field(FieldSchema::required(x, Type::Float))
+            .with_field(FieldSchema::required(y, Type::Float));
+
+        world = world.register_component(health_schema).unwrap();
+        world = world.register_component(pos_schema).unwrap();
+
+        // Create entity with health only
+        let mut health_data = LtMap::new();
+        health_data = health_data.insert(Value::Keyword(current), Value::Int(100));
+        let mut components = LtMap::new();
+        components = components.insert(Value::Keyword(health), Value::Map(health_data));
+        let (world, entity) = world.spawn(&components).unwrap();
+
+        // Benchmark adding position (archetype transition: {health} -> {health, position})
+        let mut pos_data = LtMap::new();
+        pos_data = pos_data.insert(Value::Keyword(x), Value::Float(10.0));
+        pos_data = pos_data.insert(Value::Keyword(y), Value::Float(20.0));
+
+        b.iter_batched(
+            || world.clone(),
+            |w| black_box(w.set(entity, position, Value::Map(pos_data.clone()))),
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Entity destruction (removes entity from all archetypes)
+    group.bench_function("destroy_entity_with_components", |b| {
+        let mut world = World::new(42);
+        let health = world.interner_mut().intern_keyword("health");
+        let current = world.interner_mut().intern_keyword("current");
+        let armor = world.interner_mut().intern_keyword("armor");
+        let defense = world.interner_mut().intern_keyword("defense");
+
+        let health_schema =
+            ComponentSchema::new(health).with_field(FieldSchema::required(current, Type::Int));
+        let armor_schema =
+            ComponentSchema::new(armor).with_field(FieldSchema::required(defense, Type::Int));
+
+        world = world.register_component(health_schema).unwrap();
+        world = world.register_component(armor_schema).unwrap();
+
+        // Create entity with health and armor
+        let mut health_data = LtMap::new();
+        health_data = health_data.insert(Value::Keyword(current), Value::Int(100));
+        let mut armor_data = LtMap::new();
+        armor_data = armor_data.insert(Value::Keyword(defense), Value::Int(50));
+        let mut components = LtMap::new();
+        components = components.insert(Value::Keyword(health), Value::Map(health_data));
+        components = components.insert(Value::Keyword(armor), Value::Map(armor_data));
+        let (world, entity) = world.spawn(&components).unwrap();
+
+        // Benchmark destroying the entity
+        b.iter_batched(
+            || world.clone(),
+            |w| black_box(w.destroy(entity)),
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Batch archetype migration: many entities transitioning together
+    for size in [10, 100, 500] {
+        group.bench_with_input(
+            BenchmarkId::new("batch_migration", size),
+            &size,
+            |b, &size| {
+                let mut world = World::new(42);
+                let tag_a = world.interner_mut().intern_keyword("tag-a");
+                let tag_b = world.interner_mut().intern_keyword("tag-b");
+
+                world = world
+                    .register_component(ComponentSchema::tag(tag_a))
+                    .unwrap();
+                world = world
+                    .register_component(ComponentSchema::tag(tag_b))
+                    .unwrap();
+
+                // Create entities with tag-a only
+                let mut entities = Vec::new();
+                for _ in 0..size {
+                    let mut components = LtMap::new();
+                    components = components.insert(Value::Keyword(tag_a), Value::Bool(true));
+                    let (w, e) = world.spawn(&components).unwrap();
+                    world = w;
+                    entities.push(e);
+                }
+
+                // Benchmark adding tag-b to all entities (batch archetype migration)
+                b.iter_batched(
+                    || (world.clone(), entities.clone()),
+                    |(mut w, ents)| {
+                        for e in ents {
+                            w = w.set(e, tag_b, Value::Bool(true)).unwrap();
+                        }
+                        black_box(w)
+                    },
+                    criterion::BatchSize::SmallInput,
+                )
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// =============================================================================
+// Advanced Relationship Benchmarks (Stage 4)
+// =============================================================================
+
+fn bench_relationship_advanced(c: &mut Criterion) {
+    let mut group = c.benchmark_group("relationship_advanced");
+
+    // Multi-hop traversal: A -> B -> C -> ...
+    for hops in [2, 3, 5] {
+        group.bench_with_input(
+            BenchmarkId::new("multi_hop_traversal", hops),
+            &hops,
+            |b, &hops| {
+                let mut interner = Interner::new();
+                let mut store = RelationshipStore::new();
+
+                let parent_of = interner.intern_keyword("parent-of");
+                store
+                    .register_schema(RelationshipSchema::new(parent_of))
+                    .unwrap();
+
+                // Create a chain: e0 -> e1 -> e2 -> ... -> e_n
+                let entities: Vec<_> = (0..=hops as u64).map(|i| EntityId::new(i, 1)).collect();
+
+                for i in 0..hops {
+                    store.link(entities[i], parent_of, entities[i + 1]).unwrap();
+                }
+
+                // Benchmark traversing the entire chain
+                b.iter(|| {
+                    let mut current = entities[0];
+                    for _ in 0..hops {
+                        // Get first target (single chain)
+                        if let Some(next) = store.targets(current, parent_of).next() {
+                            current = next;
+                        }
+                    }
+                    black_box(current)
+                })
+            },
+        );
+    }
+
+    // Cyclic relationship detection/traversal
+    group.bench_function("cyclic_traversal", |b| {
+        let mut interner = Interner::new();
+        let mut store = RelationshipStore::new();
+
+        let next = interner.intern_keyword("next");
+        store
+            .register_schema(RelationshipSchema::new(next))
+            .unwrap();
+
+        // Create a cycle: e0 -> e1 -> e2 -> e3 -> e0
+        let entities: Vec<_> = (0..4).map(|i| EntityId::new(i, 1)).collect();
+        for i in 0..4 {
+            store
+                .link(entities[i], next, entities[(i + 1) % 4])
+                .unwrap();
+        }
+
+        // Benchmark traversing with cycle detection (stop after N steps)
+        b.iter(|| {
+            let mut current = entities[0];
+            let mut visited = std::collections::HashSet::new();
+            while visited.insert(current) {
+                if let Some(n) = store.targets(current, next).next() {
+                    current = n;
+                } else {
+                    break;
+                }
+            }
+            black_box((current, visited.len()))
+        })
+    });
+
+    // Bidirectional lookup: both sources and targets
+    for fan_out in [10, 50, 100] {
+        group.bench_with_input(
+            BenchmarkId::new("bidirectional_lookup", fan_out),
+            &fan_out,
+            |b, &fan_out| {
+                let mut interner = Interner::new();
+                let mut store = RelationshipStore::new();
+
+                let connected = interner.intern_keyword("connected");
+                store
+                    .register_schema(RelationshipSchema::new(connected))
+                    .unwrap();
+
+                // Hub entity connected to many others
+                let hub = EntityId::new(0, 1);
+                let entities: Vec<_> = (1..=fan_out as u64).map(|i| EntityId::new(i, 1)).collect();
+
+                // Half point to hub, half hub points to
+                for i in 0..fan_out / 2 {
+                    store.link(entities[i], connected, hub).unwrap();
+                }
+                for i in fan_out / 2..fan_out {
+                    store.link(hub, connected, entities[i]).unwrap();
+                }
+
+                // Benchmark looking up both directions
+                b.iter(|| {
+                    let sources: Vec<_> = store.sources(hub, connected).collect();
+                    let targets: Vec<_> = store.targets(hub, connected).collect();
+                    black_box((sources.len(), targets.len()))
+                })
+            },
+        );
+    }
+
+    // Deep tree traversal: find all descendants
+    for depth in [3, 5, 7] {
+        group.bench_with_input(
+            BenchmarkId::new("tree_descendants", depth),
+            &depth,
+            |b, &depth| {
+                let mut interner = Interner::new();
+                let mut store = RelationshipStore::new();
+
+                let child_of = interner.intern_keyword("child-of");
+                store
+                    .register_schema(RelationshipSchema::new(child_of))
+                    .unwrap();
+
+                // Build a binary tree: each node has 2 children
+                // Total nodes = 2^(depth+1) - 1
+                let total_nodes = (1 << (depth + 1)) - 1;
+                let entities: Vec<_> = (0..total_nodes as u64)
+                    .map(|i| EntityId::new(i, 1))
+                    .collect();
+
+                // Build tree: parent at i, children at 2i+1 and 2i+2
+                for i in 0..total_nodes / 2 {
+                    let left = 2 * i + 1;
+                    let right = 2 * i + 2;
+                    if left < total_nodes {
+                        store.link(entities[left], child_of, entities[i]).unwrap();
+                    }
+                    if right < total_nodes {
+                        store.link(entities[right], child_of, entities[i]).unwrap();
+                    }
+                }
+
+                let root = entities[0];
+
+                // Benchmark finding all descendants (BFS)
+                b.iter(|| {
+                    let mut descendants = Vec::new();
+                    let mut queue = vec![root];
+
+                    while let Some(current) = queue.pop() {
+                        // Find children (entities that have child_of pointing to current)
+                        for child in store.sources(current, child_of) {
+                            descendants.push(child);
+                            queue.push(child);
+                        }
+                    }
+                    black_box(descendants.len())
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_entity_store,
     bench_component_store,
     bench_relationship_store,
     bench_world,
+    bench_archetype_transitions,
+    bench_relationship_advanced,
 );
 
 criterion_main!(benches);

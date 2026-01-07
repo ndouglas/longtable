@@ -348,6 +348,284 @@ fn bench_interner(c: &mut Criterion) {
     group.finish();
 }
 
+// =============================================================================
+// Stage 4: Edge Cases and Stress Tests
+// =============================================================================
+
+fn bench_value_deep_nested(c: &mut Criterion) {
+    let mut group = c.benchmark_group("value/deep_nested");
+
+    // Create deeply nested vector: [[[...]]]
+    fn make_nested_vec(depth: usize) -> Value {
+        let mut v = Value::Int(42);
+        for _ in 0..depth {
+            v = Value::Vec(std::iter::once(v).collect());
+        }
+        v
+    }
+
+    // Create deeply nested map: {:a {:a {:a ...}}}
+    fn make_nested_map(depth: usize) -> Value {
+        let mut v = Value::Int(42);
+        for _ in 0..depth {
+            let mut map = LtMap::new();
+            map = map.insert(Value::from("a"), v);
+            v = Value::Map(map);
+        }
+        v
+    }
+
+    for depth in [5, 10, 20, 50] {
+        let nested_vec = make_nested_vec(depth);
+        group.bench_with_input(BenchmarkId::new("clone_vec", depth), &nested_vec, |b, v| {
+            b.iter(|| black_box(v.clone()))
+        });
+
+        let nested_map = make_nested_map(depth);
+        group.bench_with_input(BenchmarkId::new("clone_map", depth), &nested_map, |b, v| {
+            b.iter(|| black_box(v.clone()))
+        });
+    }
+
+    // Compare deeply nested values
+    for depth in [5, 10, 20] {
+        let a = make_nested_vec(depth);
+        let b = make_nested_vec(depth);
+        group.bench_with_input(
+            BenchmarkId::new("compare_vec", depth),
+            &(a, b),
+            |bench, (a, b)| bench.iter(|| black_box(a == b)),
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_ltmap_patterns(c: &mut Criterion) {
+    let mut group = c.benchmark_group("collections/map_patterns");
+
+    // Sequential key insertion (best case for some data structures)
+    for size in [1_000, 10_000] {
+        group.bench_with_input(
+            BenchmarkId::new("insert_sequential", size),
+            &size,
+            |b, &size| {
+                b.iter(|| {
+                    let mut m = LtMap::new();
+                    for i in 0..size {
+                        m = m.insert(i, i);
+                    }
+                    black_box(m)
+                })
+            },
+        );
+    }
+
+    // Random key insertion (more realistic)
+    for size in [1_000, 10_000] {
+        // Pre-generate "random" keys using a simple hash
+        let keys: Vec<i32> = (0..size)
+            .map(|i| {
+                let mut h = DefaultHasher::new();
+                i.hash(&mut h);
+                (h.finish() % 1_000_000) as i32
+            })
+            .collect();
+
+        group.bench_with_input(BenchmarkId::new("insert_random", size), &keys, |b, keys| {
+            b.iter(|| {
+                let mut m = LtMap::new();
+                for (i, &k) in keys.iter().enumerate() {
+                    m = m.insert(k, i as i32);
+                }
+                black_box(m)
+            })
+        });
+    }
+
+    // Lookup miss rates
+    for size in [1_000, 10_000] {
+        let map: LtMap<i32, i32> = (0..size).map(|i| (i, i)).collect();
+
+        // 0% miss (all hits)
+        group.bench_with_input(BenchmarkId::new("lookup_0pct_miss", size), &map, |b, m| {
+            b.iter(|| {
+                let mut sum = 0i64;
+                for i in 0..100 {
+                    if let Some(&v) = m.get(&(i % size)) {
+                        sum += v as i64;
+                    }
+                }
+                black_box(sum)
+            })
+        });
+
+        // 50% miss
+        group.bench_with_input(BenchmarkId::new("lookup_50pct_miss", size), &map, |b, m| {
+            b.iter(|| {
+                let mut sum = 0i64;
+                for i in 0..100 {
+                    // Even indices hit, odd indices miss
+                    let key = if i % 2 == 0 { i / 2 } else { size + i };
+                    if let Some(&v) = m.get(&key) {
+                        sum += v as i64;
+                    }
+                }
+                black_box(sum)
+            })
+        });
+
+        // 100% miss
+        group.bench_with_input(
+            BenchmarkId::new("lookup_100pct_miss", size),
+            &map,
+            |b, m| {
+                b.iter(|| {
+                    let mut found = 0;
+                    for i in 0..100 {
+                        if m.get(&(size + i)).is_some() {
+                            found += 1;
+                        }
+                    }
+                    black_box(found)
+                })
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_interner_stress(c: &mut Criterion) {
+    let mut group = c.benchmark_group("interner/stress");
+
+    // High collision scenario: similar strings
+    group.bench_function("similar_strings_1000", |b| {
+        // Strings that differ only in suffix - tests hash distribution
+        let strings: Vec<String> = (0..1000)
+            .map(|i| format!("very_long_prefix_that_is_the_same_{i}"))
+            .collect();
+        b.iter_batched(
+            Interner::new,
+            |mut interner| {
+                for s in &strings {
+                    black_box(interner.intern_symbol(s));
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Short strings (common case)
+    group.bench_function("short_strings_1000", |b| {
+        let strings: Vec<String> = (0..1000).map(|i| format!("s{i}")).collect();
+        b.iter_batched(
+            Interner::new,
+            |mut interner| {
+                for s in &strings {
+                    black_box(interner.intern_symbol(s));
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Keywords vs symbols (different intern paths)
+    group.bench_function("keywords_1000", |b| {
+        let keywords: Vec<String> = (0..1000).map(|i| format!("kw{i}")).collect();
+        b.iter_batched(
+            Interner::new,
+            |mut interner| {
+                for k in &keywords {
+                    black_box(interner.intern_keyword(k));
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Mixed intern and lookup (realistic usage)
+    group.bench_function("mixed_intern_lookup", |b| {
+        b.iter_batched(
+            || {
+                let mut interner = Interner::new();
+                let ids: Vec<_> = (0..100)
+                    .map(|i| interner.intern_symbol(&format!("sym{i}")))
+                    .collect();
+                (interner, ids)
+            },
+            |(mut interner, ids)| {
+                // Intern 100 new, lookup 100 existing
+                for i in 0..100 {
+                    black_box(interner.intern_symbol(&format!("new{i}")));
+                    black_box(interner.get_symbol(ids[i % ids.len()]));
+                }
+            },
+            criterion::BatchSize::SmallInput,
+        )
+    });
+
+    // Large interner (10K symbols already interned)
+    group.bench_function("lookup_in_10k", |b| {
+        let mut interner = Interner::new();
+        let ids: Vec<_> = (0..10_000)
+            .map(|i| interner.intern_symbol(&format!("symbol_{i}")))
+            .collect();
+        b.iter(|| {
+            // Lookup random symbols
+            let mut sum = 0usize;
+            for i in 0..100 {
+                if let Some(s) = interner.get_symbol(ids[(i * 97) % ids.len()]) {
+                    sum += s.len();
+                }
+            }
+            black_box(sum)
+        })
+    });
+
+    group.finish();
+}
+
+fn bench_value_construction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("value/construct");
+
+    // Measure construction costs
+    group.bench_function("vec_from_iter_100", |b| {
+        b.iter(|| {
+            let v: LtVec<Value> = (0..100).map(Value::Int).collect();
+            black_box(Value::Vec(v))
+        })
+    });
+
+    group.bench_function("map_from_iter_100", |b| {
+        b.iter(|| {
+            let m: LtMap<Value, Value> = (0..100)
+                .map(|i| (Value::Int(i), Value::Int(i * 2)))
+                .collect();
+            black_box(Value::Map(m))
+        })
+    });
+
+    group.bench_function("set_from_iter_100", |b| {
+        b.iter(|| {
+            let s: LtSet<Value> = (0..100).map(Value::Int).collect();
+            black_box(Value::Set(s))
+        })
+    });
+
+    // String construction
+    group.bench_function("string_from_str", |b| {
+        b.iter(|| black_box(Value::from("hello world")))
+    });
+
+    group.bench_function("string_from_string", |b| {
+        let s = "hello world".to_string();
+        b.iter(|| black_box(Value::from(s.clone())))
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_value_clone,
@@ -357,6 +635,11 @@ criterion_group!(
     bench_ltset,
     bench_ltmap,
     bench_interner,
+    // Stage 4 additions
+    bench_value_deep_nested,
+    bench_ltmap_patterns,
+    bench_interner_stress,
+    bench_value_construction,
 );
 
 criterion_main!(benches);
