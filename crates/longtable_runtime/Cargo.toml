@@ -29,6 +29,10 @@ criterion.workspace = true
 name = "serialization_benchmarks"
 harness = false
 
+[[bench]]
+name = "runtime_benchmarks"
+harness = false
+
 [[bin]]
 name = "longtable"
 path = "src/bin/longtable.rs"

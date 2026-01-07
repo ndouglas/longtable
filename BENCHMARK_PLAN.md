@@ -8,7 +8,7 @@
 | `longtable_storage` | `storage_benchmarks.rs` (549 LOC) | Good - EntityStore, ComponentStore, RelationshipStore, World |
 | `longtable_language` | `language_benchmarks.rs` (1320 LOC) | **Complete** - Lexer, Parser, Compiler, VM, Stdlib (expanded) |
 | `longtable_engine` | `engine_benchmarks.rs` (1544 LOC) | Comprehensive - Patterns, Queries, Rules, Derived, Constraints, Tick |
-| `longtable_runtime` | `serialization_benchmarks.rs` (320 LOC) | Partial - Serialization only |
+| `longtable_runtime` | `serialization_benchmarks.rs` (320 LOC) + `runtime_benchmarks.rs` (485 LOC) | **Complete** - Serialization, Session, REPL eval, Pipeline |
 | `longtable_stdlib` | N/A (placeholder crate) | Stdlib in language crate |
 | `longtable_debug` | `debug_benchmarks.rs` (1450 LOC) | **Complete** - Timeline, Diff, Merge, Trace, Debug, Explain |
 
@@ -194,11 +194,19 @@ All Phase 6 observability code now has benchmark coverage.
 
 ---
 
-## Stage 3: longtable_runtime Additional Benchmarks
+## Stage 3: longtable_runtime Additional Benchmarks ✅ COMPLETE
 
 Expand beyond serialization to cover REPL and session operations.
 
 ### File: `crates/longtable_runtime/benches/runtime_benchmarks.rs`
+
+**Key findings from pipeline_stages benchmarks:**
+- Parse: ~1.4µs
+- Compile: ~19.7µs (dominant cost - 14x parse, 30x execute)
+- Execute: ~0.6µs (very fast once compiled)
+- Full pipeline: ~21µs
+
+**Implication**: Compilation is the bottleneck. Caching compiled bytecode for repeated expressions would provide significant speedup.
 
 #### 3.1 REPL Benchmarks
 
@@ -328,7 +336,7 @@ Expand beyond serialization to cover REPL and session operations.
 |----------|-------|-------|-----------|--------|
 | 1 | Stage 1 | `longtable_debug` | Phase 6 code completely unbenchmarked | ✅ Complete |
 | 2 | Stage 2 | `longtable_language` | Stdlib coverage (was stdlib placeholder) | ✅ Complete |
-| 3 | Stage 3 | `longtable_runtime` | User-facing operations need measurement | ⏳ Pending |
+| 3 | Stage 3 | `longtable_runtime` | User-facing operations need measurement | ✅ Complete |
 | 4 | Stage 4 | All | Polish and edge case coverage | ⏳ Pending |
 | 5 | Stage 5 | All | Memory profiling & large-scale (10K-1M) | ⏳ Pending |
 
@@ -550,7 +558,7 @@ harness = false
 |-------|------------|-----|--------|
 | Stage 1 (debug) | ~100 | 1450 | ✅ Complete |
 | Stage 2 (stdlib) | ~42 | 420 | ✅ Complete |
-| Stage 3 (runtime) | ~20 | ~400 | ⏳ Pending |
+| Stage 3 (runtime) | ~50 | 485 | ✅ Complete |
 | Stage 4 (expansions) | ~25 | ~500 | ⏳ Pending |
 | Stage 5 (scale/memory) | ~60 | ~800 | ⏳ Pending |
 | **Total** | **~247** | **~3570** |
