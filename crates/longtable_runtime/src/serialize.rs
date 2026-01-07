@@ -187,9 +187,9 @@ mod tests {
         let bytes = to_bytes(&world).unwrap();
         let restored = from_bytes(&bytes).unwrap();
 
-        // Verify entities exist
+        // Verify entities exist (includes relationship entity from dual-write)
         let entities: Vec<_> = restored.entities().collect();
-        assert_eq!(entities.len(), 2);
+        assert_eq!(entities.len(), 3);
 
         // The interner state should be preserved
         assert_eq!(

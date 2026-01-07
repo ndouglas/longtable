@@ -744,6 +744,14 @@ impl World {
     /// Creates a relationship edge.
     ///
     /// Returns a new World with the relationship added.
+    ///
+    /// # Dual-Write Migration (Phase 5.5.3)
+    ///
+    /// This method creates BOTH:
+    /// 1. The old-style edge in `RelationshipStore` (for backwards compatibility)
+    /// 2. A new relationship entity with `:rel/type`, `:rel/source`, `:rel/target`
+    ///
+    /// Once migration is complete (Phase 5.5.7), the old-style storage will be removed.
     pub fn link(
         &self,
         source: EntityId,
@@ -753,14 +761,29 @@ impl World {
         self.entities.validate(source)?;
         self.entities.validate(target)?;
 
+        // 1. Create old-style edge (handles cardinality enforcement)
         let mut new_relationships = (*self.relationships).clone();
         new_relationships.link(source, relationship, target)?;
 
-        Ok(World {
+        let intermediate_world = World {
             relationships: Arc::new(new_relationships),
             previous: Some(Arc::new(self.clone())),
             ..self.clone()
-        })
+        };
+
+        // 2. Also create relationship entity (dual-write)
+        // Skip if relationship entity already exists (idempotent)
+        let existing =
+            intermediate_world.find_relationships(Some(relationship), Some(source), Some(target));
+        if !existing.is_empty() {
+            return Ok(intermediate_world);
+        }
+
+        // Create the relationship entity
+        let (final_world, _rel_entity) =
+            intermediate_world.spawn_relationship(relationship, source, target)?;
+
+        Ok(final_world)
     }
 
     /// Removes a relationship edge.

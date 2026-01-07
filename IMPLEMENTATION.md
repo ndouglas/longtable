@@ -1083,9 +1083,10 @@ When source or target entity is deleted, relationship entities must be cleaned u
 
 ### 5.5.3 Dual-Write Migration
 
-- [ ] `link:` creates BOTH old-style relationship AND new relationship entity
-- [ ] Verify both storages stay in sync
-- [ ] Test: existing relationship tests still pass
+- [x] `World::link()` now creates BOTH old-style relationship AND new relationship entity
+- [x] Idempotent: skips creating relationship entity if it already exists
+- [x] Both storages stay in sync
+- [x] Test: all 878 existing tests still pass (updated 2 tests for new entity counts)
 
 ### 5.5.4 Query Migration
 

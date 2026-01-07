@@ -1260,8 +1260,8 @@ mod tests {
         // Link them
         repl.eval("(link: player :in-room room)").unwrap();
 
-        // Verify entities exist
-        assert_eq!(repl.session.world().entity_count(), 2);
+        // Verify entities exist (player, room, and the relationship entity from dual-write)
+        assert_eq!(repl.session.world().entity_count(), 3);
     }
 
     #[test]
