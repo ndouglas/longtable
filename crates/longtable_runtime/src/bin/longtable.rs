@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// CLI configuration parsed from arguments.
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct CliConfig {
     files: Vec<PathBuf>,
     batch_mode: bool,
@@ -181,4 +181,176 @@ fn print_help() {
 
 For more information, visit https://github.com/ndouglas/longtable"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(s: &str) -> Vec<String> {
+        s.split_whitespace().map(String::from).collect()
+    }
+
+    // ==================== CLI Argument Parsing Tests ====================
+
+    #[test]
+    fn parse_empty_args() {
+        let config = parse_args(args("longtable")).unwrap();
+        assert!(config.files.is_empty());
+        assert!(!config.batch_mode);
+        assert!(!config.show_help);
+        assert!(!config.show_version);
+    }
+
+    #[test]
+    fn parse_help_short() {
+        let config = parse_args(args("longtable -h")).unwrap();
+        assert!(config.show_help);
+    }
+
+    #[test]
+    fn parse_help_long() {
+        let config = parse_args(args("longtable --help")).unwrap();
+        assert!(config.show_help);
+    }
+
+    #[test]
+    fn parse_version_short() {
+        let config = parse_args(args("longtable -V")).unwrap();
+        assert!(config.show_version);
+    }
+
+    #[test]
+    fn parse_version_long() {
+        let config = parse_args(args("longtable --version")).unwrap();
+        assert!(config.show_version);
+    }
+
+    #[test]
+    fn parse_batch_short() {
+        let config = parse_args(args("longtable -b")).unwrap();
+        assert!(config.batch_mode);
+    }
+
+    #[test]
+    fn parse_batch_long() {
+        let config = parse_args(args("longtable --batch")).unwrap();
+        assert!(config.batch_mode);
+    }
+
+    #[test]
+    fn parse_single_file() {
+        let config = parse_args(args("longtable test.lt")).unwrap();
+        assert_eq!(config.files.len(), 1);
+        assert_eq!(config.files[0], PathBuf::from("test.lt"));
+    }
+
+    #[test]
+    fn parse_multiple_files() {
+        let config = parse_args(args("longtable components.lt rules.lt world.lt")).unwrap();
+        assert_eq!(config.files.len(), 3);
+        assert_eq!(config.files[0], PathBuf::from("components.lt"));
+        assert_eq!(config.files[1], PathBuf::from("rules.lt"));
+        assert_eq!(config.files[2], PathBuf::from("world.lt"));
+    }
+
+    #[test]
+    fn parse_batch_with_file() {
+        let config = parse_args(args("longtable -b test.lt")).unwrap();
+        assert!(config.batch_mode);
+        assert_eq!(config.files.len(), 1);
+    }
+
+    #[test]
+    fn parse_trace_flags() {
+        let config = parse_args(args("longtable --trace --trace-vm --trace-match")).unwrap();
+        assert!(config.trace_rules);
+        assert!(config.trace_vm);
+        assert!(config.trace_match);
+    }
+
+    #[test]
+    fn parse_dump_world() {
+        let config = parse_args(args("longtable --dump-world")).unwrap();
+        assert!(config.dump_world);
+    }
+
+    #[test]
+    fn parse_max_ticks() {
+        let config = parse_args(args("longtable --max-ticks 100")).unwrap();
+        assert_eq!(config.max_ticks, Some(100));
+    }
+
+    #[test]
+    fn parse_max_ticks_with_file() {
+        let config = parse_args(args("longtable --max-ticks 50 -b test.lt")).unwrap();
+        assert_eq!(config.max_ticks, Some(50));
+        assert!(config.batch_mode);
+        assert_eq!(config.files.len(), 1);
+    }
+
+    #[test]
+    fn parse_unknown_option_fails() {
+        let result = parse_args(args("longtable --unknown"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown option"));
+    }
+
+    #[test]
+    fn parse_max_ticks_missing_value_fails() {
+        let result = parse_args(args("longtable --max-ticks"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("requires a value"));
+    }
+
+    #[test]
+    fn parse_max_ticks_invalid_value_fails() {
+        let result = parse_args(args("longtable --max-ticks abc"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid"));
+    }
+
+    #[test]
+    fn parse_combined_options() {
+        let config = parse_args(args(
+            "longtable -b --trace --dump-world --max-ticks 10 test.lt",
+        ))
+        .unwrap();
+        assert!(config.batch_mode);
+        assert!(config.trace_rules);
+        assert!(config.dump_world);
+        assert_eq!(config.max_ticks, Some(10));
+        assert_eq!(config.files.len(), 1);
+    }
+
+    // ==================== File Execution Tests ====================
+    // Note: These tests verify the run function behavior
+
+    #[test]
+    fn run_help_does_not_error() {
+        // Help should succeed without needing any files
+        let result = run(args("longtable --help"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_version_does_not_error() {
+        // Version should succeed without needing any files
+        let result = run(args("longtable --version"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn run_nonexistent_file_fails() {
+        // Loading a non-existent file should fail
+        let result = run(args("longtable -b /nonexistent/path/to/file.lt"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_batch_no_files_succeeds() {
+        // Batch mode with no files should succeed (just starts and exits)
+        let result = run(args("longtable -b"));
+        assert!(result.is_ok());
+    }
 }

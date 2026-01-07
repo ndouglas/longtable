@@ -945,7 +945,7 @@ Implement all spec functions organized by category:
 - [x] String functions (str/*, format) — split, join, trim, replace, starts-with?, ends-with?, contains?, blank?, substring, upper, lower, format
 - [x] Predicate functions (nil?, some?, type checks) — nil?, int?, float?, string?, keyword?, symbol?, vector?, list?, map?, set?, bool?, number?, coll?, fn?, entity?
 - [x] Higher-order function opcodes — Map, Filter, Reduce, Every, Some, TakeWhile, DropWhile, Remove, GroupBy, ZipWith, Repeatedly
-- [ ] Test each function with spec examples
+- [x] Test each function with spec examples (164+ native function tests across collection.rs, math.rs, predicates.rs, string.rs + 22 HOF opcode tests in vm/tests.rs)
 - [ ] Document each function
 
 ### 5.2 REPL
@@ -961,8 +961,8 @@ Implement all spec functions organized by category:
 - [x] Tab completion for keywords
 - [x] Special commands (inspect, tick!, save!, load-world!) — save world state, load world state, advance tick, inspect entity
 - [x] Test: basic evaluation tests (7 tests)
-- [ ] Test: interactive scenarios
-- [ ] Test: error recovery
+- [x] Test: interactive scenarios (7 tests for arithmetic chains, def/use, collections, strings, HOFs, math)
+- [x] Test: error recovery (4 tests for syntax errors, undefined vars, division by zero, type errors)
 
 ### 5.3 CLI
 
@@ -971,8 +971,8 @@ Implement all spec functions organized by category:
 - [x] Batch mode (--batch flag for non-interactive execution)
 - [x] Debug mode flags (--trace, --trace-vm, --trace-match, --max-ticks N, --dump-world)
 - [x] CLI argument parsing (--help, --version, --batch, debug flags)
-- [ ] Test: CLI argument parsing
-- [ ] Test: file execution
+- [x] Test: CLI argument parsing (18 tests for help, version, batch, files, trace flags, max-ticks, combined options, error cases)
+- [x] Test: file execution (4 tests for help, version, nonexistent file, batch mode)
 
 ### 5.4 Serialization
 

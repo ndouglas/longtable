@@ -749,4 +749,163 @@ mod tests {
         assert!(repl.is_complete("\"hello (world\""));
         assert!(repl.is_complete("(str \"[test]\")"));
     }
+
+    // ==================== Error Recovery Tests ====================
+
+    #[test]
+    fn error_recovery_syntax_error() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Syntax errors should not crash the REPL
+        let result = repl.eval("(+ 1 2");
+        assert!(result.is_err());
+
+        // REPL should still be usable after error
+        let result = repl.eval("(+ 1 2)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn error_recovery_undefined_function() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Calling undefined function should return error
+        let result = repl.eval("(undefined-fn 1 2)");
+        assert!(result.is_err());
+
+        // REPL should still be usable
+        let result = repl.eval("42");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn error_recovery_division_by_zero() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Division by zero should return error
+        let result = repl.eval("(/ 1 0)");
+        assert!(result.is_err());
+
+        // REPL should still be usable
+        let result = repl.eval("(/ 10 2)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn error_recovery_type_error() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Type error should return error
+        let result = repl.eval(r#"(+ "hello" 1)"#);
+        assert!(result.is_err());
+
+        // REPL should still be usable
+        let result = repl.eval("(+ 1 2)");
+        assert!(result.is_ok());
+    }
+
+    // ==================== Interactive Scenario Tests ====================
+
+    #[test]
+    fn interactive_arithmetic_chain() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Complex expression evaluation
+        let result = repl.eval("(+ (* 2 3) (- 10 5))").unwrap();
+        assert_eq!(result, Value::Int(11));
+    }
+
+    #[test]
+    fn interactive_let_expression() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Use let to bind a variable within a single expression
+        let result = repl.eval("(let [x 10] (+ x 5))").unwrap();
+        assert_eq!(result, Value::Int(15));
+
+        // Nested let bindings
+        let result = repl.eval("(let [x 10 y 20] (+ x y))").unwrap();
+        assert_eq!(result, Value::Int(30));
+    }
+
+    #[test]
+    fn interactive_collection_operations() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Create and manipulate collections
+        let result = repl.eval("(first [1 2 3])").unwrap();
+        assert_eq!(result, Value::Int(1));
+
+        let result = repl.eval("(count [1 2 3 4 5])").unwrap();
+        assert_eq!(result, Value::Int(5));
+    }
+
+    #[test]
+    fn interactive_nested_collections() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Nested vector creation
+        let result = repl.eval("[[1 2] [3 4]]").unwrap();
+        // Just verify it's a vector
+        assert!(matches!(result, Value::Vec(_)));
+
+        // Map creation
+        let result = repl.eval("{:a 1 :b 2}").unwrap();
+        assert!(matches!(result, Value::Map(_)));
+    }
+
+    #[test]
+    fn interactive_string_operations() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // String concatenation
+        let result = repl.eval(r#"(str "hello" " " "world")"#).unwrap();
+        assert_eq!(result, Value::String("hello world".into()));
+
+        // String functions
+        let result = repl.eval(r#"(str/upper "hello")"#).unwrap();
+        assert_eq!(result, Value::String("HELLO".into()));
+    }
+
+    #[test]
+    fn interactive_higher_order_functions() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Map with lambda - returns vector
+        let result = repl.eval("(map (fn [x] (* x 2)) [1 2 3])").unwrap();
+        assert!(matches!(result, Value::Vec(_)));
+
+        // Reduce with lambda (native functions can't be passed directly)
+        let result = repl
+            .eval("(reduce (fn [acc x] (+ acc x)) 0 [1 2 3 4 5])")
+            .unwrap();
+        assert_eq!(result, Value::Int(15));
+    }
+
+    #[test]
+    fn interactive_math_functions() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Basic math
+        let result = repl.eval("(abs -5)").unwrap();
+        assert_eq!(result, Value::Int(5));
+
+        // Min/max
+        let result = repl.eval("(max 1 5 3)").unwrap();
+        assert_eq!(result, Value::Int(5));
+
+        let result = repl.eval("(min 1 5 3)").unwrap();
+        assert_eq!(result, Value::Int(1));
+    }
 }
