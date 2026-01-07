@@ -525,6 +525,12 @@ impl<E: LineEditor> Repl<E> {
             // (explain-query (query ...)) or (explain-query (query ...) entity)
             Ast::Symbol(s, _) if s == "explain-query" => self.handle_explain_query(&list[1..]),
 
+            // (trace :on) or (trace :off) or (trace :json :on) etc.
+            Ast::Symbol(s, _) if s == "trace" => self.handle_trace(&list[1..]),
+
+            // (get-traces :last N) or (get-traces :tick N) or (get-traces :all)
+            Ast::Symbol(s, _) if s == "get-traces" => self.handle_get_traces(&list[1..]),
+
             _ => Ok(None),
         }
     }
@@ -1056,6 +1062,168 @@ impl<E: LineEditor> Repl<E> {
                 println!("    Reason: Entity does not exist");
             }
         }
+    }
+
+    /// Handles the (trace :on/:off) form.
+    ///
+    /// Enables or disables tracing.
+    fn handle_trace(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::TraceOutput;
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            // Show current status
+            let enabled = self.session.tracer().is_enabled();
+            println!("Trace: {}", if enabled { "on" } else { "off" });
+            return Ok(Some(Value::Bool(enabled)));
+        }
+
+        // Parse options
+        let mut i = 0;
+        while i < args.len() {
+            match &args[i] {
+                Ast::Keyword(k, _) if k == "on" => {
+                    self.session.tracer_mut().enable();
+                    self.session.tracer_mut().set_output(TraceOutput::Stderr);
+                    println!("Trace enabled");
+                }
+                Ast::Keyword(k, _) if k == "off" => {
+                    self.session.tracer_mut().disable();
+                    self.session.tracer_mut().set_output(TraceOutput::None);
+                    println!("Trace disabled");
+                }
+                Ast::Keyword(k, _) if k == "json" => {
+                    self.session.tracer_mut().set_json_format(true);
+                    println!("Trace output format: JSON");
+                }
+                Ast::Keyword(k, _) if k == "human" => {
+                    self.session.tracer_mut().set_json_format(false);
+                    println!("Trace output format: human-readable");
+                }
+                Ast::Keyword(k, _) if k == "clear" => {
+                    self.session.tracer_mut().clear();
+                    println!("Trace buffer cleared");
+                }
+                Ast::Keyword(k, _) if k == "stats" => {
+                    let stats = self.session.tracer().stats();
+                    println!("Trace statistics:");
+                    println!("  Records: {}/{}", stats.record_count, stats.max_size);
+                    if let (Some(oldest), Some(newest)) = (stats.oldest_tick, stats.newest_tick) {
+                        println!("  Ticks: {oldest} - {newest}");
+                    }
+                    println!("  Event types:");
+                    for (event_type, count) in &stats.event_counts {
+                        println!("    {event_type}: {count}");
+                    }
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::Internal(format!(
+                        "unknown trace option: {other:?}"
+                    ))));
+                }
+            }
+            i += 1;
+        }
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (get-traces :last N) form.
+    ///
+    /// Retrieves and displays trace records.
+    #[allow(clippy::items_after_statements, clippy::cast_possible_wrap)]
+    fn handle_get_traces(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "get-traces requires an option: :last N, :tick N, :type TYPE, or :all".to_string(),
+            )));
+        }
+
+        // First, figure out the query type and evaluate any parameters
+        enum TraceQuery {
+            All,
+            Last(usize),
+            Tick(u64),
+            Type(String),
+        }
+
+        let query = match &args[0] {
+            Ast::Keyword(k, _) if k == "all" => TraceQuery::All,
+
+            Ast::Keyword(k, _) if k == "last" => {
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "get-traces :last requires a count".to_string(),
+                    )));
+                }
+                let count = self.eval_form(&args[1])?;
+                let Value::Int(n) = count else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "get-traces :last requires an integer count".to_string(),
+                    )));
+                };
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                TraceQuery::Last(n.max(0) as usize)
+            }
+
+            Ast::Keyword(k, _) if k == "tick" => {
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "get-traces :tick requires a tick number".to_string(),
+                    )));
+                }
+                let tick = self.eval_form(&args[1])?;
+                let Value::Int(t) = tick else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "get-traces :tick requires an integer tick number".to_string(),
+                    )));
+                };
+                #[allow(clippy::cast_sign_loss)]
+                TraceQuery::Tick(t.max(0) as u64)
+            }
+
+            Ast::Keyword(k, _) if k == "type" => {
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "get-traces :type requires an event type".to_string(),
+                    )));
+                }
+                let Ast::Keyword(event_type, _) = &args[1] else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "get-traces :type requires a keyword event type".to_string(),
+                    )));
+                };
+                TraceQuery::Type(event_type.clone())
+            }
+
+            other => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "unknown get-traces option: {other:?}"
+                ))));
+            }
+        };
+
+        // Now borrow the buffer and execute the query
+        let buffer = self.session.tracer().buffer();
+        let records: Vec<_> = match query {
+            TraceQuery::All => buffer.iter().collect(),
+            TraceQuery::Last(n) => buffer.recent(n),
+            TraceQuery::Tick(t) => buffer.records_for_tick(t),
+            TraceQuery::Type(ref t) => buffer.by_event_type(t),
+        };
+
+        if records.is_empty() {
+            println!("No traces found");
+        } else {
+            let interner = self.session.world().interner();
+            let tracer = self.session.tracer();
+            let output = tracer.format_records(&records, interner);
+            println!("{output}");
+        }
+
+        Ok(Some(Value::Int(records.len() as i64)))
     }
 
     /// Loads and evaluates a file.

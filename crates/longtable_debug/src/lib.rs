@@ -3,10 +3,10 @@
 //! This crate provides:
 //! - [`config::ObservabilityConfig`] - Configuration for observability features
 //! - [`explain`] - "Why" queries for understanding how values were computed
+//! - [`trace`] - Tracing of simulation execution
 //!
 //! # Planned Features (Phase 6)
 //!
-//! - `Tracer` - Rule and entity tracing
 //! - `Debugger` - Breakpoints and stepping
 //! - `Timeline` - Time travel and branching
 
@@ -16,10 +16,15 @@
 
 pub mod config;
 pub mod explain;
+pub mod trace;
 
 pub use config::ObservabilityConfig;
 pub use explain::{
     CausalChain, CausalLink, ClauseMatchStats, DerivedDependency, DerivedExplanation,
     DerivedExplanationBuilder, EntityMatchExplanation, MatchFailureReason, QueryExplanation,
     QueryExplanationBuilder, WhyQuery, WhyResult,
+};
+pub use trace::{
+    HumanFormatter, JsonFormatter, TickPhase, TraceBuffer, TraceBufferStats, TraceEvent,
+    TraceFormatter, TraceOutput, TraceRecord, Tracer, TracerConfig,
 };

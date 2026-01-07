@@ -2,6 +2,7 @@
 //!
 //! The session holds the current world state and session-local variables.
 
+use longtable_debug::Tracer;
 use longtable_foundation::{EntityId, Value};
 use longtable_language::{ModuleRegistry, NamespaceContext};
 use longtable_storage::World;
@@ -9,7 +10,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Session state for an interactive REPL session.
-#[derive(Debug)]
 pub struct Session {
     /// The current world state.
     world: World,
@@ -32,6 +32,9 @@ pub struct Session {
 
     /// Current namespace context for symbol resolution.
     namespace_context: NamespaceContext,
+
+    /// Tracer for observability.
+    tracer: Tracer,
 }
 
 impl Session {
@@ -46,6 +49,7 @@ impl Session {
             auto_commit: true,
             module_registry: ModuleRegistry::new(),
             namespace_context: NamespaceContext::new(),
+            tracer: Tracer::disabled(),
         }
     }
 
@@ -60,6 +64,7 @@ impl Session {
             auto_commit: true,
             module_registry: ModuleRegistry::new(),
             namespace_context: NamespaceContext::new(),
+            tracer: Tracer::disabled(),
         }
     }
 
@@ -171,6 +176,17 @@ impl Session {
         } else {
             self.load_path.join(p)
         }
+    }
+
+    /// Returns a reference to the tracer.
+    #[must_use]
+    pub fn tracer(&self) -> &Tracer {
+        &self.tracer
+    }
+
+    /// Returns a mutable reference to the tracer.
+    pub fn tracer_mut(&mut self) -> &mut Tracer {
+        &mut self.tracer
     }
 }
 
