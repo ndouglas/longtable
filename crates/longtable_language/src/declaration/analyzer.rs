@@ -1,486 +1,68 @@
-//! Semantic declarations extracted from parsed AST.
+//! Declaration analyzer implementation.
 //!
-//! This module transforms raw AST (lists, vectors, symbols) into typed
-//! declaration structures (Rules, Patterns, Components, etc.).
-//!
-//! The flow is: Source → Parser → AST → `DeclarationAnalyzer` → Declaration → Compiler
+//! Contains the `DeclarationAnalyzer` struct and all analysis methods.
 
 use crate::ast::Ast;
 use crate::namespace::{LoadDecl, NamespaceDecl, NamespaceName, RequireSpec};
 use crate::span::Span;
 use longtable_foundation::{Error, ErrorKind, Result};
 
-// =============================================================================
-// Pattern Types
-// =============================================================================
-
-/// A pattern clause that matches entities.
-///
-/// Corresponds to `[?e :component/field ?value]` syntax.
-#[derive(Clone, Debug, PartialEq)]
-pub struct PatternClause {
-    /// The entity variable (e.g., "e" for `?e`)
-    pub entity_var: String,
-    /// The component keyword (e.g., "health/current")
-    pub component: String,
-    /// What to match/bind for the value
-    pub value: PatternValue,
-    /// Source span for error reporting
-    pub span: Span,
-}
-
-/// What the value position of a pattern matches.
-#[derive(Clone, Debug, PartialEq)]
-pub enum PatternValue {
-    /// Bind to a variable: `?hp`
-    Variable(String),
-    /// Match a literal value
-    Literal(Ast),
-    /// Wildcard match: `_`
-    Wildcard,
-}
-
-/// A complete pattern (conjunction of clauses and negations).
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct Pattern {
-    /// Positive clauses that must match
-    pub clauses: Vec<PatternClause>,
-    /// Negated patterns (entities must NOT match these)
-    pub negations: Vec<PatternClause>,
-}
-
-impl Pattern {
-    /// Creates an empty pattern.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns all variables bound by this pattern.
-    #[must_use]
-    pub fn bound_variables(&self) -> Vec<&str> {
-        let mut vars = Vec::new();
-        for clause in &self.clauses {
-            vars.push(clause.entity_var.as_str());
-            if let PatternValue::Variable(v) = &clause.value {
-                vars.push(v.as_str());
-            }
-        }
-        vars
-    }
-}
-
-// =============================================================================
-// Rule Declaration
-// =============================================================================
-
-/// A rule declaration extracted from AST.
-///
-/// Corresponds to:
-/// ```clojure
-/// (rule: name
-///   :salience n
-///   :once true/false
-///   :where [[pattern clauses]]
-///   :let [bindings]
-///   :guard [conditions]
-///   :then [effects])
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct RuleDecl {
-    /// Rule name
-    pub name: String,
-    /// Priority (higher fires first), default 0
-    pub salience: i32,
-    /// Fire at most once per tick
-    pub once: bool,
-    /// Enabled flag
-    pub enabled: bool,
-    /// Pattern to match
-    pub pattern: Pattern,
-    /// Local bindings (let)
-    pub bindings: Vec<(String, Ast)>,
-    /// Guard conditions
-    pub guards: Vec<Ast>,
-    /// Effect expressions
-    pub effects: Vec<Ast>,
-    /// Source span
-    pub span: Span,
-}
-
-impl RuleDecl {
-    /// Creates a new rule with the given name.
-    pub fn new(name: impl Into<String>, span: Span) -> Self {
-        Self {
-            name: name.into(),
-            salience: 0,
-            once: false,
-            enabled: true,
-            pattern: Pattern::new(),
-            bindings: Vec::new(),
-            guards: Vec::new(),
-            effects: Vec::new(),
-            span,
-        }
-    }
-}
-
-// =============================================================================
-// Component Declaration
-// =============================================================================
-
-/// A field in a component schema.
-#[derive(Clone, Debug, PartialEq)]
-pub struct FieldDecl {
-    /// Field name (e.g., "current" for `:current`)
-    pub name: String,
-    /// Field type (e.g., "int", "float", "string", "entity-ref")
-    pub ty: String,
-    /// Default value, if any
-    pub default: Option<Ast>,
-    /// Source span
-    pub span: Span,
-}
-
-/// A component declaration.
-///
-/// Corresponds to:
-/// ```clojure
-/// (component: health
-///   :current :int
-///   :max :int :default 100)
-///
-/// ;; Tag shorthand
-/// (component: tag/player :bool :default true)
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct ComponentDecl {
-    /// Component name (e.g., "health", "tag/player")
-    pub name: String,
-    /// Fields (empty for tag shorthand, parsed from type directly)
-    pub fields: Vec<FieldDecl>,
-    /// Whether this is a tag (single-field boolean shorthand)
-    pub is_tag: bool,
-    /// Source span
-    pub span: Span,
-}
-
-impl ComponentDecl {
-    /// Creates a new component declaration.
-    pub fn new(name: impl Into<String>, span: Span) -> Self {
-        Self {
-            name: name.into(),
-            fields: Vec::new(),
-            is_tag: false,
-            span,
-        }
-    }
-}
-
-// =============================================================================
-// Relationship Declaration
-// =============================================================================
-
-/// Storage strategy for a relationship.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum StorageKind {
-    /// Lightweight, stored as a component field
-    #[default]
-    Field,
-    /// Heavyweight, stored as a separate entity with attributes
-    Entity,
-}
-
-/// Cardinality of a relationship.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Cardinality {
-    /// One source to one target
-    OneToOne,
-    /// One source to many targets
-    OneToMany,
-    /// Many sources to one target
-    #[default]
-    ManyToOne,
-    /// Many sources to many targets
-    ManyToMany,
-}
-
-/// Behavior when the target of a relationship is deleted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum OnTargetDelete {
-    /// Remove the relationship
-    #[default]
-    Remove,
-    /// Destroy the source entity
-    Cascade,
-    /// Set to nil (only valid if not required)
-    Nullify,
-}
-
-/// Behavior when a cardinality constraint is violated.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum OnViolation {
-    /// Return an error
-    #[default]
-    Error,
-    /// Replace the old relationship with the new one
-    Replace,
-}
-
-/// A relationship declaration.
-///
-/// Corresponds to:
-/// ```clojure
-/// (relationship: follows
-///   :storage :field
-///   :cardinality :many-to-many
-///   :on-target-delete :remove)
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct RelationshipDecl {
-    /// Relationship name
-    pub name: String,
-    /// Storage strategy
-    pub storage: StorageKind,
-    /// Cardinality constraint
-    pub cardinality: Cardinality,
-    /// Behavior when target is deleted
-    pub on_target_delete: OnTargetDelete,
-    /// Behavior when cardinality is violated
-    pub on_violation: OnViolation,
-    /// Whether this relationship is required
-    pub required: bool,
-    /// Attributes (only for entity storage)
-    pub attributes: Vec<FieldDecl>,
-    /// Source span
-    pub span: Span,
-}
-
-impl RelationshipDecl {
-    /// Creates a new relationship declaration.
-    pub fn new(name: impl Into<String>, span: Span) -> Self {
-        Self {
-            name: name.into(),
-            storage: StorageKind::default(),
-            cardinality: Cardinality::default(),
-            on_target_delete: OnTargetDelete::default(),
-            on_violation: OnViolation::default(),
-            required: true,
-            attributes: Vec::new(),
-            span,
-        }
-    }
-}
-
-// =============================================================================
-// Derived Component Declaration
-// =============================================================================
-
-/// A derived component declaration.
-///
-/// Corresponds to:
-/// ```clojure
-/// (derived: health/percent
-///   :for ?self
-///   :where [[?self :health/current ?curr]
-///           [?self :health/max ?max]]
-///   :value (/ (* ?curr 100) ?max))
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct DerivedDecl {
-    /// Derived component name
-    pub name: String,
-    /// Entity variable this is computed for (e.g., "self" for `:for ?self`)
-    pub for_var: String,
-    /// Pattern to match for inputs
-    pub pattern: Pattern,
-    /// Local bindings
-    pub bindings: Vec<(String, Ast)>,
-    /// Aggregations (e.g., `{:total (sum ?p)}`)
-    pub aggregates: Vec<(String, Ast)>,
-    /// Value expression
-    pub value: Ast,
-    /// Source span
-    pub span: Span,
-}
-
-impl DerivedDecl {
-    /// Creates a new derived component declaration.
-    pub fn new(
-        name: impl Into<String>,
-        for_var: impl Into<String>,
-        value: Ast,
-        span: Span,
-    ) -> Self {
-        Self {
-            name: name.into(),
-            for_var: for_var.into(),
-            pattern: Pattern::new(),
-            bindings: Vec::new(),
-            aggregates: Vec::new(),
-            value,
-            span,
-        }
-    }
-}
-
-// =============================================================================
-// Constraint Declaration
-// =============================================================================
-
-/// Behavior when a constraint is violated.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ConstraintViolation {
-    /// Rollback the entire tick
-    #[default]
-    Rollback,
-    /// Log a warning and continue
-    Warn,
-}
-
-/// A constraint declaration.
-///
-/// Corresponds to:
-/// ```clojure
-/// (constraint: health-bounds
-///   :where [[?e :health/current ?hp]
-///           [?e :health/max ?max]]
-///   :check [(>= ?hp 0) (<= ?hp ?max)]
-///   :on-violation :rollback)
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct ConstraintDecl {
-    /// Constraint name
-    pub name: String,
-    /// Pattern to match for checking
-    pub pattern: Pattern,
-    /// Local bindings
-    pub bindings: Vec<(String, Ast)>,
-    /// Aggregations
-    pub aggregates: Vec<(String, Ast)>,
-    /// Guard conditions (additional filtering before check)
-    pub guards: Vec<Ast>,
-    /// Check expressions (all must be true)
-    pub checks: Vec<Ast>,
-    /// Behavior on violation
-    pub on_violation: ConstraintViolation,
-    /// Source span
-    pub span: Span,
-}
-
-impl ConstraintDecl {
-    /// Creates a new constraint declaration.
-    pub fn new(name: impl Into<String>, span: Span) -> Self {
-        Self {
-            name: name.into(),
-            pattern: Pattern::new(),
-            bindings: Vec::new(),
-            aggregates: Vec::new(),
-            guards: Vec::new(),
-            checks: Vec::new(),
-            on_violation: ConstraintViolation::default(),
-            span,
-        }
-    }
-}
-
-// =============================================================================
-// Query Declaration
-// =============================================================================
-
-/// Order direction for query results.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum OrderDirection {
-    /// Ascending order (smallest first)
-    #[default]
-    Asc,
-    /// Descending order (largest first)
-    Desc,
-}
-
-/// A query expression.
-///
-/// Corresponds to:
-/// ```clojure
-/// (query
-///   :where [[?e :health/current ?hp]]
-///   :order-by [[?hp :desc]]
-///   :limit 10
-///   :return ?e)
-/// ```
-#[derive(Clone, Debug, PartialEq)]
-pub struct QueryDecl {
-    /// Pattern to match
-    pub pattern: Pattern,
-    /// Local bindings
-    pub bindings: Vec<(String, Ast)>,
-    /// Aggregations
-    pub aggregates: Vec<(String, Ast)>,
-    /// Group-by variables
-    pub group_by: Vec<String>,
-    /// Guard conditions
-    pub guards: Vec<Ast>,
-    /// Order-by clauses
-    pub order_by: Vec<(String, OrderDirection)>,
-    /// Result limit
-    pub limit: Option<usize>,
-    /// Return expression
-    pub return_expr: Option<Ast>,
-    /// Source span
-    pub span: Span,
-}
-
-impl QueryDecl {
-    /// Creates a new query declaration.
-    #[must_use]
-    pub fn new(span: Span) -> Self {
-        Self {
-            pattern: Pattern::new(),
-            bindings: Vec::new(),
-            aggregates: Vec::new(),
-            group_by: Vec::new(),
-            guards: Vec::new(),
-            order_by: Vec::new(),
-            limit: None,
-            return_expr: None,
-            span,
-        }
-    }
-}
-
-// =============================================================================
-// Unified Declaration Enum
-// =============================================================================
-
-/// Any top-level declaration.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Declaration {
-    /// A component schema declaration.
-    Component(ComponentDecl),
-    /// A relationship declaration.
-    Relationship(RelationshipDecl),
-    /// A rule declaration.
-    Rule(RuleDecl),
-    /// A derived component declaration.
-    Derived(DerivedDecl),
-    /// A constraint declaration.
-    Constraint(ConstraintDecl),
-    /// A query expression.
-    Query(QueryDecl),
-    /// A namespace declaration.
-    Namespace(NamespaceDecl),
-    /// A load directive.
-    Load(LoadDecl),
-}
-
-// =============================================================================
-// Declaration Analyzer
-// =============================================================================
+use super::Declaration;
+use super::types::{
+    Cardinality, ComponentDecl, ConstraintDecl, ConstraintViolation, DerivedDecl, FieldDecl,
+    LinkDecl, OnTargetDelete, OnViolation, OrderDirection, Pattern, PatternClause, PatternValue,
+    QueryDecl, RelationshipDecl, RuleDecl, SpawnDecl, StorageKind,
+};
 
 /// Analyzes AST and extracts typed declarations.
 pub struct DeclarationAnalyzer;
 
 impl DeclarationAnalyzer {
+    // =========================================================================
+    // Unified Analysis
+    // =========================================================================
+
+    /// Analyze any top-level declaration.
+    pub fn analyze(ast: &Ast) -> Result<Option<Declaration>> {
+        // Try each declaration type
+        if let Some(comp) = Self::analyze_component(ast)? {
+            return Ok(Some(Declaration::Component(comp)));
+        }
+        if let Some(rel) = Self::analyze_relationship(ast)? {
+            return Ok(Some(Declaration::Relationship(rel)));
+        }
+        if let Some(rule) = Self::analyze_rule(ast)? {
+            return Ok(Some(Declaration::Rule(rule)));
+        }
+        if let Some(derived) = Self::analyze_derived(ast)? {
+            return Ok(Some(Declaration::Derived(derived)));
+        }
+        if let Some(constraint) = Self::analyze_constraint(ast)? {
+            return Ok(Some(Declaration::Constraint(constraint)));
+        }
+        if let Some(query) = Self::analyze_query(ast)? {
+            return Ok(Some(Declaration::Query(query)));
+        }
+        if let Some(ns) = Self::analyze_namespace(ast)? {
+            return Ok(Some(Declaration::Namespace(ns)));
+        }
+        if let Some(load) = Self::analyze_load(ast)? {
+            return Ok(Some(Declaration::Load(load)));
+        }
+        if let Some(spawn) = Self::analyze_spawn(ast)? {
+            return Ok(Some(Declaration::Spawn(spawn)));
+        }
+        if let Some(link) = Self::analyze_link(ast)? {
+            return Ok(Some(Declaration::Link(link)));
+        }
+
+        Ok(None)
+    }
+
+    // =========================================================================
+    // Rule Declaration Analysis
+    // =========================================================================
+
     /// Analyze a top-level form and return a rule if it's a rule declaration.
     #[allow(clippy::too_many_lines)]
     pub fn analyze_rule(ast: &Ast) -> Result<Option<RuleDecl>> {
@@ -631,7 +213,7 @@ impl DeclarationAnalyzer {
     }
 
     /// Analyze a :where clause into a Pattern.
-    fn analyze_where_clause(ast: &Ast) -> Result<Pattern> {
+    pub(crate) fn analyze_where_clause(ast: &Ast) -> Result<Pattern> {
         let patterns = match ast {
             Ast::Vector(elements, _) => elements,
             other => {
@@ -688,7 +270,8 @@ impl DeclarationAnalyzer {
                         }
                         _ => {
                             return Err(Error::new(ErrorKind::ParseError {
-                                message: "expected pattern vector or (not [...])".to_string(),
+                                message: "only (not [...]) is allowed in :where clause lists"
+                                    .to_string(),
                                 line: span.line,
                                 column: span.column,
                                 context: String::new(),
@@ -699,7 +282,7 @@ impl DeclarationAnalyzer {
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
                         message: format!(
-                            "pattern must be a vector or (not ...), got {}",
+                            "pattern must be a vector or (not [...]), got {}",
                             other.type_name()
                         ),
                         line: other.span().line,
@@ -713,7 +296,7 @@ impl DeclarationAnalyzer {
         Ok(pattern)
     }
 
-    /// Analyze a single pattern clause: [?e :component ?v]
+    /// Analyze a single pattern clause like [?e :component ?value].
     fn analyze_pattern_clause(elements: &[Ast], span: Span) -> Result<PatternClause> {
         if elements.len() < 2 || elements.len() > 3 {
             return Err(Error::new(ErrorKind::ParseError {
@@ -729,10 +312,7 @@ impl DeclarationAnalyzer {
             Ast::Symbol(s, _) if s.starts_with('?') => s[1..].to_string(),
             other => {
                 return Err(Error::new(ErrorKind::ParseError {
-                    message: format!(
-                        "pattern entity must be a ?variable, got {}",
-                        other.type_name()
-                    ),
+                    message: format!("entity must be a ?variable, got {}", other.type_name()),
                     line: other.span().line,
                     column: other.span().column,
                     context: String::new(),
@@ -745,10 +325,7 @@ impl DeclarationAnalyzer {
             Ast::Keyword(k, _) => k.clone(),
             other => {
                 return Err(Error::new(ErrorKind::ParseError {
-                    message: format!(
-                        "pattern component must be a keyword, got {}",
-                        other.type_name()
-                    ),
+                    message: format!("component must be a keyword, got {}", other.type_name()),
                     line: other.span().line,
                     column: other.span().column,
                     context: String::new(),
@@ -759,10 +336,10 @@ impl DeclarationAnalyzer {
         // Value (optional)
         let value = if elements.len() == 3 {
             match &elements[2] {
-                Ast::Symbol(s, _) if s == "_" => PatternValue::Wildcard,
                 Ast::Symbol(s, _) if s.starts_with('?') => {
                     PatternValue::Variable(s[1..].to_string())
                 }
+                Ast::Symbol(s, _) if s == "_" => PatternValue::Wildcard,
                 other => PatternValue::Literal(other.clone()),
             }
         } else {
@@ -778,7 +355,7 @@ impl DeclarationAnalyzer {
     }
 
     /// Analyze a :let clause into bindings.
-    fn analyze_let_bindings(ast: &Ast) -> Result<Vec<(String, Ast)>> {
+    pub(crate) fn analyze_let_bindings(ast: &Ast) -> Result<Vec<(String, Ast)>> {
         let bindings = match ast {
             Ast::Vector(elements, _) => elements,
             other => {
@@ -793,7 +370,7 @@ impl DeclarationAnalyzer {
 
         if bindings.len() % 2 != 0 {
             return Err(Error::new(ErrorKind::ParseError {
-                message: ":let bindings must be pairs".to_string(),
+                message: ":let bindings must be pairs of [name value ...]".to_string(),
                 line: ast.span().line,
                 column: ast.span().column,
                 context: String::new(),
@@ -801,8 +378,9 @@ impl DeclarationAnalyzer {
         }
 
         let mut result = Vec::new();
-        for chunk in bindings.chunks(2) {
-            let name = match &chunk[0] {
+        let mut i = 0;
+        while i < bindings.len() {
+            let name = match &bindings[i] {
                 Ast::Symbol(s, _) => s.clone(),
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
@@ -816,14 +394,16 @@ impl DeclarationAnalyzer {
                     }));
                 }
             };
-            result.push((name, chunk[1].clone()));
+            let value = bindings[i + 1].clone();
+            result.push((name, value));
+            i += 2;
         }
 
         Ok(result)
     }
 
     /// Analyze a :guard clause.
-    fn analyze_guard_clause(ast: &Ast) -> Result<Vec<Ast>> {
+    pub(crate) fn analyze_guard_clause(ast: &Ast) -> Result<Vec<Ast>> {
         match ast {
             Ast::Vector(elements, _) => Ok(elements.clone()),
             other => Err(Error::new(ErrorKind::ParseError {
@@ -853,12 +433,6 @@ impl DeclarationAnalyzer {
     // =========================================================================
 
     /// Analyze a top-level form and return a component if it's a component declaration.
-    ///
-    /// Handles both full form and tag shorthand:
-    /// ```clojure
-    /// (component: health :current :int :max :int :default 100)
-    /// (component: tag/player :bool :default true)
-    /// ```
     #[allow(clippy::too_many_lines)]
     pub fn analyze_component(ast: &Ast) -> Result<Option<ComponentDecl>> {
         let list = match ast {
@@ -902,7 +476,6 @@ impl DeclarationAnalyzer {
         let mut component = ComponentDecl::new(name, span);
 
         // Check for tag shorthand: (component: tag/player :bool :default true)
-        // This is when the third element is a type keyword like :bool, :int, etc.
         if elements.len() >= 3 {
             if let Ast::Keyword(ty, _) = &elements[2] {
                 if Self::is_type_keyword(ty) {
@@ -959,7 +532,6 @@ impl DeclarationAnalyzer {
         }
 
         // Full form: (component: health :current :int :max :int :default 100)
-        // Parse as: :field-name :type [:default value] ...
         let mut i = 2;
         while i < elements.len() {
             // Field name
@@ -1263,7 +835,7 @@ impl DeclarationAnalyzer {
                 }
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
-                        message: format!("unknown relationship option :{other}"),
+                        message: format!("unknown relationship clause :{other}"),
                         line: value.span().line,
                         column: value.span().column,
                         context: String::new(),
@@ -1275,7 +847,7 @@ impl DeclarationAnalyzer {
         Ok(Some(rel))
     }
 
-    /// Analyze an :attributes list for entity-storage relationships.
+    /// Analyze an :attributes list into field declarations.
     fn analyze_attribute_list(ast: &Ast) -> Result<Vec<FieldDecl>> {
         let attrs = match ast {
             Ast::Vector(elements, _) => elements,
@@ -1291,7 +863,7 @@ impl DeclarationAnalyzer {
 
         if attrs.len() % 2 != 0 {
             return Err(Error::new(ErrorKind::ParseError {
-                message: ":attributes must be pairs of name and type".to_string(),
+                message: ":attributes must be pairs of [:name :type ...]".to_string(),
                 line: ast.span().line,
                 column: ast.span().column,
                 context: String::new(),
@@ -1299,8 +871,9 @@ impl DeclarationAnalyzer {
         }
 
         let mut result = Vec::new();
-        for chunk in attrs.chunks(2) {
-            let name = match &chunk[0] {
+        let mut i = 0;
+        while i < attrs.len() {
+            let name = match &attrs[i] {
                 Ast::Keyword(k, _) => k.clone(),
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
@@ -1314,7 +887,7 @@ impl DeclarationAnalyzer {
                     }));
                 }
             };
-            let ty = match &chunk[1] {
+            let ty = match &attrs[i + 1] {
                 Ast::Keyword(k, _) => k.clone(),
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
@@ -1332,15 +905,16 @@ impl DeclarationAnalyzer {
                 name,
                 ty,
                 default: None,
-                span: chunk[0].span(),
+                span: attrs[i].span(),
             });
+            i += 2;
         }
 
         Ok(result)
     }
 
     // =========================================================================
-    // Derived Component Declaration Analysis
+    // Derived Declaration Analysis
     // =========================================================================
 
     /// Analyze a top-level form and return a derived component if it's a derived declaration.
@@ -1487,7 +1061,7 @@ impl DeclarationAnalyzer {
     }
 
     /// Analyze an :aggregate clause into a list of (name, expression) pairs.
-    fn analyze_aggregate_clause(ast: &Ast) -> Result<Vec<(String, Ast)>> {
+    pub(crate) fn analyze_aggregate_clause(ast: &Ast) -> Result<Vec<(String, Ast)>> {
         let map = match ast {
             Ast::Map(entries, _) => entries,
             other => {
@@ -1906,15 +1480,6 @@ impl DeclarationAnalyzer {
     // =========================================================================
 
     /// Analyze a top-level form and return a namespace if it's a namespace declaration.
-    ///
-    /// Handles:
-    /// ```clojure
-    /// (namespace game.combat)
-    /// (namespace game.combat
-    ///   (:require [game.core :as core]
-    ///             [game.utils :refer [distance clamp]]
-    ///             [game.items]))
-    /// ```
     #[allow(clippy::too_many_lines)]
     pub fn analyze_namespace(ast: &Ast) -> Result<Option<NamespaceDecl>> {
         let list = match ast {
@@ -2040,7 +1605,7 @@ impl DeclarationAnalyzer {
             return Ok(RequireSpec::Use { namespace: ns_name });
         }
 
-        // Parse :as or :refer (require specs have at most one such option)
+        // Parse :as or :refer
         let kw = match &elements[1] {
             Ast::Keyword(k, _) => k.as_str(),
             other => {
@@ -2142,8 +1707,6 @@ impl DeclarationAnalyzer {
     // =========================================================================
 
     /// Analyze a top-level form and return a load directive if it's a load form.
-    ///
-    /// Handles `(load "path/to/file.lt")` syntax.
     pub fn analyze_load(ast: &Ast) -> Result<Option<LoadDecl>> {
         let list = match ast {
             Ast::List(elements, span) => (elements, *span),
@@ -2186,710 +1749,162 @@ impl DeclarationAnalyzer {
     }
 
     // =========================================================================
-    // Unified Analysis
+    // Spawn Declaration Analysis
     // =========================================================================
 
-    /// Analyze any top-level declaration.
-    pub fn analyze(ast: &Ast) -> Result<Option<Declaration>> {
-        // Try each declaration type
-        if let Some(comp) = Self::analyze_component(ast)? {
-            return Ok(Some(Declaration::Component(comp)));
-        }
-        if let Some(rel) = Self::analyze_relationship(ast)? {
-            return Ok(Some(Declaration::Relationship(rel)));
-        }
-        if let Some(rule) = Self::analyze_rule(ast)? {
-            return Ok(Some(Declaration::Rule(rule)));
-        }
-        if let Some(derived) = Self::analyze_derived(ast)? {
-            return Ok(Some(Declaration::Derived(derived)));
-        }
-        if let Some(constraint) = Self::analyze_constraint(ast)? {
-            return Ok(Some(Declaration::Constraint(constraint)));
-        }
-        if let Some(query) = Self::analyze_query(ast)? {
-            return Ok(Some(Declaration::Query(query)));
-        }
-        if let Some(ns) = Self::analyze_namespace(ast)? {
-            return Ok(Some(Declaration::Namespace(ns)));
-        }
-        if let Some(load) = Self::analyze_load(ast)? {
-            return Ok(Some(Declaration::Load(load)));
+    /// Analyze a top-level form and return a spawn declaration if it's a spawn form.
+    ///
+    /// Spawn form: `(spawn: name :component value ...)`
+    pub fn analyze_spawn(ast: &Ast) -> Result<Option<SpawnDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
         }
 
-        Ok(None)
-    }
-}
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser;
-
-    fn parse(src: &str) -> Ast {
-        parser::parse(src).unwrap().remove(0)
-    }
-
-    #[test]
-    fn analyze_simple_rule() {
-        let ast = parse(
-            r"(rule: my-rule
-                 :where [[?e :health ?hp]]
-                 :then [(print! ?hp)])",
-        );
-
-        let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
-
-        assert_eq!(rule.name, "my-rule");
-        assert_eq!(rule.salience, 0);
-        assert!(!rule.once);
-        assert_eq!(rule.pattern.clauses.len(), 1);
-        assert_eq!(rule.pattern.clauses[0].entity_var, "e");
-        assert_eq!(rule.pattern.clauses[0].component, "health");
-        assert_eq!(
-            rule.pattern.clauses[0].value,
-            PatternValue::Variable("hp".to_string())
-        );
-        assert_eq!(rule.effects.len(), 1);
-    }
-
-    #[test]
-    fn analyze_rule_with_options() {
-        let ast = parse(
-            r"(rule: priority-rule
-                 :salience 100
-                 :once true
-                 :where [[?e :tag/player true]]
-                 :then [])",
-        );
-
-        let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
-
-        assert_eq!(rule.name, "priority-rule");
-        assert_eq!(rule.salience, 100);
-        assert!(rule.once);
-        // Check that value is a literal Bool(true) regardless of span
-        match &rule.pattern.clauses[0].value {
-            PatternValue::Literal(Ast::Bool(true, _)) => {}
-            other => panic!("expected Literal(Bool(true, _)), got {other:?}"),
+        // Check for (spawn: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "spawn:" => {}
+            _ => return Ok(None),
         }
-    }
 
-    #[test]
-    fn analyze_rule_with_negation() {
-        let ast = parse(
-            r"(rule: no-velocity
-                 :where [[?e :position _]
-                         (not [?e :velocity])]
-                 :then [])",
-        );
-
-        let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
-
-        assert_eq!(rule.pattern.clauses.len(), 1);
-        assert_eq!(rule.pattern.negations.len(), 1);
-        assert_eq!(rule.pattern.negations[0].entity_var, "e");
-        assert_eq!(rule.pattern.negations[0].component, "velocity");
-    }
-
-    #[test]
-    fn analyze_rule_with_let_and_guard() {
-        let ast = parse(
-            r#"(rule: guarded
-                 :where [[?e :health ?hp]]
-                 :let [threshold 10]
-                 :guard [(< ?hp threshold)]
-                 :then [(print! "low health")])"#,
-        );
-
-        let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
-
-        assert_eq!(rule.bindings.len(), 1);
-        assert_eq!(rule.bindings[0].0, "threshold");
-        assert_eq!(rule.guards.len(), 1);
-    }
-
-    #[test]
-    fn analyze_wildcard_pattern() {
-        let ast = parse(
-            r"(rule: wildcard
-                 :where [[?e :position _]]
-                 :then [])",
-        );
-
-        let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
-
-        assert_eq!(rule.pattern.clauses[0].value, PatternValue::Wildcard);
-    }
-
-    #[test]
-    fn analyze_multiple_patterns() {
-        let ast = parse(
-            r"(rule: multi
-                 :where [[?e :position ?pos]
-                         [?e :velocity ?vel]]
-                 :then [])",
-        );
-
-        let rule = DeclarationAnalyzer::analyze_rule(&ast).unwrap().unwrap();
-
-        assert_eq!(rule.pattern.clauses.len(), 2);
-        assert_eq!(rule.pattern.clauses[0].component, "position");
-        assert_eq!(rule.pattern.clauses[1].component, "velocity");
-    }
-
-    #[test]
-    fn non_rule_returns_none() {
-        let ast = parse("(+ 1 2)");
-        let result = DeclarationAnalyzer::analyze_rule(&ast).unwrap();
-        assert!(result.is_none());
-    }
-
-    // =========================================================================
-    // Component Tests
-    // =========================================================================
-
-    #[test]
-    fn analyze_simple_component() {
-        let ast = parse(
-            r"(component: health
-                 :current :int
-                 :max :int)",
-        );
-
-        let comp = DeclarationAnalyzer::analyze_component(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(comp.name, "health");
-        assert!(!comp.is_tag);
-        assert_eq!(comp.fields.len(), 2);
-        assert_eq!(comp.fields[0].name, "current");
-        assert_eq!(comp.fields[0].ty, "int");
-        assert!(comp.fields[0].default.is_none());
-        assert_eq!(comp.fields[1].name, "max");
-        assert_eq!(comp.fields[1].ty, "int");
-    }
-
-    #[test]
-    fn analyze_component_with_defaults() {
-        let ast = parse(
-            r"(component: health
-                 :current :int
-                 :max :int :default 100
-                 :regen-rate :float :default 0.5)",
-        );
-
-        let comp = DeclarationAnalyzer::analyze_component(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(comp.fields.len(), 3);
-        assert!(comp.fields[0].default.is_none());
-        assert!(comp.fields[1].default.is_some());
-        assert_eq!(comp.fields[1].default.as_ref().unwrap().as_int(), Some(100));
-        assert!(comp.fields[2].default.is_some());
-    }
-
-    #[test]
-    fn analyze_tag_component() {
-        let ast = parse("(component: tag/player :bool :default true)");
-
-        let comp = DeclarationAnalyzer::analyze_component(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(comp.name, "tag/player");
-        assert!(comp.is_tag);
-        assert_eq!(comp.fields.len(), 1);
-        assert_eq!(comp.fields[0].name, "value");
-        assert_eq!(comp.fields[0].ty, "bool");
-        match &comp.fields[0].default {
-            Some(Ast::Bool(true, _)) => {}
-            other => panic!("expected Bool(true), got {other:?}"),
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "spawn: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
         }
-    }
 
-    #[test]
-    fn analyze_tag_without_default() {
-        let ast = parse("(component: tag/enemy :bool)");
-
-        let comp = DeclarationAnalyzer::analyze_component(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert!(comp.is_tag);
-        assert!(comp.fields[0].default.is_none());
-    }
-
-    // =========================================================================
-    // Relationship Tests
-    // =========================================================================
-
-    #[test]
-    fn analyze_simple_relationship() {
-        let ast = parse(
-            r"(relationship: in-room
-                 :storage :field
-                 :cardinality :many-to-one)",
-        );
-
-        let rel = DeclarationAnalyzer::analyze_relationship(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(rel.name, "in-room");
-        assert_eq!(rel.storage, StorageKind::Field);
-        assert_eq!(rel.cardinality, Cardinality::ManyToOne);
-        assert_eq!(rel.on_target_delete, OnTargetDelete::Remove);
-        assert!(rel.required);
-    }
-
-    #[test]
-    fn analyze_full_relationship() {
-        let ast = parse(
-            r"(relationship: employment
-                 :storage :entity
-                 :cardinality :many-to-many
-                 :on-target-delete :cascade
-                 :on-violation :replace
-                 :required false
-                 :attributes [:start-date :int :salary :int])",
-        );
-
-        let rel = DeclarationAnalyzer::analyze_relationship(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(rel.name, "employment");
-        assert_eq!(rel.storage, StorageKind::Entity);
-        assert_eq!(rel.cardinality, Cardinality::ManyToMany);
-        assert_eq!(rel.on_target_delete, OnTargetDelete::Cascade);
-        assert_eq!(rel.on_violation, OnViolation::Replace);
-        assert!(!rel.required);
-        assert_eq!(rel.attributes.len(), 2);
-        assert_eq!(rel.attributes[0].name, "start-date");
-        assert_eq!(rel.attributes[1].name, "salary");
-    }
-
-    #[test]
-    fn analyze_relationship_all_cardinalities() {
-        for (src, expected) in [
-            (":one-to-one", Cardinality::OneToOne),
-            (":one-to-many", Cardinality::OneToMany),
-            (":many-to-one", Cardinality::ManyToOne),
-            (":many-to-many", Cardinality::ManyToMany),
-        ] {
-            let ast = parse(&format!("(relationship: test :cardinality {src})"));
-            let rel = DeclarationAnalyzer::analyze_relationship(&ast)
-                .unwrap()
-                .unwrap();
-            assert_eq!(rel.cardinality, expected);
-        }
-    }
-
-    // =========================================================================
-    // Derived Tests
-    // =========================================================================
-
-    #[test]
-    fn analyze_simple_derived() {
-        let ast = parse(
-            r"(derived: health/percent
-                 :for ?self
-                 :where [[?self :health/current ?curr]
-                         [?self :health/max ?max]]
-                 :value (/ (* ?curr 100) ?max))",
-        );
-
-        let derived = DeclarationAnalyzer::analyze_derived(&ast).unwrap().unwrap();
-
-        assert_eq!(derived.name, "health/percent");
-        assert_eq!(derived.for_var, "self");
-        assert_eq!(derived.pattern.clauses.len(), 2);
-        assert!(derived.value.is_list());
-    }
-
-    #[test]
-    fn analyze_derived_with_aggregation() {
-        let ast = parse(
-            r"(derived: faction/total-power
-                 :for ?faction
-                 :where [[?faction :tag/faction]
-                         [?member :faction ?faction]
-                         [?member :power ?p]]
-                 :aggregate {:total (sum ?p)}
-                 :value ?total)",
-        );
-
-        let derived = DeclarationAnalyzer::analyze_derived(&ast).unwrap().unwrap();
-
-        assert_eq!(derived.name, "faction/total-power");
-        assert_eq!(derived.aggregates.len(), 1);
-        assert_eq!(derived.aggregates[0].0, "total");
-    }
-
-    #[test]
-    fn analyze_derived_missing_for() {
-        let ast = parse(
-            r"(derived: bad
-                 :where [[?e :health ?hp]]
-                 :value ?hp)",
-        );
-
-        let result = DeclarationAnalyzer::analyze_derived(&ast);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn analyze_derived_missing_value() {
-        let ast = parse(
-            r"(derived: bad
-                 :for ?self
-                 :where [[?self :health ?hp]])",
-        );
-
-        let result = DeclarationAnalyzer::analyze_derived(&ast);
-        assert!(result.is_err());
-    }
-
-    // =========================================================================
-    // Constraint Tests
-    // =========================================================================
-
-    #[test]
-    fn analyze_simple_constraint() {
-        let ast = parse(
-            r"(constraint: health-bounds
-                 :where [[?e :health/current ?hp]
-                         [?e :health/max ?max]]
-                 :check [(>= ?hp 0) (<= ?hp ?max)])",
-        );
-
-        let constraint = DeclarationAnalyzer::analyze_constraint(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(constraint.name, "health-bounds");
-        assert_eq!(constraint.pattern.clauses.len(), 2);
-        assert_eq!(constraint.checks.len(), 2);
-        assert_eq!(constraint.on_violation, ConstraintViolation::Rollback);
-    }
-
-    #[test]
-    fn analyze_constraint_with_warn() {
-        let ast = parse(
-            r"(constraint: warn-on-damage
-                 :where [[?e :damage ?d]]
-                 :check [(< ?d 1000)]
-                 :on-violation :warn)",
-        );
-
-        let constraint = DeclarationAnalyzer::analyze_constraint(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(constraint.on_violation, ConstraintViolation::Warn);
-    }
-
-    #[test]
-    fn analyze_constraint_with_guard() {
-        let ast = parse(
-            r"(constraint: guarded
-                 :where [[?e :tag/player]]
-                 :guard [(active? ?e)]
-                 :check [(valid? ?e)])",
-        );
-
-        let constraint = DeclarationAnalyzer::analyze_constraint(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(constraint.guards.len(), 1);
-        assert_eq!(constraint.checks.len(), 1);
-    }
-
-    // =========================================================================
-    // Query Tests
-    // =========================================================================
-
-    #[test]
-    fn analyze_simple_query() {
-        let ast = parse(
-            r"(query
-                 :where [[?e :health/current ?hp]]
-                 :return ?e)",
-        );
-
-        let query = DeclarationAnalyzer::analyze_query(&ast).unwrap().unwrap();
-
-        assert_eq!(query.pattern.clauses.len(), 1);
-        assert!(query.return_expr.is_some());
-    }
-
-    #[test]
-    fn analyze_full_query() {
-        let ast = parse(
-            r"(query
-                 :where [[?e :health/current ?hp]
-                         [?e :name ?name]]
-                 :let [threshold 50]
-                 :guard [(< ?hp threshold)]
-                 :group-by [?name]
-                 :order-by [[?hp :desc]]
-                 :limit 10
-                 :return {:entity ?e :hp ?hp})",
-        );
-
-        let query = DeclarationAnalyzer::analyze_query(&ast).unwrap().unwrap();
-
-        assert_eq!(query.pattern.clauses.len(), 2);
-        assert_eq!(query.bindings.len(), 1);
-        assert_eq!(query.guards.len(), 1);
-        assert_eq!(query.group_by.len(), 1);
-        assert_eq!(query.group_by[0], "name");
-        assert_eq!(query.order_by.len(), 1);
-        assert_eq!(query.order_by[0].0, "hp");
-        assert_eq!(query.order_by[0].1, OrderDirection::Desc);
-        assert_eq!(query.limit, Some(10));
-        assert!(query.return_expr.is_some());
-    }
-
-    #[test]
-    fn analyze_query_order_by_asc() {
-        let ast = parse(
-            r"(query
-                 :where [[?e :score ?s]]
-                 :order-by [[?s :asc]]
-                 :return ?e)",
-        );
-
-        let query = DeclarationAnalyzer::analyze_query(&ast).unwrap().unwrap();
-
-        assert_eq!(query.order_by[0].1, OrderDirection::Asc);
-    }
-
-    #[test]
-    fn analyze_query_with_aggregates() {
-        let ast = parse(
-            r"(query
-                 :where [[?e :faction ?f]
-                         [?e :power ?p]]
-                 :aggregate {:total (sum ?p) :count (count ?e)}
-                 :return {:faction ?f :total ?total :count ?count})",
-        );
-
-        let query = DeclarationAnalyzer::analyze_query(&ast).unwrap().unwrap();
-
-        assert_eq!(query.aggregates.len(), 2);
-    }
-
-    // =========================================================================
-    // Unified Analysis Tests
-    // =========================================================================
-
-    #[test]
-    fn unified_analyze_component() {
-        let ast = parse("(component: test :value :int)");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Component(_)));
-    }
-
-    #[test]
-    fn unified_analyze_relationship() {
-        let ast = parse("(relationship: test :storage :field)");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Relationship(_)));
-    }
-
-    #[test]
-    fn unified_analyze_rule() {
-        let ast = parse("(rule: test :where [[?e :tag]] :then [])");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Rule(_)));
-    }
-
-    #[test]
-    fn unified_analyze_derived() {
-        let ast = parse("(derived: test :for ?e :value 42)");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Derived(_)));
-    }
-
-    #[test]
-    fn unified_analyze_constraint() {
-        let ast = parse("(constraint: test :check [true])");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Constraint(_)));
-    }
-
-    #[test]
-    fn unified_analyze_query() {
-        let ast = parse("(query :where [[?e :tag]] :return ?e)");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Query(_)));
-    }
-
-    #[test]
-    fn unified_analyze_non_declaration() {
-        let ast = parse("(+ 1 2)");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap();
-        assert!(decl.is_none());
-    }
-
-    // =========================================================================
-    // Namespace Declaration Tests
-    // =========================================================================
-
-    #[test]
-    fn analyze_simple_namespace() {
-        let ast = parse("(namespace game.core)");
-        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(ns.name.full_name(), "game.core");
-        assert!(ns.requires.is_empty());
-    }
-
-    #[test]
-    fn analyze_namespace_with_alias_require() {
-        let ast = parse(
-            r"(namespace game.combat
-                   (:require [game.core :as core]))",
-        );
-        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(ns.name.full_name(), "game.combat");
-        assert_eq!(ns.requires.len(), 1);
-        match &ns.requires[0] {
-            RequireSpec::Alias { namespace, alias } => {
-                assert_eq!(namespace.full_name(), "game.core");
-                assert_eq!(alias, "core");
+        // Get entity name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("spawn name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
             }
-            other => panic!("expected Alias, got {other:?}"),
-        }
-    }
+        };
 
-    #[test]
-    fn analyze_namespace_with_refer_require() {
-        let ast = parse(
-            r"(namespace game.combat
-                   (:require [game.utils :refer [distance clamp]]))",
-        );
-        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
-            .unwrap()
-            .unwrap();
+        let mut decl = SpawnDecl::new(name, span);
 
-        assert_eq!(ns.name.full_name(), "game.combat");
-        assert_eq!(ns.requires.len(), 1);
-        match &ns.requires[0] {
-            RequireSpec::Refer { namespace, symbols } => {
-                assert_eq!(namespace.full_name(), "game.utils");
-                assert_eq!(symbols, &["distance".to_string(), "clamp".to_string()]);
+        // Parse component keyword-value pairs
+        let mut i = 2;
+        while i < elements.len() {
+            let component = match &elements[i] {
+                Ast::Keyword(k, _) => k.clone(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected component keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{component}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
             }
-            other => panic!("expected Refer, got {other:?}"),
+
+            let value = elements[i].clone();
+            i += 1;
+
+            decl.components.push((component, value));
         }
-    }
 
-    #[test]
-    fn analyze_namespace_with_use_require() {
-        let ast = parse(
-            r"(namespace game.combat
-                   (:require [game.items]))",
-        );
-        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(ns.name.full_name(), "game.combat");
-        assert_eq!(ns.requires.len(), 1);
-        match &ns.requires[0] {
-            RequireSpec::Use { namespace } => {
-                assert_eq!(namespace.full_name(), "game.items");
-            }
-            other => panic!("expected Use, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn analyze_namespace_with_multiple_requires() {
-        let ast = parse(
-            r"(namespace game.combat
-                   (:require [game.core :as core]
-                             [game.utils :refer [distance]]
-                             [game.items]))",
-        );
-        let ns = DeclarationAnalyzer::analyze_namespace(&ast)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(ns.name.full_name(), "game.combat");
-        assert_eq!(ns.requires.len(), 3);
-        assert!(matches!(&ns.requires[0], RequireSpec::Alias { .. }));
-        assert!(matches!(&ns.requires[1], RequireSpec::Refer { .. }));
-        assert!(matches!(&ns.requires[2], RequireSpec::Use { .. }));
-    }
-
-    #[test]
-    fn analyze_namespace_non_namespace_returns_none() {
-        let ast = parse("(def foo 42)");
-        let result = DeclarationAnalyzer::analyze_namespace(&ast).unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn unified_analyze_namespace() {
-        let ast = parse("(namespace game.core)");
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Namespace(_)));
+        Ok(Some(decl))
     }
 
     // =========================================================================
-    // Load Declaration Tests
+    // Link Declaration Analysis
     // =========================================================================
 
-    #[test]
-    fn analyze_simple_load() {
-        let ast = parse(r#"(load "game/core.lt")"#);
-        let load = DeclarationAnalyzer::analyze_load(&ast).unwrap().unwrap();
+    /// Analyze a top-level form and return a link declaration if it's a link form.
+    ///
+    /// Link form: `(link: source :relationship target)`
+    pub fn analyze_link(ast: &Ast) -> Result<Option<LinkDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
 
-        assert_eq!(load.path, "game/core.lt");
-    }
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
 
-    #[test]
-    fn analyze_load_non_load_returns_none() {
-        let ast = parse("(def foo 42)");
-        let result = DeclarationAnalyzer::analyze_load(&ast).unwrap();
-        assert!(result.is_none());
-    }
+        // Check for (link: source :rel target) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "link:" => {}
+            _ => return Ok(None),
+        }
 
-    #[test]
-    fn analyze_load_missing_path_error() {
-        let ast = parse("(load)");
-        let result = DeclarationAnalyzer::analyze_load(&ast);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("exactly one path"));
-    }
+        if elements.len() != 4 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "link: requires source, relationship, and target".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
 
-    #[test]
-    fn analyze_load_non_string_path_error() {
-        let ast = parse("(load 123)");
-        let result = DeclarationAnalyzer::analyze_load(&ast);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must be a string"));
-    }
+        // Get source entity name
+        let source = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("link source must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
 
-    #[test]
-    fn unified_analyze_load() {
-        let ast = parse(r#"(load "test.lt")"#);
-        let decl = DeclarationAnalyzer::analyze(&ast).unwrap().unwrap();
-        assert!(matches!(decl, Declaration::Load(_)));
+        // Get relationship keyword
+        let relationship = match &elements[2] {
+            Ast::Keyword(k, _) => k.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!(
+                        "link relationship must be a keyword, got {}",
+                        other.type_name()
+                    ),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        // Get target entity name
+        let target = match &elements[3] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("link target must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        Ok(Some(LinkDecl::new(source, relationship, target, span)))
     }
 }

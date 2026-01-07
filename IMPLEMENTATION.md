@@ -586,9 +586,9 @@ Don't stack them on untested foundations. Phase 2.5 proves the foundation works.
 
 - [x] Implement recursive descent parser
 - [x] Parse all expression forms
-- [x] Parse all declaration forms (component:, rule:, relationship:, derived:, constraint:, query)
+- [x] Parse all declaration forms (component:, rule:, relationship:, derived:, constraint:, query, spawn:, link:)
 - [x] Rich error messages with span information
-- [x] Test with spec examples (29 tests)
+- [x] Test with spec examples (29 tests + 13 spawn/link tests)
 - [x] Fuzz test for crash resistance (1000+ proptest cases in fuzz_tests.rs)
 
 ### 3.3 AST
@@ -960,9 +960,12 @@ Implement all spec functions organized by category:
 - [x] Syntax highlighting for DSL
 - [x] Tab completion for keywords
 - [x] Special commands (inspect, tick!, save!, load-world!) — save world state, load world state, advance tick, inspect entity
+- [x] **DSL declaration execution** (component:, relationship:, spawn:, link:) — enables world construction via DSL
+- [x] Entity name registry for spawn:/link: resolution
 - [x] Test: basic evaluation tests (7 tests)
 - [x] Test: interactive scenarios (7 tests for arithmetic chains, def/use, collections, strings, HOFs, math)
 - [x] Test: error recovery (4 tests for syntax errors, undefined vars, division by zero, type errors)
+- [x] Test: spawn and link execution (7 tests for entity creation, linking, error handling)
 
 ### 5.3 CLI
 

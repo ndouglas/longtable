@@ -2,7 +2,7 @@
 //!
 //! The session holds the current world state and session-local variables.
 
-use longtable_foundation::Value;
+use longtable_foundation::{EntityId, Value};
 use longtable_language::{ModuleRegistry, NamespaceContext};
 use longtable_storage::World;
 use std::collections::HashMap;
@@ -16,6 +16,10 @@ pub struct Session {
 
     /// Session-local variable bindings (from `def`).
     variables: HashMap<String, Value>,
+
+    /// Entity name registry (from `spawn:` declarations).
+    /// Maps symbolic names (e.g., "player", "cave-entrance") to `EntityId`s.
+    entity_names: HashMap<String, EntityId>,
 
     /// Current load path for relative file resolution.
     load_path: PathBuf,
@@ -37,6 +41,7 @@ impl Session {
         Self {
             world: World::new(0),
             variables: HashMap::new(),
+            entity_names: HashMap::new(),
             load_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             auto_commit: true,
             module_registry: ModuleRegistry::new(),
@@ -50,6 +55,7 @@ impl Session {
         Self {
             world,
             variables: HashMap::new(),
+            entity_names: HashMap::new(),
             load_path: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             auto_commit: true,
             module_registry: ModuleRegistry::new(),
@@ -88,6 +94,23 @@ impl Session {
     #[must_use]
     pub fn variables(&self) -> &HashMap<String, Value> {
         &self.variables
+    }
+
+    /// Gets a named entity by its symbolic name.
+    #[must_use]
+    pub fn get_entity(&self, name: &str) -> Option<EntityId> {
+        self.entity_names.get(name).copied()
+    }
+
+    /// Registers a named entity.
+    pub fn register_entity(&mut self, name: String, entity: EntityId) {
+        self.entity_names.insert(name, entity);
+    }
+
+    /// Returns all named entities.
+    #[must_use]
+    pub fn entity_names(&self) -> &HashMap<String, EntityId> {
+        &self.entity_names
     }
 
     /// Gets the current load path.

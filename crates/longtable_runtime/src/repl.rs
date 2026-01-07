@@ -5,8 +5,14 @@ use crate::serialize;
 use crate::session::Session;
 use longtable_engine::{InputEvent, TickExecutor};
 use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
+use longtable_foundation::{LtMap, Type};
 use longtable_language::{
-    Compiler, Declaration, DeclarationAnalyzer, NamespaceContext, NamespaceInfo, Vm, parse,
+    Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
+    NamespaceInfo, OnTargetDelete, RelationshipDecl, StorageKind, Vm, parse,
+};
+use longtable_storage::schema::{
+    Cardinality as StorageCardinality, ComponentSchema, FieldSchema, OnDelete, RelationshipSchema,
+    Storage,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -452,8 +458,218 @@ impl<E: LineEditor> Repl<E> {
                 Ok(Some(Value::Nil))
             }
 
+            // (component: name ...) - define component schema
+            Ast::Symbol(s, _) if s == "component:" => {
+                if let Some(Declaration::Component(comp)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_component(&comp)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid component: form".to_string(),
+                    )))
+                }
+            }
+
+            // (relationship: name ...) - define relationship schema
+            Ast::Symbol(s, _) if s == "relationship:" => {
+                if let Some(Declaration::Relationship(rel)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_relationship(&rel)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid relationship: form".to_string(),
+                    )))
+                }
+            }
+
+            // (spawn: name :component value ...) - create entity
+            Ast::Symbol(s, _) if s == "spawn:" => {
+                // Use the declaration analyzer to parse the spawn form
+                if let Some(Declaration::Spawn(spawn)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_spawn(&spawn)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid spawn: form".to_string(),
+                    )))
+                }
+            }
+
+            // (link: source :relationship target) - create relationship
+            Ast::Symbol(s, _) if s == "link:" => {
+                // Use the declaration analyzer to parse the link form
+                if let Some(Declaration::Link(link)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_link(&link)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid link: form".to_string(),
+                    )))
+                }
+            }
+
             _ => Ok(None),
         }
+    }
+
+    /// Executes a component declaration to register a schema.
+    fn execute_component(&mut self, comp: &ComponentDecl) -> Result<()> {
+        // Intern the component name as a keyword
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&comp.name);
+
+        // Build the schema
+        let schema = if comp.is_tag {
+            ComponentSchema::tag(name)
+        } else {
+            let mut schema = ComponentSchema::new(name);
+            for field in &comp.fields {
+                let field_name = self
+                    .session
+                    .world_mut()
+                    .interner_mut()
+                    .intern_keyword(&field.name);
+                let field_type = Self::parse_type(&field.ty);
+
+                // Create field schema
+                let field_schema = if let Some(ref default_ast) = field.default {
+                    let default_value = self.eval_form(default_ast)?;
+                    FieldSchema::optional(field_name, field_type, default_value)
+                } else {
+                    FieldSchema::required(field_name, field_type)
+                };
+                schema = schema.with_field(field_schema);
+            }
+            schema
+        };
+
+        // Register in world (returns new world with immutable pattern)
+        let world = self.session.world().clone();
+        let new_world = world.register_component(schema)?;
+        self.session.set_world(new_world);
+        Ok(())
+    }
+
+    /// Executes a relationship declaration to register a schema.
+    fn execute_relationship(&mut self, rel: &RelationshipDecl) -> Result<()> {
+        // Intern the relationship name as a keyword
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&rel.name);
+
+        // Build the schema
+        let storage = match rel.storage {
+            StorageKind::Field => Storage::Field,
+            StorageKind::Entity => Storage::Entity,
+        };
+
+        let cardinality = match rel.cardinality {
+            Cardinality::OneToOne => StorageCardinality::OneToOne,
+            Cardinality::OneToMany => StorageCardinality::OneToMany,
+            Cardinality::ManyToOne => StorageCardinality::ManyToOne,
+            Cardinality::ManyToMany => StorageCardinality::ManyToMany,
+        };
+
+        let on_delete = match rel.on_target_delete {
+            OnTargetDelete::Remove => OnDelete::Remove,
+            OnTargetDelete::Cascade => OnDelete::Cascade,
+            OnTargetDelete::Nullify => OnDelete::Nullify,
+        };
+
+        let schema = RelationshipSchema::new(name)
+            .with_storage(storage)
+            .with_cardinality(cardinality)
+            .with_on_delete(on_delete);
+
+        // Register in world (returns new world with immutable pattern)
+        let world = self.session.world().clone();
+        let new_world = world.register_relationship(schema)?;
+        self.session.set_world(new_world);
+        Ok(())
+    }
+
+    /// Parses a type string into a Type.
+    fn parse_type(ty: &str) -> Type {
+        match ty {
+            "int" => Type::Int,
+            "float" => Type::Float,
+            "string" => Type::String,
+            "bool" => Type::Bool,
+            "keyword" => Type::Keyword,
+            "entity-ref" => Type::EntityRef,
+            "nil" => Type::Nil,
+            _ => Type::Any,
+        }
+    }
+
+    /// Executes a spawn declaration to create an entity.
+    fn execute_spawn(&mut self, spawn: &longtable_language::SpawnDecl) -> Result<()> {
+        // Build component map
+        let mut components = LtMap::new();
+
+        for (comp_name, value_ast) in &spawn.components {
+            // Evaluate the value AST to get a Value
+            let value = self.eval_form(value_ast)?;
+
+            // Intern the component keyword
+            let keyword = self
+                .session
+                .world_mut()
+                .interner_mut()
+                .intern_keyword(comp_name);
+
+            components = components.insert(Value::Keyword(keyword), value);
+        }
+
+        // Spawn the entity
+        let world = self.session.world().clone();
+        let (new_world, entity_id) = world.spawn(&components)?;
+
+        // Update session
+        self.session.set_world(new_world);
+        self.session.register_entity(spawn.name.clone(), entity_id);
+
+        Ok(())
+    }
+
+    /// Executes a link declaration to create a relationship.
+    fn execute_link(&mut self, link: &longtable_language::LinkDecl) -> Result<()> {
+        // Resolve source entity
+        let source = self.session.get_entity(&link.source).ok_or_else(|| {
+            Error::new(ErrorKind::Internal(format!(
+                "unknown entity: {}",
+                link.source
+            )))
+        })?;
+
+        // Resolve target entity
+        let target = self.session.get_entity(&link.target).ok_or_else(|| {
+            Error::new(ErrorKind::Internal(format!(
+                "unknown entity: {}",
+                link.target
+            )))
+        })?;
+
+        // Intern the relationship keyword
+        let relationship = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&link.relationship);
+
+        // Create the link
+        let world = self.session.world().clone();
+        let new_world = world.link(source, relationship, target)?;
+
+        // Update session
+        self.session.set_world(new_world);
+
+        Ok(())
     }
 
     /// Loads and evaluates a file.
@@ -907,5 +1123,136 @@ mod tests {
 
         let result = repl.eval("(min 1 5 3)").unwrap();
         assert_eq!(result, Value::Int(1));
+    }
+
+    // ==================== Spawn and Link Tests ====================
+
+    #[test]
+    fn spawn_creates_entity() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // First define the component schema (tag component with :bool :default true)
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+
+        // Spawn an entity
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+
+        // Verify entity was created
+        assert_eq!(repl.session.world().entity_count(), 1);
+
+        // Verify entity is registered by name
+        let entity_id = repl.session.get_entity("player");
+        assert!(entity_id.is_some());
+    }
+
+    #[test]
+    fn spawn_with_component_map() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // First define the component schema with optional fields with defaults
+        repl.eval("(component: health :current :int :default 0 :max :int :default 100)")
+            .unwrap();
+
+        // Spawn an entity with a map component value
+        repl.eval("(spawn: player :health {:current 100 :max 100})")
+            .unwrap();
+
+        // Verify entity was created
+        assert_eq!(repl.session.world().entity_count(), 1);
+
+        // Verify entity is registered by name
+        let entity_id = repl.session.get_entity("player");
+        assert!(entity_id.is_some());
+    }
+
+    #[test]
+    fn link_creates_relationship() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define components and relationship (tag components)
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+        repl.eval("(component: tag/room :bool :default true)")
+            .unwrap();
+        repl.eval("(relationship: in-room :cardinality :many-to-one)")
+            .unwrap();
+
+        // Spawn two entities
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+        repl.eval("(spawn: room :tag/room true)").unwrap();
+
+        // Link them
+        repl.eval("(link: player :in-room room)").unwrap();
+
+        // Verify entities exist
+        assert_eq!(repl.session.world().entity_count(), 2);
+    }
+
+    #[test]
+    fn link_unknown_source_fails() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define components and relationship
+        repl.eval("(component: tag/room :bool :default true)")
+            .unwrap();
+        repl.eval("(relationship: in-room :cardinality :many-to-one)")
+            .unwrap();
+
+        // Spawn only target
+        repl.eval("(spawn: room :tag/room true)").unwrap();
+
+        // Try to link with unknown source
+        let result = repl.eval("(link: player :in-room room)");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown entity"));
+    }
+
+    #[test]
+    fn link_unknown_target_fails() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define components and relationship
+        repl.eval("(component: tag/player :bool :default true)")
+            .unwrap();
+        repl.eval("(relationship: in-room :cardinality :many-to-one)")
+            .unwrap();
+
+        // Spawn only source
+        repl.eval("(spawn: player :tag/player true)").unwrap();
+
+        // Try to link with unknown target
+        let result = repl.eval("(link: player :in-room room)");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown entity"));
+    }
+
+    #[test]
+    fn component_defines_schema() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define a component with fields
+        repl.eval("(component: health :current :int :max :int :default 100)")
+            .unwrap();
+
+        // Should not error - component is registered
+    }
+
+    #[test]
+    fn relationship_defines_schema() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Define a relationship
+        repl.eval("(relationship: in-room :cardinality :many-to-one :on-target-delete :remove)")
+            .unwrap();
+
+        // Should not error - relationship is registered
     }
 }
