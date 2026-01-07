@@ -21,3 +21,7 @@ criterion.workspace = true
 [[bench]]
 name = "language_benchmarks"
 harness = false
+
+[[bench]]
+name = "scale_benchmarks"
+harness = false
