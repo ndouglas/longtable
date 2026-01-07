@@ -940,25 +940,26 @@ This migration can be done in Phase 6 (Observability) if debugging features requ
 
 Implement all spec functions organized by category:
 
-- [ ] Collection functions (map, filter, reduce, etc.)
-- [ ] Math functions (arithmetic, trig, vector math)
-- [ ] String functions (str/*, format)
-- [ ] Predicate functions (nil?, some?, type checks)
+- [x] Collection functions (map, filter, reduce, every, some, take-while, drop-while, remove, group-by, zip-with, etc.) — 125+ native functions in vm/native/*.rs
+- [x] Math functions (arithmetic, trig, hyperbolic, vector math) — sin, cos, tan, sinh, cosh, tanh, vec+, vec-, vec*, vec-scale, vec-dot, vec-cross, vec-length, vec-normalize, vec-lerp, vec-angle, etc.
+- [x] String functions (str/*, format) — split, join, trim, replace, starts-with?, ends-with?, contains?, blank?, substring, upper, lower, format
+- [x] Predicate functions (nil?, some?, type checks) — nil?, int?, float?, string?, keyword?, symbol?, vector?, list?, map?, set?, bool?, number?, coll?, fn?, entity?
+- [x] Higher-order function opcodes — Map, Filter, Reduce, Every, Some, TakeWhile, DropWhile, Remove, GroupBy, ZipWith, Repeatedly
 - [ ] Test each function with spec examples
 - [ ] Document each function
 
 ### 5.2 REPL
 
-- [ ] Command parsing
+- [x] Command parsing (try_special_form handles def, load, save!, load-world!, tick!, inspect)
 - [x] Expression evaluation (basic eval loop with parse → compile → execute)
-- [ ] Tick execution
+- [x] Tick execution (tick! command with TickExecutor integration)
 - [x] History and line editing (rustyline integration with LineEditor trait)
 - [x] Session variables (def) stored in session (VM globals pending)
 - [x] File loading (load) with relative path resolution
 - [x] Multi-line input with bracket validation
 - [x] Syntax highlighting for DSL
 - [x] Tab completion for keywords
-- [ ] Special commands (inspect, tick!, save!, load!)
+- [x] Special commands (inspect, tick!, save!, load-world!) — save world state, load world state, advance tick, inspect entity
 - [x] Test: basic evaluation tests (7 tests)
 - [ ] Test: interactive scenarios
 - [ ] Test: error recovery
@@ -968,8 +969,8 @@ Implement all spec functions organized by category:
 - [x] File loading and execution (longtable binary with file arguments)
 - [x] REPL mode (default when no files specified)
 - [x] Batch mode (--batch flag for non-interactive execution)
-- [ ] Debug mode flags
-- [x] CLI argument parsing (--help, --version, --batch)
+- [x] Debug mode flags (--trace, --trace-vm, --trace-match, --max-ticks N, --dump-world)
+- [x] CLI argument parsing (--help, --version, --batch, debug flags)
 - [ ] Test: CLI argument parsing
 - [ ] Test: file execution
 
@@ -979,7 +980,7 @@ Implement all spec functions organized by category:
 - [x] Implement world serialization (custom serde impl for World, skips history)
 - [x] Implement world deserialization
 - [x] Test: round-trip correctness (5 tests in serialize module)
-- [ ] Test: version compatibility checking
+- [x] Test: version compatibility checking (comprehensive version_compatibility test with multiple components, entities, relationships)
 
 ### Example: REPL Session
 

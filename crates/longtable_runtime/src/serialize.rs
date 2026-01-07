@@ -222,4 +222,133 @@ mod tests {
         let result = load_from_file("/nonexistent/path/to/world.msgpack");
         assert!(result.is_err());
     }
+
+    /// Comprehensive version compatibility test.
+    ///
+    /// This test creates a world with various content types and verifies
+    /// that all data is preserved correctly through serialization/deserialization.
+    #[test]
+    fn version_compatibility() {
+        // Create a world with diverse content
+        let mut world = World::new(12345);
+
+        // Register multiple component schemas
+        let health = world.interner_mut().intern_keyword("health");
+        let position = world.interner_mut().intern_keyword("position");
+        let name = world.interner_mut().intern_keyword("name");
+        let x = world.interner_mut().intern_keyword("x");
+        let y = world.interner_mut().intern_keyword("y");
+        let contains = world.interner_mut().intern_keyword("contains");
+        let parent_of = world.interner_mut().intern_keyword("parent-of");
+
+        // Health: int value
+        let health_schema =
+            ComponentSchema::new(health).with_field(FieldSchema::required(health, Type::Int));
+        world = world.register_component(health_schema).unwrap();
+
+        // Position: map with x, y
+        let position_schema = ComponentSchema::new(position)
+            .with_field(FieldSchema::required(x, Type::Float))
+            .with_field(FieldSchema::optional(y, Type::Float, Value::Float(0.0)));
+        world = world.register_component(position_schema).unwrap();
+
+        // Name: string
+        let name_schema =
+            ComponentSchema::new(name).with_field(FieldSchema::required(name, Type::String));
+        world = world.register_component(name_schema).unwrap();
+
+        // Relationships
+        world = world
+            .register_relationship(RelationshipSchema::new(contains))
+            .unwrap();
+        world = world
+            .register_relationship(RelationshipSchema::new(parent_of))
+            .unwrap();
+
+        // Create entities with different component combinations
+        // Entity 1: Player with all components
+        let mut player_health = LtMap::new();
+        player_health = player_health.insert(Value::Keyword(health), Value::Int(100));
+        let mut player_pos = LtMap::new();
+        player_pos = player_pos.insert(Value::Keyword(x), Value::Float(10.5));
+        player_pos = player_pos.insert(Value::Keyword(y), Value::Float(20.5));
+        let mut player_name = LtMap::new();
+        player_name = player_name.insert(Value::Keyword(name), Value::String("Hero".into()));
+
+        let mut player_comps = LtMap::new();
+        player_comps = player_comps.insert(Value::Keyword(health), Value::Map(player_health));
+        player_comps = player_comps.insert(Value::Keyword(position), Value::Map(player_pos));
+        player_comps = player_comps.insert(Value::Keyword(name), Value::Map(player_name));
+
+        let (w, player) = world.spawn(&player_comps).unwrap();
+        world = w;
+
+        // Entity 2: Room (just a name)
+        let mut room_name = LtMap::new();
+        room_name = room_name.insert(Value::Keyword(name), Value::String("Dungeon".into()));
+        let mut room_comps = LtMap::new();
+        room_comps = room_comps.insert(Value::Keyword(name), Value::Map(room_name));
+
+        let (w, room) = world.spawn(&room_comps).unwrap();
+        world = w;
+
+        // Entity 3: Item (just position)
+        let mut item_pos = LtMap::new();
+        item_pos = item_pos.insert(Value::Keyword(x), Value::Float(-5.0));
+        let mut item_comps = LtMap::new();
+        item_comps = item_comps.insert(Value::Keyword(position), Value::Map(item_pos));
+
+        let (w, item) = world.spawn(&item_comps).unwrap();
+        world = w;
+
+        // Create relationships
+        world = world.link(room, contains, player).unwrap();
+        world = world.link(room, contains, item).unwrap();
+
+        // Advance tick to create history
+        world = world.advance_tick();
+        world = world.advance_tick();
+
+        // Serialize
+        let bytes = to_bytes(&world).expect("serialization failed");
+        assert!(!bytes.is_empty());
+
+        // Deserialize
+        let restored = from_bytes(&bytes).expect("deserialization failed");
+
+        // Verify basic state
+        assert_eq!(restored.tick(), world.tick());
+        assert_eq!(restored.seed(), world.seed());
+        assert_eq!(restored.entity_count(), world.entity_count());
+
+        // Verify interner counts
+        assert_eq!(
+            restored.interner().keyword_count(),
+            world.interner().keyword_count()
+        );
+
+        // Verify entities exist
+        assert!(restored.exists(player));
+        assert!(restored.exists(room));
+        assert!(restored.exists(item));
+
+        // Verify component data
+        let player_health_val = restored.get(player, health).unwrap();
+        assert!(player_health_val.is_some());
+
+        let room_name_val = restored.get(room, name).unwrap();
+        assert!(room_name_val.is_some());
+
+        let item_pos_val = restored.get(item, position).unwrap();
+        assert!(item_pos_val.is_some());
+
+        // Verify relationships
+        let room_contains: Vec<_> = restored.targets(room, contains).collect();
+        assert_eq!(room_contains.len(), 2);
+        assert!(room_contains.contains(&player));
+        assert!(room_contains.contains(&item));
+
+        // Verify history is NOT preserved (by design)
+        assert!(restored.previous().is_none());
+    }
 }

@@ -89,6 +89,40 @@ pub(crate) fn native_set_p(args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(matches!(args.first(), Some(Value::Set(_)))))
 }
 
+/// Predicate: bool?
+pub(crate) fn native_bool_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Bool(_)))))
+}
+
+/// Predicate: number? - true for int or float
+pub(crate) fn native_number_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(
+        args.first(),
+        Some(Value::Int(_) | Value::Float(_))
+    )))
+}
+
+/// Predicate: coll? - true for vec, set, or map
+pub(crate) fn native_coll_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(
+        args.first(),
+        Some(Value::Vec(_) | Value::Set(_) | Value::Map(_))
+    )))
+}
+
+/// Predicate: fn?
+pub(crate) fn native_fn_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(args.first(), Some(Value::Fn(_)))))
+}
+
+/// Predicate: entity?
+pub(crate) fn native_entity_p(args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(matches!(
+        args.first(),
+        Some(Value::EntityRef(_))
+    )))
+}
+
 /// Misc: type (returns type as keyword string)
 pub(crate) fn native_type(args: &[Value]) -> Result<Value> {
     let type_name = match args.first() {

@@ -314,6 +314,38 @@ impl Compiler {
             "atan2",
             "pi",
             "e",
+            // Stage S5: Extended collection functions
+            "flatten",
+            "distinct",
+            "dedupe",
+            "partition",
+            "partition-all",
+            // Stage S6: Vector math functions
+            "vec+",
+            "vec-",
+            "vec*",
+            "vec-scale",
+            "vec-dot",
+            "vec-cross",
+            "vec-length",
+            "vec-length-sq",
+            "vec-normalize",
+            "vec-distance",
+            "vec-lerp",
+            "vec-angle",
+            // Stage S7: Remaining functions
+            "bool?",
+            "number?",
+            "coll?",
+            "fn?",
+            "entity?",
+            "sinh",
+            "cosh",
+            "tanh",
+            "interleave",
+            "interpose",
+            "zip",
+            "repeat",
         ];
 
         for (idx, name) in natives.iter().enumerate() {
@@ -554,6 +586,12 @@ impl Compiler {
                 "reduce" => return self.compile_hof_reduce(args, span, code),
                 "every?" => return self.compile_hof_every(args, span, code),
                 "some" => return self.compile_hof_some(args, span, code),
+                "take-while" => return self.compile_hof_take_while(args, span, code),
+                "drop-while" => return self.compile_hof_drop_while(args, span, code),
+                "remove" => return self.compile_hof_remove(args, span, code),
+                "group-by" => return self.compile_hof_group_by(args, span, code),
+                "zip-with" => return self.compile_hof_zip_with(args, span, code),
+                "repeatedly" => return self.compile_hof_repeatedly(args, span, code),
                 _ => {}
             }
 
@@ -1478,6 +1516,146 @@ impl Compiler {
 
         // Emit Some opcode
         code.emit(Opcode::Some);
+
+        Ok(())
+    }
+
+    /// Compiles `(take-while pred coll)` - take elements while predicate is true.
+    fn compile_hof_take_while(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "take-while requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile predicate function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit TakeWhile opcode
+        code.emit(Opcode::TakeWhile);
+
+        Ok(())
+    }
+
+    /// Compiles `(drop-while pred coll)` - drop elements while predicate is true.
+    fn compile_hof_drop_while(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "drop-while requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile predicate function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit DropWhile opcode
+        code.emit(Opcode::DropWhile);
+
+        Ok(())
+    }
+
+    /// Compiles `(remove pred coll)` - remove elements where predicate is true.
+    fn compile_hof_remove(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "remove requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile predicate function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit Remove opcode
+        code.emit(Opcode::Remove);
+
+        Ok(())
+    }
+
+    /// Compiles `(group-by fn coll)` - group elements by key function.
+    fn compile_hof_group_by(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "group-by requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile key function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit GroupBy opcode
+        code.emit(Opcode::GroupBy);
+
+        Ok(())
+    }
+
+    /// Compiles `(zip-with fn coll1 coll2 ...)` - zip with combining function.
+    fn compile_hof_zip_with(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() < 3 {
+            return Err(self.error(
+                span,
+                "zip-with requires at least 3 arguments (fn coll1 coll2 ...)",
+            ));
+        }
+
+        // Compile the combining function first
+        self.compile_node(&args[0], code)?;
+
+        // Compile all collections (as a vector of collections)
+        code.emit(Opcode::VecNew);
+        for arg in &args[1..] {
+            self.compile_node(arg, code)?;
+            code.emit(Opcode::VecPush);
+        }
+
+        // Emit ZipWith opcode
+        code.emit(Opcode::ZipWith);
+
+        Ok(())
+    }
+
+    /// Compiles `(repeatedly n fn)` - call zero-arg function N times.
+    fn compile_hof_repeatedly(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "repeatedly requires exactly 2 arguments (n fn)"));
+        }
+
+        // Compile count
+        self.compile_node(&args[0], code)?;
+
+        // Compile function
+        self.compile_node(&args[1], code)?;
+
+        // Emit Repeatedly opcode
+        code.emit(Opcode::Repeatedly);
 
         Ok(())
     }

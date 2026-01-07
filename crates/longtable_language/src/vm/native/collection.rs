@@ -724,3 +724,277 @@ pub(crate) fn native_merge(args: &[Value]) -> Result<Value> {
     }
     Ok(Value::Map(result))
 }
+
+// =============================================================================
+// Stage S5: Extended Collection Functions
+// =============================================================================
+
+/// Collection: flatten - flatten one level of nesting
+/// (flatten [[1 2] [3 4]]) -> [1 2 3 4]
+pub(crate) fn native_flatten(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Vec(v)) => {
+            let mut result = LtVec::new();
+            for item in v.iter() {
+                match item {
+                    Value::Vec(inner) => {
+                        for x in inner.iter() {
+                            result = result.push_back(x.clone());
+                        }
+                    }
+                    Value::Set(inner) => {
+                        for x in inner.iter() {
+                            result = result.push_back(x.clone());
+                        }
+                    }
+                    other => {
+                        result = result.push_back(other.clone());
+                    }
+                }
+            }
+            Ok(Value::Vec(result))
+        }
+        Some(Value::Nil) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: distinct - remove duplicate values
+/// (distinct [1 2 1 3 2]) -> [1 2 3]
+pub(crate) fn native_distinct(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Vec(v)) => {
+            let mut seen = LtSet::new();
+            let mut result = LtVec::new();
+            for item in v.iter() {
+                if !seen.contains(item) {
+                    seen = seen.insert(item.clone());
+                    result = result.push_back(item.clone());
+                }
+            }
+            Ok(Value::Vec(result))
+        }
+        Some(Value::Nil) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: dedupe - remove consecutive duplicates
+/// (dedupe [1 1 2 2 1 1]) -> [1 2 1]
+pub(crate) fn native_dedupe(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Vec(v)) => {
+            let mut result = LtVec::new();
+            let mut last: Option<&Value> = None;
+            for item in v.iter() {
+                if last != Some(item) {
+                    result = result.push_back(item.clone());
+                    last = Some(item);
+                }
+            }
+            Ok(Value::Vec(result))
+        }
+        Some(Value::Nil) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: partition - partition into groups of n
+/// (partition 2 [1 2 3 4 5]) -> [[1 2] [3 4]]
+pub(crate) fn native_partition(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Int(n)), Some(Value::Vec(v))) => {
+            if *n <= 0 {
+                return Err(Error::new(ErrorKind::Internal(
+                    "partition size must be positive".to_string(),
+                )));
+            }
+            let n = *n as usize;
+            let items: Vec<Value> = v.iter().cloned().collect();
+            let mut result = LtVec::new();
+            for chunk in items.chunks(n) {
+                if chunk.len() == n {
+                    let group: LtVec<Value> = chunk.iter().cloned().collect();
+                    result = result.push_back(Value::Vec(group));
+                }
+            }
+            Ok(Value::Vec(result))
+        }
+        (Some(Value::Int(_)), Some(Value::Nil)) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Int,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: partition-all - partition into groups of n, including incomplete final group
+/// (partition-all 2 [1 2 3 4 5]) -> [[1 2] [3 4] [5]]
+pub(crate) fn native_partition_all(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Int(n)), Some(Value::Vec(v))) => {
+            if *n <= 0 {
+                return Err(Error::new(ErrorKind::Internal(
+                    "partition size must be positive".to_string(),
+                )));
+            }
+            let n = *n as usize;
+            let items: Vec<Value> = v.iter().cloned().collect();
+            let mut result = LtVec::new();
+            for chunk in items.chunks(n) {
+                let group: LtVec<Value> = chunk.iter().cloned().collect();
+                result = result.push_back(Value::Vec(group));
+            }
+            Ok(Value::Vec(result))
+        }
+        (Some(Value::Int(_)), Some(Value::Nil)) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Int,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+// =============================================================================
+// Stage S7: Combining Functions
+// =============================================================================
+
+/// Collection: interleave - interleave elements from multiple collections
+/// (interleave [1 2] [a b] [x y]) -> [1 a x 2 b y]
+pub(crate) fn native_interleave(args: &[Value]) -> Result<Value> {
+    // Collect all vectors
+    let vecs: Vec<Vec<Value>> = args
+        .iter()
+        .map(|arg| match arg {
+            Value::Vec(v) => Ok(v.iter().cloned().collect()),
+            Value::Nil => Ok(vec![]),
+            _ => Err(Error::new(ErrorKind::TypeMismatch {
+                expected: longtable_foundation::Type::Vec(Box::new(
+                    longtable_foundation::Type::Any,
+                )),
+                actual: arg.value_type(),
+            })),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    if vecs.is_empty() {
+        return Ok(Value::Vec(LtVec::new()));
+    }
+
+    // Find minimum length (interleave stops at shortest)
+    let min_len = vecs.iter().map(Vec::len).min().unwrap_or(0);
+
+    let mut result = LtVec::new();
+    for i in 0..min_len {
+        for vec in &vecs {
+            result = result.push_back(vec[i].clone());
+        }
+    }
+    Ok(Value::Vec(result))
+}
+
+/// Collection: interpose - interpose separator between elements
+/// (interpose :sep [1 2 3]) -> [1 :sep 2 :sep 3]
+pub(crate) fn native_interpose(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(sep), Some(Value::Vec(v))) => {
+            let mut result = LtVec::new();
+            let mut first = true;
+            for item in v.iter() {
+                if !first {
+                    result = result.push_back(sep.clone());
+                }
+                first = false;
+                result = result.push_back(item.clone());
+            }
+            Ok(Value::Vec(result))
+        }
+        (Some(_), Some(Value::Nil)) => Ok(Value::Vec(LtVec::new())),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Vec(Box::new(longtable_foundation::Type::Any)),
+            actual: args
+                .get(1)
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// Collection: zip - zip collections into vectors of tuples
+/// (zip [1 2] [a b]) -> [[1 a] [2 b]]
+pub(crate) fn native_zip(args: &[Value]) -> Result<Value> {
+    // Collect all vectors
+    let vecs: Vec<Vec<Value>> = args
+        .iter()
+        .map(|arg| match arg {
+            Value::Vec(v) => Ok(v.iter().cloned().collect()),
+            Value::Nil => Ok(vec![]),
+            _ => Err(Error::new(ErrorKind::TypeMismatch {
+                expected: longtable_foundation::Type::Vec(Box::new(
+                    longtable_foundation::Type::Any,
+                )),
+                actual: arg.value_type(),
+            })),
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    if vecs.is_empty() {
+        return Ok(Value::Vec(LtVec::new()));
+    }
+
+    // Find minimum length
+    let min_len = vecs.iter().map(Vec::len).min().unwrap_or(0);
+
+    let mut result = LtVec::new();
+    for i in 0..min_len {
+        let mut tuple = LtVec::new();
+        for vec in &vecs {
+            tuple = tuple.push_back(vec[i].clone());
+        }
+        result = result.push_back(Value::Vec(tuple));
+    }
+    Ok(Value::Vec(result))
+}
+
+/// Collection: repeat - repeat a value n times
+/// (repeat 3 :x) -> [:x :x :x]
+pub(crate) fn native_repeat(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::Int(n)), Some(value)) => {
+            if *n < 0 {
+                return Err(Error::new(ErrorKind::Internal(
+                    "repeat count must be non-negative".to_string(),
+                )));
+            }
+            let mut result = LtVec::new();
+            for _ in 0..(*n as usize) {
+                result = result.push_back(value.clone());
+            }
+            Ok(Value::Vec(result))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::Int,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}

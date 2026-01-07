@@ -148,6 +148,20 @@ pub enum Opcode {
     Every,
     /// Check if predicate returns truthy for any element: `[fn, coll] -> [bool | value]`
     Some,
+    /// Take elements while predicate returns truthy: `[fn, coll] -> [result_vec]`
+    TakeWhile,
+    /// Drop elements while predicate returns truthy: `[fn, coll] -> [result_vec]`
+    DropWhile,
+    /// Remove elements where predicate returns truthy (inverse of filter): `[fn, coll] -> [result_vec]`
+    Remove,
+    /// Group elements by key function: `[fn, coll] -> [result_map]`
+    GroupBy,
+    /// Zip collections with a combining function: `[fn, coll1, coll2, ...] -> [result_vec]`
+    /// Applies fn to corresponding elements from each collection.
+    ZipWith,
+    /// Call function N times, collect results: `[n, fn] -> [result_vec]`
+    /// The function should be zero-argument.
+    Repeatedly,
 }
 
 /// A sequence of bytecode instructions.

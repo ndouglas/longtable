@@ -35,19 +35,25 @@ use context::NoContext;
 use native::{
     add_values, compare_values, div_values, format_value, is_truthy, mod_values, mul_values,
     native_abs, native_acos, native_and, native_asin, native_assoc, native_atan, native_atan2,
-    native_cbrt, native_ceil, native_clamp, native_concat, native_conj, native_cons,
-    native_contains_p, native_cos, native_count, native_dec, native_dissoc, native_drop, native_e,
-    native_empty_p, native_exp, native_first, native_float_p, native_floor, native_format,
-    native_get, native_inc, native_int_p, native_into, native_keys, native_keyword_p, native_last,
-    native_list_p, native_log, native_log2, native_log10, native_map_p, native_max, native_merge,
-    native_min, native_nil_p, native_nth, native_or, native_pi, native_pow, native_range,
-    native_rem, native_rest, native_reverse, native_round, native_set, native_set_p, native_sin,
-    native_some_p, native_sort, native_sqrt, native_str, native_str_blank, native_str_contains,
-    native_str_ends_with, native_str_join, native_str_len, native_str_lower, native_str_replace,
-    native_str_replace_all, native_str_split, native_str_starts_with, native_str_substring,
-    native_str_trim, native_str_trim_left, native_str_trim_right, native_str_upper,
-    native_string_p, native_symbol_p, native_take, native_tan, native_trunc, native_type,
-    native_vals, native_vec, native_vector_p, neg_value, sub_values,
+    native_bool_p, native_cbrt, native_ceil, native_clamp, native_coll_p, native_concat,
+    native_conj, native_cons, native_contains_p, native_cos, native_cosh, native_count, native_dec,
+    native_dedupe, native_dissoc, native_distinct, native_drop, native_e, native_empty_p,
+    native_entity_p, native_exp, native_first, native_flatten, native_float_p, native_floor,
+    native_fn_p, native_format, native_get, native_inc, native_int_p, native_interleave,
+    native_interpose, native_into, native_keys, native_keyword_p, native_last, native_list_p,
+    native_log, native_log2, native_log10, native_map_p, native_max, native_merge, native_min,
+    native_nil_p, native_nth, native_number_p, native_or, native_partition, native_partition_all,
+    native_pi, native_pow, native_range, native_rem, native_repeat, native_rest, native_reverse,
+    native_round, native_set, native_set_p, native_sin, native_sinh, native_some_p, native_sort,
+    native_sqrt, native_str, native_str_blank, native_str_contains, native_str_ends_with,
+    native_str_join, native_str_len, native_str_lower, native_str_replace, native_str_replace_all,
+    native_str_split, native_str_starts_with, native_str_substring, native_str_trim,
+    native_str_trim_left, native_str_trim_right, native_str_upper, native_string_p,
+    native_symbol_p, native_take, native_tan, native_tanh, native_trunc, native_type, native_vals,
+    native_vec, native_vec_add, native_vec_angle, native_vec_cross, native_vec_distance,
+    native_vec_dot, native_vec_length, native_vec_length_sq, native_vec_lerp, native_vec_mul,
+    native_vec_normalize, native_vec_scale, native_vec_sub, native_vector_p, native_zip, neg_value,
+    sub_values,
 };
 
 use longtable_foundation::{
@@ -1013,6 +1019,477 @@ impl Vm {
                     // Return first truthy result or nil
                     self.push(found.unwrap_or(Value::Nil));
                 }
+
+                Opcode::TakeWhile => {
+                    let coll = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collection elements
+                    let elements: Vec<Value> = match coll {
+                        Value::Vec(v) => v.iter().cloned().collect(),
+                        Value::Set(s) => s.iter().cloned().collect(),
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: coll.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Take elements while predicate returns truthy
+                    let mut results = LtVec::new();
+                    for elem in elements {
+                        // Save current VM state
+                        let saved_ip = self.ip;
+                        let saved_locals = self.locals.clone();
+                        let saved_captures = std::mem::take(&mut self.captures);
+
+                        // Set up argument
+                        self.locals[0] = elem.clone();
+
+                        // Set up captures from function's closure
+                        if let Some(caps) = &func_ref.captures {
+                            self.captures.clone_from(&caps.lock().unwrap());
+                        }
+
+                        // Execute function
+                        let result =
+                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                        // Restore state
+                        self.ip = saved_ip;
+                        self.locals = saved_locals;
+                        self.captures = saved_captures;
+
+                        if is_truthy(&result) {
+                            results = results.push_back(elem);
+                        } else {
+                            break; // Stop at first falsy
+                        }
+                    }
+
+                    self.push(Value::Vec(results));
+                }
+
+                Opcode::DropWhile => {
+                    let coll = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collection elements
+                    let elements: Vec<Value> = match coll {
+                        Value::Vec(v) => v.iter().cloned().collect(),
+                        Value::Set(s) => s.iter().cloned().collect(),
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: coll.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Drop elements while predicate returns truthy
+                    let mut dropping = true;
+                    let mut results = LtVec::new();
+                    for elem in elements {
+                        if dropping {
+                            // Save current VM state
+                            let saved_ip = self.ip;
+                            let saved_locals = self.locals.clone();
+                            let saved_captures = std::mem::take(&mut self.captures);
+
+                            // Set up argument
+                            self.locals[0] = elem.clone();
+
+                            // Set up captures from function's closure
+                            if let Some(caps) = &func_ref.captures {
+                                self.captures.clone_from(&caps.lock().unwrap());
+                            }
+
+                            // Execute function
+                            let result =
+                                self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                            // Restore state
+                            self.ip = saved_ip;
+                            self.locals = saved_locals;
+                            self.captures = saved_captures;
+
+                            if !is_truthy(&result) {
+                                dropping = false;
+                                results = results.push_back(elem);
+                            }
+                        } else {
+                            results = results.push_back(elem);
+                        }
+                    }
+
+                    self.push(Value::Vec(results));
+                }
+
+                Opcode::Remove => {
+                    let coll = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collection elements
+                    let elements: Vec<Value> = match coll {
+                        Value::Vec(v) => v.iter().cloned().collect(),
+                        Value::Set(s) => s.iter().cloned().collect(),
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: coll.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Remove elements where predicate returns truthy (inverse of filter)
+                    let mut results = LtVec::new();
+                    for elem in elements {
+                        // Save current VM state
+                        let saved_ip = self.ip;
+                        let saved_locals = self.locals.clone();
+                        let saved_captures = std::mem::take(&mut self.captures);
+
+                        // Set up argument
+                        self.locals[0] = elem.clone();
+
+                        // Set up captures from function's closure
+                        if let Some(caps) = &func_ref.captures {
+                            self.captures.clone_from(&caps.lock().unwrap());
+                        }
+
+                        // Execute function
+                        let result =
+                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                        // Restore state
+                        self.ip = saved_ip;
+                        self.locals = saved_locals;
+                        self.captures = saved_captures;
+
+                        // Keep element if result is NOT truthy (inverse of filter)
+                        if !is_truthy(&result) {
+                            results = results.push_back(elem);
+                        }
+                    }
+
+                    self.push(Value::Vec(results));
+                }
+
+                Opcode::GroupBy => {
+                    let coll = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collection elements
+                    let elements: Vec<Value> = match coll {
+                        Value::Vec(v) => v.iter().cloned().collect(),
+                        Value::Set(s) => s.iter().cloned().collect(),
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: coll.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Group elements by key function result
+                    let mut groups: LtMap<Value, Value> = LtMap::new();
+                    for elem in elements {
+                        // Save current VM state
+                        let saved_ip = self.ip;
+                        let saved_locals = self.locals.clone();
+                        let saved_captures = std::mem::take(&mut self.captures);
+
+                        // Set up argument
+                        self.locals[0] = elem.clone();
+
+                        // Set up captures from function's closure
+                        if let Some(caps) = &func_ref.captures {
+                            self.captures.clone_from(&caps.lock().unwrap());
+                        }
+
+                        // Execute function to get key
+                        let key =
+                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                        // Restore state
+                        self.ip = saved_ip;
+                        self.locals = saved_locals;
+                        self.captures = saved_captures;
+
+                        // Add to appropriate group
+                        let group_vec = groups
+                            .get(&key)
+                            .and_then(|v| {
+                                if let Value::Vec(vec) = v {
+                                    Some(vec.clone())
+                                } else {
+                                    None
+                                }
+                            })
+                            .unwrap_or_else(LtVec::new);
+                        let new_group = group_vec.push_back(elem);
+                        groups = groups.insert(key, Value::Vec(new_group));
+                    }
+
+                    self.push(Value::Map(groups));
+                }
+
+                Opcode::ZipWith => {
+                    let colls_vec = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collections from the vector
+                    let collections: Vec<Vec<Value>> = match colls_vec {
+                        Value::Vec(v) => v
+                            .iter()
+                            .map(|c| match c {
+                                Value::Vec(inner) => Ok(inner.iter().cloned().collect()),
+                                Value::Nil => Ok(Vec::new()),
+                                _ => Err(Error::new(ErrorKind::TypeMismatch {
+                                    expected: longtable_foundation::Type::Vec(Box::new(
+                                        longtable_foundation::Type::Any,
+                                    )),
+                                    actual: c.value_type(),
+                                })),
+                            })
+                            .collect::<Result<Vec<_>>>()?,
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: colls_vec.value_type(),
+                            }));
+                        }
+                    };
+
+                    if collections.is_empty() {
+                        self.push(Value::Vec(LtVec::new()));
+                    } else {
+                        // Find minimum length
+                        let min_len = collections.iter().map(Vec::len).min().unwrap_or(0);
+                        let mut results: LtVec<Value> = LtVec::new();
+
+                        for i in 0..min_len {
+                            // Save current VM state
+                            let saved_ip = self.ip;
+                            let saved_locals = self.locals.clone();
+                            let saved_captures = std::mem::take(&mut self.captures);
+
+                            // Set up arguments from each collection at index i
+                            for (slot, coll) in collections.iter().enumerate() {
+                                if slot < self.locals.len() {
+                                    self.locals[slot] = coll[i].clone();
+                                }
+                            }
+
+                            // Set up captures from function's closure
+                            if let Some(caps) = &func_ref.captures {
+                                self.captures.clone_from(&caps.lock().unwrap());
+                            }
+
+                            // Execute function
+                            let result =
+                                self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                            // Restore state
+                            self.ip = saved_ip;
+                            self.locals = saved_locals;
+                            self.captures = saved_captures;
+
+                            results = results.push_back(result);
+                        }
+
+                        self.push(Value::Vec(results));
+                    }
+                }
+
+                Opcode::Repeatedly => {
+                    let func_val = self.pop()?;
+                    let count_val = self.pop()?;
+
+                    // Extract count
+                    let count = match count_val {
+                        Value::Int(n) if n >= 0 => n as usize,
+                        Value::Int(_) => {
+                            return Err(Error::new(ErrorKind::Internal(
+                                "repeatedly count must be non-negative".to_string(),
+                            )));
+                        }
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Int,
+                                actual: count_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    let mut results: LtVec<Value> = LtVec::new();
+
+                    for _ in 0..count {
+                        // Save current VM state
+                        let saved_ip = self.ip;
+                        let saved_locals = self.locals.clone();
+                        let saved_captures = std::mem::take(&mut self.captures);
+
+                        // Set up captures from function's closure
+                        if let Some(caps) = &func_ref.captures {
+                            self.captures.clone_from(&caps.lock().unwrap());
+                        }
+
+                        // Execute zero-arg function
+                        let result =
+                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                        // Restore state
+                        self.ip = saved_ip;
+                        self.locals = saved_locals;
+                        self.captures = saved_captures;
+
+                        results = results.push_back(result);
+                    }
+
+                    self.push(Value::Vec(results));
+                }
             }
         }
 
@@ -1174,6 +1651,38 @@ impl Vm {
             93 => native_atan2(&args),
             94 => native_pi(&args),
             95 => native_e(&args),
+            // Stage S5: Extended collection functions
+            96 => native_flatten(&args),
+            97 => native_distinct(&args),
+            98 => native_dedupe(&args),
+            99 => native_partition(&args),
+            100 => native_partition_all(&args),
+            // Stage S6: Vector math functions
+            101 => native_vec_add(&args),
+            102 => native_vec_sub(&args),
+            103 => native_vec_mul(&args),
+            104 => native_vec_scale(&args),
+            105 => native_vec_dot(&args),
+            106 => native_vec_cross(&args),
+            107 => native_vec_length(&args),
+            108 => native_vec_length_sq(&args),
+            109 => native_vec_normalize(&args),
+            110 => native_vec_distance(&args),
+            111 => native_vec_lerp(&args),
+            112 => native_vec_angle(&args),
+            // Stage S7: Remaining functions (113-124)
+            113 => native_bool_p(&args),
+            114 => native_number_p(&args),
+            115 => native_coll_p(&args),
+            116 => native_fn_p(&args),
+            117 => native_entity_p(&args),
+            118 => native_sinh(&args),
+            119 => native_cosh(&args),
+            120 => native_tanh(&args),
+            121 => native_interleave(&args),
+            122 => native_interpose(&args),
+            123 => native_zip(&args),
+            124 => native_repeat(&args),
             _ => Err(Error::new(ErrorKind::Internal(format!(
                 "unknown native function index: {idx}"
             )))),

@@ -1,8 +1,10 @@
 //! The main REPL implementation.
 
 use crate::editor::{LineEditor, ReadResult, RustylineEditor};
+use crate::serialize;
 use crate::session::Session;
-use longtable_foundation::{Error, ErrorKind, Result, Value};
+use longtable_engine::{InputEvent, TickExecutor};
+use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
 use longtable_language::{
     Compiler, Declaration, DeclarationAnalyzer, NamespaceContext, NamespaceInfo, Vm, parse,
 };
@@ -20,6 +22,9 @@ pub struct Repl<E: LineEditor = RustylineEditor> {
 
     /// The bytecode VM for evaluation.
     vm: Vm,
+
+    /// Tick executor for advancing simulation.
+    tick_executor: TickExecutor,
 
     /// Whether to show the welcome banner.
     show_banner: bool,
@@ -50,6 +55,7 @@ impl<E: LineEditor> Repl<E> {
             editor,
             session: Session::new(),
             vm: Vm::new(),
+            tick_executor: TickExecutor::new(),
             show_banner: true,
             prompt: "λ> ".to_string(),
             continuation_prompt: ".. ".to_string(),
@@ -251,7 +257,8 @@ impl<E: LineEditor> Repl<E> {
         self.vm.execute(&program)
     }
 
-    /// Tries to handle special REPL forms (def, load).
+    /// Tries to handle special REPL forms (def, load, save!, load-world!, tick!, inspect).
+    #[allow(clippy::too_many_lines)]
     fn try_special_form(&mut self, form: &longtable_language::Ast) -> Result<Option<Value>> {
         use longtable_language::Ast;
 
@@ -307,6 +314,141 @@ impl<E: LineEditor> Repl<E> {
                 };
 
                 self.load_file(&path)?;
+                Ok(Some(Value::Nil))
+            }
+
+            // (save! "path") - save world state to file
+            Ast::Symbol(s, _) if s == "save!" => {
+                if list.len() != 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "save! requires exactly 1 argument: (save! \"path\")".to_string(),
+                    )));
+                }
+
+                let path = match &list[1] {
+                    Ast::String(p, _) => p.clone(),
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "save! path must be a string, got {}",
+                            other.type_name()
+                        ))));
+                    }
+                };
+
+                let resolved = self.session.resolve_path(&path);
+                serialize::save_to_file(self.session.world(), &resolved)?;
+                println!("World saved to: {}", resolved.display());
+                Ok(Some(Value::Nil))
+            }
+
+            // (load-world! "path") - load world state from file
+            Ast::Symbol(s, _) if s == "load-world!" => {
+                if list.len() != 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "load-world! requires exactly 1 argument: (load-world! \"path\")"
+                            .to_string(),
+                    )));
+                }
+
+                let path = match &list[1] {
+                    Ast::String(p, _) => p.clone(),
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "load-world! path must be a string, got {}",
+                            other.type_name()
+                        ))));
+                    }
+                };
+
+                let resolved = self.session.resolve_path(&path);
+                let world = serialize::load_from_file(&resolved)?;
+                let entity_count = world.entity_count();
+                let tick = world.tick();
+                self.session.set_world(world);
+                println!(
+                    "World loaded from: {} ({} entities, tick {})",
+                    resolved.display(),
+                    entity_count,
+                    tick
+                );
+                Ok(Some(Value::Nil))
+            }
+
+            // (tick!) or (tick! [events]) - advance world by one tick
+            Ast::Symbol(s, _) if s == "tick!" => {
+                let inputs: Vec<InputEvent> = if list.len() > 1 {
+                    // Parse events from argument (placeholder - just use empty for now)
+                    // Full event parsing would require more infrastructure
+                    Vec::new()
+                } else {
+                    Vec::new()
+                };
+
+                let world = self.session.world().clone();
+                let result = self.tick_executor.tick(world, &inputs)?;
+
+                if result.success {
+                    self.session.set_world(result.world);
+                    println!(
+                        "Tick {}: {} activations fired",
+                        self.tick_executor.tick_number(),
+                        result.activations_fired
+                    );
+                } else {
+                    println!(
+                        "Tick {} rolled back: {:?}",
+                        self.tick_executor.tick_number(),
+                        result.constraint_result
+                    );
+                }
+
+                Ok(Some(Value::Nil))
+            }
+
+            // (inspect entity) - show entity details
+            Ast::Symbol(s, _) if s == "inspect" => {
+                if list.len() != 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "inspect requires exactly 1 argument: (inspect entity)".to_string(),
+                    )));
+                }
+
+                // Evaluate the argument to get entity id
+                let entity_val = self.eval_form(&list[1])?;
+                let entity_id = match entity_val {
+                    Value::EntityRef(id) => id,
+                    Value::Int(idx) if idx >= 0 => {
+                        // Allow using integer as entity index (for convenience)
+                        // Use generation 0 as default for convenience lookup
+                        #[allow(clippy::cast_sign_loss)]
+                        EntityId::new(idx as u64, 0)
+                    }
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "inspect argument must be an entity, got {:?}",
+                            other.value_type()
+                        ))));
+                    }
+                };
+
+                let world = self.session.world();
+
+                // Check if entity exists
+                if !world.exists(entity_id) {
+                    println!("Entity {entity_id} does not exist or is dead");
+                    return Ok(Some(Value::Nil));
+                }
+
+                // Get entity info
+                println!("Entity {entity_id}:");
+                println!("  index: {}", entity_id.index);
+                println!("  generation: {}", entity_id.generation);
+                println!("  status: alive");
+
+                // Note: Without a schema iterator, we can't easily list all components
+                // This is a basic implementation - could be enhanced with schema listing
+                println!("  (use (get entity :component) to query specific components)");
+
                 Ok(Some(Value::Nil))
             }
 
