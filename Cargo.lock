@@ -381,6 +381,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
+name = "longtable"
+version = "0.1.0"
+dependencies = [
+ "longtable_debug",
+ "longtable_engine",
+ "longtable_foundation",
+ "longtable_language",
+ "longtable_runtime",
+ "longtable_stdlib",
+ "longtable_storage",
+ "proptest",
+]
+
+[[package]]
 name = "longtable_debug"
 version = "0.1.0"
 dependencies = [

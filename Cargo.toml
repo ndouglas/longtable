@@ -10,6 +10,49 @@ members = [
     "crates/longtable_debug",
 ]
 
+# Root package for workspace-level integration tests
+[package]
+name = "longtable"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rule-based simulation engine combining a LISP-like DSL with an archetype-based ECS"
+
+[dependencies]
+longtable_foundation.workspace = true
+longtable_storage.workspace = true
+longtable_language.workspace = true
+longtable_engine.workspace = true
+longtable_stdlib.workspace = true
+longtable_runtime.workspace = true
+longtable_debug.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+# Integration test targets
+[[test]]
+name = "foundation"
+path = "tests/foundation/main.rs"
+
+[[test]]
+name = "storage"
+path = "tests/storage/main.rs"
+
+[[test]]
+name = "language"
+path = "tests/language/main.rs"
+
+[[test]]
+name = "engine"
+path = "tests/engine/main.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration/main.rs"
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
