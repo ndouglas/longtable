@@ -2,7 +2,7 @@
 //!
 //! The session holds the current world state and session-local variables.
 
-use longtable_debug::Tracer;
+use longtable_debug::{DebugSession, Timeline, Tracer};
 use longtable_foundation::{EntityId, Value};
 use longtable_language::{ModuleRegistry, NamespaceContext};
 use longtable_storage::World;
@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Session state for an interactive REPL session.
+#[allow(clippy::struct_field_names)]
 pub struct Session {
     /// The current world state.
     world: World,
@@ -35,6 +36,12 @@ pub struct Session {
 
     /// Tracer for observability.
     tracer: Tracer,
+
+    /// Debug session for breakpoints and stepping.
+    debug_session: DebugSession,
+
+    /// Timeline for time travel debugging.
+    timeline: Timeline,
 }
 
 impl Session {
@@ -50,6 +57,8 @@ impl Session {
             module_registry: ModuleRegistry::new(),
             namespace_context: NamespaceContext::new(),
             tracer: Tracer::disabled(),
+            debug_session: DebugSession::new(),
+            timeline: Timeline::new(),
         }
     }
 
@@ -65,6 +74,8 @@ impl Session {
             module_registry: ModuleRegistry::new(),
             namespace_context: NamespaceContext::new(),
             tracer: Tracer::disabled(),
+            debug_session: DebugSession::new(),
+            timeline: Timeline::new(),
         }
     }
 
@@ -187,6 +198,28 @@ impl Session {
     /// Returns a mutable reference to the tracer.
     pub fn tracer_mut(&mut self) -> &mut Tracer {
         &mut self.tracer
+    }
+
+    /// Returns a reference to the debug session.
+    #[must_use]
+    pub fn debug_session(&self) -> &DebugSession {
+        &self.debug_session
+    }
+
+    /// Returns a mutable reference to the debug session.
+    pub fn debug_session_mut(&mut self) -> &mut DebugSession {
+        &mut self.debug_session
+    }
+
+    /// Returns a reference to the timeline.
+    #[must_use]
+    pub fn timeline(&self) -> &Timeline {
+        &self.timeline
+    }
+
+    /// Returns a mutable reference to the timeline.
+    pub fn timeline_mut(&mut self) -> &mut Timeline {
+        &mut self.timeline
     }
 }
 

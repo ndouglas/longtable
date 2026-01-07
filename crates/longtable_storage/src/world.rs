@@ -782,6 +782,16 @@ impl World {
         self.entities.exists(entity) && self.components.has(entity, component)
     }
 
+    /// Returns the components that an entity has.
+    ///
+    /// Returns an empty slice if the entity doesn't exist or has no components.
+    #[must_use]
+    pub fn entity_components(&self, entity: EntityId) -> &[KeywordId] {
+        self.components
+            .archetype(entity)
+            .map_or(&[], |arch| arch.components())
+    }
+
     /// Iterates entities with a specific component.
     pub fn with_component(&self, component: KeywordId) -> impl Iterator<Item = EntityId> + '_ {
         self.components.with_component(component)

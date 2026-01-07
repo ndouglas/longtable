@@ -1212,38 +1212,61 @@ Where n = total entities, k = relationships from/to specific entity.
 >
 > **Ordering rationale**: Observability is a *consumer* of execution correctness. Building rich debugging before semantics are stable couples observability to unstable internals. Now that Phase 4 proved semantics correct, we can instrument safely.
 
-### 6.1 Tracing
+### 6.1 Explain System
 
-- [ ] Implement trace targets
-- [ ] Implement trace event recording
-- [ ] Implement trace output formatting
-- [ ] REPL integration
-- [ ] Test: trace accuracy
+- [x] Implement `WhyQuery` and `WhyResult` types for causal queries
+- [x] Implement `CausalChain` for multi-hop provenance tracking
+- [x] Implement `DerivedExplanation` for computed value explanations
+- [x] Implement `QueryExplanation` with clause matching statistics
+- [x] Implement `EntityMatchExplanation` with failure reasons
+- [x] Add `(why entity :component)` and `(why entity :component :depth N)` DSL forms
+- [x] Add `(explain-query (query ...))` DSL form
+- [x] Add `(explain-query (query ...) entity)` for entity-specific explanations
+- [x] Test: explanation accuracy (12 tests in explain module)
 
-### 6.2 Debugging
+### 6.2 Tracing
 
-- [ ] Implement breakpoints
-- [ ] Implement step execution
-- [ ] Implement state inspection
-- [ ] REPL integration
-- [ ] Test: debugger commands
+- [x] Implement `TracerConfig` with verbosity levels (Minimal, Standard, Full)
+- [x] Implement `TraceEvent` enum with 14 event types (TickStart/End, RuleActivated, ComponentWrite, etc.)
+- [x] Implement `TraceRecord` with tick, timestamp, and event data
+- [x] Implement `TraceBuffer` ring buffer with tick-indexed lookup
+- [x] Implement `HumanFormatter` and `JsonFormatter` for output
+- [x] Implement `Tracer` with zero-overhead when disabled
+- [x] Add `(trace!)`, `(trace-off!)`, `(get-traces)` DSL forms
+- [x] REPL integration via Session.tracer
+- [x] Test: trace accuracy (28 tests in trace module)
 
-### 6.3 Time Travel
+### 6.3 Debugging
 
-- [ ] Implement timeline recording
-- [ ] Implement rollback
-- [ ] Implement branching
-- [ ] Implement world diff
-- [ ] REPL integration
-- [ ] Test: timeline integrity
-- [ ] Benchmark: memory usage with history
+- [x] Implement `Breakpoint` types (Rule, ComponentRead, ComponentWrite, Entity, Conditional)
+- [x] Implement `BreakpointRegistry` with indexed lookups
+- [x] Implement `WatchExpression` and `WatchRegistry`
+- [x] Implement `DebugSession` with state management (Running, Paused, Stepping)
+- [x] Implement `StepMode` variants (Instruction, Rule, Phase, Tick)
+- [x] Implement `PauseReason` for breakpoint hit tracking
+- [x] Add `(break ...)`, `(watches)`, `(watch ...)`, `(unwatch ...)` DSL forms
+- [x] Add `(continue)`, `(step-rule)`, `(step-phase)`, `(step-tick)` DSL forms
+- [x] Add `(debug)` status command
+- [x] REPL integration via Session.debug_session
+- [x] Test: debugger commands (30 tests in debug module)
 
-### 6.4 Explain
+### 6.4 Time Travel
 
-- [ ] Implement `why` for components
-- [ ] Implement `why` for derived values
-- [ ] Implement `explain-query`
-- [ ] Test: explanation accuracy
+- [x] Implement `TickSnapshot` with Arc-wrapped World for efficient storage
+- [x] Implement `TickSummary` for tick metadata
+- [x] Implement `HistoryBuffer` ring buffer with configurable capacity
+- [x] Implement `Branch`, `BranchId`, `BranchRegistry` for git-like branching
+- [x] Implement `Timeline` manager with branch tracking
+- [x] Implement `WorldDiff`, `EntityDiff`, `ValueChange` for state comparison
+- [x] Implement `DiffGranularity` levels (Entity, Component, Field)
+- [x] Implement `diff_worlds`, `diff_summary`, `format_diff` functions
+- [x] Implement `MergeStrategy` (Replace, Compare) and `MergeResult`
+- [x] Add `(rollback! N)`, `(goto-tick! N)` DSL forms
+- [x] Add `(branch! "name")`, `(checkout! "name")`, `(branches)` DSL forms
+- [x] Add `(merge! "name")`, `(diff N M)`, `(diff :branches "a" "b")` DSL forms
+- [x] Add `(history)`, `(history N)`, `(timeline)` DSL forms
+- [x] REPL integration via Session.timeline
+- [x] Test: timeline integrity (29 tests in timeline module)
 
 ### Example: Debugging
 
@@ -1660,18 +1683,18 @@ This is not a time estimate, but a logical ordering of work:
 ┌─────────────────────────────────────────────────────────────┐
 │  CORE SEMANTICS (The Real Project)                          │
 ├─────────────────────────────────────────────────────────────┤
-│  Phase 0: Bootstrap            ████                         │
-│  Phase 1: API Design           ████████████████             │
-│  Phase 1.5: Semantic Spike     ████████                     │
-│  Phase 2: Foundation           ████████                     │
-│  Phase 2.5: World Without Rules████████  ← First REPL       │
-│  Phase 3: Language             ████████████                 │
-│  Phase 4: Execution            ████████████████ ← It works! │
+│  Phase 0: Bootstrap            ████ ✓                       │
+│  Phase 1: API Design           ████████████████ ✓           │
+│  Phase 1.5: Semantic Spike     ████████ ✓                   │
+│  Phase 2: Foundation           ████████ ✓                   │
+│  Phase 2.5: World Without Rules████████ ✓ ← First REPL      │
+│  Phase 3: Language             ████████████ ✓               │
+│  Phase 4: Execution            ████████████████ ✓ It works! │
 ├─────────────────────────────────────────────────────────────┤
 │  USABILITY (Make It Livable)                                │
 ├─────────────────────────────────────────────────────────────┤
-│  Phase 5: Interface            ████████                     │
-│  Phase 6: Observability        ████████                     │
+│  Phase 5: Interface            ████████ ✓                   │
+│  Phase 6: Observability        ████████ ✓ ← CURRENT         │
 ├─────────────────────────────────────────────────────────────┤
 │  POST-MVP (Only If It Earns It) — ASPIRATIONAL              │
 ├─────────────────────────────────────────────────────────────┤
@@ -1681,16 +1704,17 @@ This is not a time estimate, but a logical ordering of work:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Critical path**: Phases 0 → 1 → 1.5 → 2 → 2.5 → 3 → 4 are sequential.
+**Critical path**: Phases 0 → 1 → 1.5 → 2 → 2.5 → 3 → 4 are sequential. All complete.
 
-**Key milestones**:
-- Phase 1.5: Semantic confidence (can throw away code)
-- Phase 2.5: First interactive REPL, queries work, adventure world exists (major morale win)
-- Phase 4: Adventure game plays end-to-end (system is complete)
+**Key milestones achieved**:
+- Phase 1.5: Semantic confidence (can throw away code) ✓
+- Phase 2.5: First interactive REPL, queries work, adventure world exists ✓
+- Phase 4: Adventure game plays end-to-end ✓
+- Phase 6: Full observability with debugging and time travel ✓
 
 **Phases 7-9 are aspirational**. They have equal narrative weight in this document but NOT equal commitment. Do not feel obligated to implement LSP, incremental matching, or community infrastructure just because they're "in the plan." The system is **complete** at Phase 6.
 
-Phases 5-6 can partially parallelize after Phase 4.
+The core system is now feature-complete. Remaining phases focus on examples, optimization, and ecosystem maturity.
 
 ---
 
@@ -1713,18 +1737,36 @@ This is a **major morale checkpoint**. If Phase 2.5 feels like a real system, yo
 **Primary goal**: Correct semantics, deterministic behavior, usable development experience.
 
 - [x] Adventure game example runs end-to-end (Phase 5.5 complete - relationship queries work!)
-- [ ] All spec sections have basic implementation
+- [x] All spec sections have basic implementation
 - [x] REPL is usable for development (Phase 5.2 complete)
-- [ ] Semantic spike tests all pass
-- [ ] VM mutation model decision documented
-- [ ] Performance usable at 1k entities (not optimized)
-- [ ] Errors include full context (rule, bindings, expression)
+- [x] Semantic spike tests all pass
+- [x] VM mutation model decision documented (Option A: direct mutation with snapshot)
+- [x] Performance usable at 1k entities (benchmarks show sub-millisecond operations)
+- [x] Errors include full context (rule, bindings, expression)
 
-**Explicitly NOT required for MVP**:
-- 10k entity performance
-- Full observability (tracing, debugger, time travel)
-- Fine-grained derived invalidation
-- Incremental pattern matching
+**MVP Status: COMPLETE**
+
+### Full Observability (Phase 6)
+
+**Primary goal**: Rich debugging and time travel capabilities for development.
+
+- [x] Explain system with `why` queries and causal chains
+- [x] Tracing with human and JSON formatters
+- [x] Breakpoints (rule, component, entity, conditional)
+- [x] Watch expressions
+- [x] Step execution (rule, phase, tick)
+- [x] Time travel with history buffer
+- [x] Git-like branching
+- [x] World state diffing with configurable granularity
+- [x] All DSL forms integrated into REPL
+
+**Phase 6 Status: COMPLETE**
+
+**Explicitly NOT required for MVP** (now delivered in Phase 6):
+- ~~Full observability (tracing, debugger, time travel)~~ ✓ Complete
+- Fine-grained derived invalidation (still deferred)
+- Incremental pattern matching (still deferred)
+- 10k entity performance optimization (Phase 8)
 
 ### Version 1.0 (Phase 8 complete)
 

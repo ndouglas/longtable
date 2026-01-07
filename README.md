@@ -14,13 +14,16 @@ Longtable is designed for text-based simulation games where complex emergent beh
 - **LISP-like DSL** — Homoiconic syntax with macros for domain-specific abstractions
 - **Derived Components** — Computed values with automatic cache invalidation
 - **Constraint Checking** — Invariants validated after each tick with rollback support
+- **Time Travel Debugging** — Git-like branching, rollback, and world state diffing
+- **Observability** — Tracing, breakpoints, watches, and causal "why" queries
 - **125+ Native Functions** — Comprehensive standard library for collections, math, strings, and more
 
 ## Status
 
-**Phase 5: Interface Implementation** — Core engine complete with working REPL, CLI, and serialization.
+**Phase 6: Observability Implementation** — Full debugging, tracing, and time travel complete.
 
-- Phases 0-4 complete: Foundation, storage, language, and execution engine
+- Phases 0-5 complete: Foundation, storage, language, execution engine, interface
+- **Observability**: Explain system, tracing, breakpoints, watches, time travel
 - Standard library: 125+ native functions (collections, math, strings, predicates, vector math)
 - REPL with syntax highlighting, tab completion, and multi-line input
 - CLI with debug flags and batch mode
@@ -116,12 +119,41 @@ EXAMPLES:
 ## REPL Commands
 
 ```clojure
+;; Basic commands
 (def name value)       ;; Define a session variable
 (load "path")          ;; Load a .lt file
 (save! "path")         ;; Save world state to file
 (load-world! "path")   ;; Load world state from file
 (tick!)                ;; Advance simulation by one tick
 (inspect entity)       ;; Inspect an entity's details
+
+;; Explain system
+(why entity :component)           ;; Why does entity have this value?
+(why entity :component :depth 5)  ;; Multi-hop causal chain
+(explain-query (query ...))       ;; Explain query execution
+
+;; Debugging
+(break :rule foo)                 ;; Breakpoint on rule
+(break :entity ?e :component :hp) ;; Breakpoint on component access
+(watch (get ?e :health))          ;; Add watch expression
+(continue)                        ;; Resume execution
+(step-rule)                       ;; Step to next rule
+
+;; Tracing
+(trace!)                          ;; Enable tracing
+(trace-off!)                      ;; Disable tracing
+(get-traces)                      ;; Get trace buffer
+
+;; Time travel
+(rollback! 5)                     ;; Go back 5 ticks
+(goto-tick! 42)                   ;; Jump to tick 42
+(branch! "experiment")            ;; Create branch at current tick
+(checkout! "main")                ;; Switch to branch
+(branches)                        ;; List all branches
+(merge! "experiment")             ;; Merge branch into current
+(diff 40 42)                      ;; Compare two ticks
+(history)                         ;; Show recent history
+(timeline)                        ;; Show timeline status
 ```
 
 Keyboard shortcuts:
@@ -177,7 +209,7 @@ Layer 0: longtable_foundation — Core types, persistent collections
 
 ```bash
 cargo build                           # Build all crates
-cargo test                            # Run all tests (~700 tests)
+cargo test                            # Run all tests (~1000 tests)
 cargo bench                           # Run benchmarks
 cargo clippy --all-targets            # Lint
 cargo +nightly fmt --all              # Format (requires nightly)

@@ -531,6 +531,68 @@ impl<E: LineEditor> Repl<E> {
             // (get-traces :last N) or (get-traces :tick N) or (get-traces :all)
             Ast::Symbol(s, _) if s == "get-traces" => self.handle_get_traces(&list[1..]),
 
+            // (break :rule name) or (break :tick N) etc.
+            Ast::Symbol(s, _) if s == "break" => self.handle_break(&list[1..]),
+
+            // (unbreak id)
+            Ast::Symbol(s, _) if s == "unbreak" => self.handle_unbreak(&list[1..]),
+
+            // (breakpoints)
+            Ast::Symbol(s, _) if s == "breakpoints" => self.handle_breakpoints(),
+
+            // (watch expr)
+            Ast::Symbol(s, _) if s == "watch" => self.handle_watch(&list[1..]),
+
+            // (unwatch id)
+            Ast::Symbol(s, _) if s == "unwatch" => self.handle_unwatch(&list[1..]),
+
+            // (watches)
+            Ast::Symbol(s, _) if s == "watches" => self.handle_watches(),
+
+            // (debug) - show debug status
+            Ast::Symbol(s, _) if s == "debug" => self.handle_debug(),
+
+            // (continue) - resume execution
+            Ast::Symbol(s, _) if s == "continue" => self.handle_continue(),
+
+            // (step-rule) - step to next rule
+            Ast::Symbol(s, _) if s == "step-rule" => self.handle_step_rule(),
+
+            // (step-phase) - step to next phase
+            Ast::Symbol(s, _) if s == "step-phase" => self.handle_step_phase(),
+
+            // (step-tick) - step to next tick
+            Ast::Symbol(s, _) if s == "step-tick" => self.handle_step_tick(),
+
+            // ==================== Time Travel Commands ====================
+
+            // (rollback! N) - go back N ticks
+            Ast::Symbol(s, _) if s == "rollback!" => self.handle_rollback(&list[1..]),
+
+            // (goto-tick! N) - jump to tick N
+            Ast::Symbol(s, _) if s == "goto-tick!" => self.handle_goto_tick(&list[1..]),
+
+            // (branch! "name") - create branch at current tick
+            Ast::Symbol(s, _) if s == "branch!" => self.handle_branch(&list[1..]),
+
+            // (checkout! "name") - switch to branch
+            Ast::Symbol(s, _) if s == "checkout!" => self.handle_checkout(&list[1..]),
+
+            // (branches) - list all branches
+            Ast::Symbol(s, _) if s == "branches" => self.handle_branches(),
+
+            // (merge! "name") - merge branch into current
+            Ast::Symbol(s, _) if s == "merge!" => self.handle_merge(&list[1..]),
+
+            // (diff N M) or (diff :branches "a" "b") - compare ticks or branches
+            Ast::Symbol(s, _) if s == "diff" => self.handle_diff(&list[1..]),
+
+            // (history) or (history N) - show recent history
+            Ast::Symbol(s, _) if s == "history" => self.handle_history(&list[1..]),
+
+            // (timeline) - show timeline status
+            Ast::Symbol(s, _) if s == "timeline" => self.handle_timeline(),
+
             _ => Ok(None),
         }
     }
@@ -1226,6 +1288,692 @@ impl<E: LineEditor> Repl<E> {
         Ok(Some(Value::Int(records.len() as i64)))
     }
 
+    /// Handles the (break ...) form.
+    ///
+    /// Adds a breakpoint.
+    #[allow(clippy::too_many_lines)]
+    fn handle_break(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::BreakpointId;
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "break requires a type: :rule, :tick, :write, :read".to_string(),
+            )));
+        }
+
+        let id: BreakpointId = match &args[0] {
+            Ast::Keyword(k, _) if k == "rule" => {
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :rule requires a rule name".to_string(),
+                    )));
+                }
+                let Ast::Keyword(rule_name, _) = &args[1] else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :rule requires a keyword rule name".to_string(),
+                    )));
+                };
+                let rule_id = self
+                    .session
+                    .world_mut()
+                    .interner_mut()
+                    .intern_keyword(rule_name);
+                self.session
+                    .debug_session_mut()
+                    .breakpoints_mut()
+                    .add_rule(rule_id)
+            }
+
+            Ast::Keyword(k, _) if k == "tick" => {
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :tick requires a tick number".to_string(),
+                    )));
+                }
+                let tick_val = self.eval_form(&args[1])?;
+                let Value::Int(tick) = tick_val else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :tick requires an integer tick number".to_string(),
+                    )));
+                };
+                #[allow(clippy::cast_sign_loss)]
+                self.session
+                    .debug_session_mut()
+                    .breakpoints_mut()
+                    .add_tick(tick.max(0) as u64)
+            }
+
+            Ast::Keyword(k, _) if k == "write" => {
+                // (break :write :component) or (break :write entity :component)
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :write requires a component name".to_string(),
+                    )));
+                }
+
+                let (entity, component_arg) = if args.len() >= 3 {
+                    // Entity specified
+                    let entity_val = self.eval_form(&args[1])?;
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => Some(e),
+                        _ => {
+                            return Err(Error::new(ErrorKind::Internal(
+                                "break :write entity must be an entity reference".to_string(),
+                            )));
+                        }
+                    };
+                    (entity, &args[2])
+                } else {
+                    (None, &args[1])
+                };
+
+                let Ast::Keyword(comp_name, _) = component_arg else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :write requires a keyword component name".to_string(),
+                    )));
+                };
+                let comp_id = self
+                    .session
+                    .world_mut()
+                    .interner_mut()
+                    .intern_keyword(comp_name);
+                self.session
+                    .debug_session_mut()
+                    .breakpoints_mut()
+                    .add_component_write(entity, comp_id)
+            }
+
+            Ast::Keyword(k, _) if k == "read" => {
+                // (break :read :component) or (break :read entity :component)
+                if args.len() < 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :read requires a component name".to_string(),
+                    )));
+                }
+
+                let (entity, component_arg) = if args.len() >= 3 {
+                    let entity_val = self.eval_form(&args[1])?;
+                    let entity = match entity_val {
+                        Value::EntityRef(e) => Some(e),
+                        _ => {
+                            return Err(Error::new(ErrorKind::Internal(
+                                "break :read entity must be an entity reference".to_string(),
+                            )));
+                        }
+                    };
+                    (entity, &args[2])
+                } else {
+                    (None, &args[1])
+                };
+
+                let Ast::Keyword(comp_name, _) = component_arg else {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "break :read requires a keyword component name".to_string(),
+                    )));
+                };
+                let comp_id = self
+                    .session
+                    .world_mut()
+                    .interner_mut()
+                    .intern_keyword(comp_name);
+                self.session
+                    .debug_session_mut()
+                    .breakpoints_mut()
+                    .add_component_read(entity, comp_id)
+            }
+
+            other => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "unknown breakpoint type: {other:?}"
+                ))));
+            }
+        };
+
+        println!("Breakpoint {id} added");
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(id.raw() as i64)))
+    }
+
+    /// Handles the (unbreak id) form.
+    fn handle_unbreak(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::BreakpointId;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "unbreak requires a breakpoint id".to_string(),
+            )));
+        }
+
+        let id_val = self.eval_form(&args[0])?;
+        let Value::Int(id) = id_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "unbreak requires an integer breakpoint id".to_string(),
+            )));
+        };
+
+        #[allow(clippy::cast_sign_loss)]
+        let bp_id = BreakpointId::new(id.max(0) as u64);
+        if self
+            .session
+            .debug_session_mut()
+            .breakpoints_mut()
+            .remove(bp_id)
+            .is_some()
+        {
+            println!("Breakpoint {bp_id} removed");
+            Ok(Some(Value::Bool(true)))
+        } else {
+            println!("Breakpoint {bp_id} not found");
+            Ok(Some(Value::Bool(false)))
+        }
+    }
+
+    /// Handles the (breakpoints) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_breakpoints(&self) -> Result<Option<Value>> {
+        let registry = self.session.debug_session().breakpoints();
+
+        if registry.is_empty() {
+            println!("No breakpoints");
+        } else {
+            println!("Breakpoints:");
+            for bp in registry.iter() {
+                let status = if bp.is_enabled() {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                println!("  {} - {} ({})", bp.id(), bp.description(), status);
+            }
+        }
+
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(registry.len() as i64)))
+    }
+
+    /// Handles the (watch expr) form.
+    fn handle_watch(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_language::pretty::pretty_print;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "watch requires an expression".to_string(),
+            )));
+        }
+
+        // Convert the AST back to source for display
+        let source = pretty_print(&args[0]);
+        let id = self.session.debug_session_mut().watches_mut().add(source);
+
+        println!("Watch {id} added");
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(id.raw() as i64)))
+    }
+
+    /// Handles the (unwatch id) form.
+    fn handle_unwatch(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::WatchId;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "unwatch requires a watch id".to_string(),
+            )));
+        }
+
+        let id_val = self.eval_form(&args[0])?;
+        let Value::Int(id) = id_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "unwatch requires an integer watch id".to_string(),
+            )));
+        };
+
+        #[allow(clippy::cast_sign_loss)]
+        let watch_id = WatchId::new(id.max(0) as u64);
+        if self
+            .session
+            .debug_session_mut()
+            .watches_mut()
+            .remove(watch_id)
+            .is_some()
+        {
+            println!("Watch {watch_id} removed");
+            Ok(Some(Value::Bool(true)))
+        } else {
+            println!("Watch {watch_id} not found");
+            Ok(Some(Value::Bool(false)))
+        }
+    }
+
+    /// Handles the (watches) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_watches(&self) -> Result<Option<Value>> {
+        let registry = self.session.debug_session().watches();
+
+        if registry.is_empty() {
+            println!("No watches");
+        } else {
+            println!("Watches:");
+            for watch in registry.iter() {
+                let status = if watch.is_enabled() {
+                    "enabled"
+                } else {
+                    "disabled"
+                };
+                let value_str = watch
+                    .last_value()
+                    .map_or("(not evaluated)".to_string(), |v| format!("{v}"));
+                println!(
+                    "  {} - {} = {} ({})",
+                    watch.id(),
+                    watch.source(),
+                    value_str,
+                    status
+                );
+            }
+        }
+
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(registry.len() as i64)))
+    }
+
+    /// Handles the (debug) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_debug(&self) -> Result<Option<Value>> {
+        let session = self.session.debug_session();
+        println!("{}", session.status_summary());
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (continue) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_continue(&mut self) -> Result<Option<Value>> {
+        self.session.debug_session_mut().resume();
+        println!("Resumed execution");
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (step-rule) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_step_rule(&mut self) -> Result<Option<Value>> {
+        self.session.debug_session_mut().step_rule();
+        println!("Stepping to next rule");
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (step-phase) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_step_phase(&mut self) -> Result<Option<Value>> {
+        self.session.debug_session_mut().step_phase();
+        println!("Stepping to next phase");
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (step-tick) form.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_step_tick(&mut self) -> Result<Option<Value>> {
+        self.session.debug_session_mut().step_tick();
+        println!("Stepping to next tick");
+        Ok(Some(Value::Nil))
+    }
+
+    // ==================== Time Travel Handlers ====================
+
+    /// Handles the (rollback! N) form.
+    ///
+    /// Goes back N ticks in the current branch's history.
+    fn handle_rollback(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "rollback! requires a tick count: (rollback! N)".to_string(),
+            )));
+        }
+
+        let count_val = self.eval_form(&args[0])?;
+        let Value::Int(count) = count_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "rollback! requires an integer tick count".to_string(),
+            )));
+        };
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let ticks_back = count.max(0) as usize;
+
+        let Some(snapshot) = self.session.timeline().rollback(ticks_back) else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "cannot rollback {ticks_back} ticks - not enough history"
+            ))));
+        };
+
+        let world = snapshot.world().clone();
+        let tick = snapshot.tick();
+        self.session.set_world(world);
+        println!("Rolled back to tick {tick}");
+
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(tick as i64)))
+    }
+
+    /// Handles the (goto-tick! N) form.
+    ///
+    /// Jumps to a specific tick in history.
+    fn handle_goto_tick(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "goto-tick! requires a tick number: (goto-tick! N)".to_string(),
+            )));
+        }
+
+        let tick_val = self.eval_form(&args[0])?;
+        let Value::Int(tick) = tick_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "goto-tick! requires an integer tick number".to_string(),
+            )));
+        };
+
+        #[allow(clippy::cast_sign_loss)]
+        let target_tick = tick.max(0) as u64;
+
+        let Some(snapshot) = self.session.timeline().goto_tick(target_tick) else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "tick {target_tick} not found in history"
+            ))));
+        };
+
+        let world = snapshot.world().clone();
+        self.session.set_world(world);
+        println!("Jumped to tick {target_tick}");
+
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(target_tick as i64)))
+    }
+
+    /// Handles the (branch! "name") form.
+    ///
+    /// Creates a new branch at the current tick.
+    fn handle_branch(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "branch! requires a branch name: (branch! \"name\")".to_string(),
+            )));
+        }
+
+        let name = match &args[0] {
+            Ast::String(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "branch! name must be a string, got {}",
+                    other.type_name()
+                ))));
+            }
+        };
+
+        let current_tick = self.session.world().tick();
+        let Some(branch_id) = self
+            .session
+            .timeline_mut()
+            .create_branch(name.clone(), current_tick)
+        else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "failed to create branch '{name}' - name may already exist"
+            ))));
+        };
+
+        println!("Created branch '{name}' at tick {current_tick} (id: {branch_id})");
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (checkout! "name") form.
+    ///
+    /// Switches to a different branch.
+    fn handle_checkout(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "checkout! requires a branch name: (checkout! \"name\")".to_string(),
+            )));
+        }
+
+        let name = match &args[0] {
+            Ast::String(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "checkout! name must be a string, got {}",
+                    other.type_name()
+                ))));
+            }
+        };
+
+        if !self.session.timeline_mut().checkout(&name) {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "branch '{name}' not found"
+            ))));
+        }
+
+        // Restore world from branch tip if available
+        if let Some(snapshot) = self.session.timeline().latest_snapshot() {
+            let world = snapshot.world().clone();
+            self.session.set_world(world);
+        }
+
+        println!("Switched to branch '{name}'");
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (branches) form.
+    ///
+    /// Lists all branches.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_branches(&self) -> Result<Option<Value>> {
+        let timeline = self.session.timeline();
+        let current = timeline.current_branch().name();
+        let names = timeline.branch_names();
+
+        println!("Branches:");
+        for name in names {
+            let marker = if name == current { " *" } else { "" };
+            println!("  {name}{marker}");
+        }
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (merge! "name") form.
+    ///
+    /// Merges a branch into the current branch.
+    fn handle_merge(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::{MergeStrategy, merge};
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "merge! requires a branch name: (merge! \"name\")".to_string(),
+            )));
+        }
+
+        let name = match &args[0] {
+            Ast::String(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "merge! name must be a string, got {}",
+                    other.type_name()
+                ))));
+            }
+        };
+
+        // Get the source branch tip
+        let branches = self.session.timeline().branches();
+        let Some(source_branch) = branches.get_by_name(&name) else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "branch '{name}' not found"
+            ))));
+        };
+
+        let Some(source_snapshot) = source_branch.latest() else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "branch '{name}' has no snapshots"
+            ))));
+        };
+
+        let incoming = source_snapshot.world();
+        let current = self.session.world();
+
+        // Use Replace strategy - simple overwrite
+        let result = merge(current, current, incoming, MergeStrategy::Replace);
+
+        if result.is_success() {
+            if let Some(world) = result.into_world() {
+                self.session.set_world(world);
+                println!("Merged branch '{name}' into current branch");
+            }
+        } else if result.is_failed() {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "merge failed: branch '{name}'"
+            ))));
+        }
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (diff N M) or (diff :branches "a" "b") form.
+    ///
+    /// Compares two ticks or two branches.
+    fn handle_diff(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        use longtable_debug::format_diff;
+        use longtable_language::Ast;
+
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "diff requires arguments: (diff N M) or (diff :branches \"a\" \"b\")".to_string(),
+            )));
+        }
+
+        // Check if comparing branches
+        if let Ast::Keyword(k, _) = &args[0] {
+            if k == "branches" {
+                if args.len() < 3 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "diff :branches requires two branch names".to_string(),
+                    )));
+                }
+
+                let name1 = match &args[1] {
+                    Ast::String(s, _) => s.clone(),
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "branch name must be a string, got {}",
+                            other.type_name()
+                        ))));
+                    }
+                };
+
+                let name2 = match &args[2] {
+                    Ast::String(s, _) => s.clone(),
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "branch name must be a string, got {}",
+                            other.type_name()
+                        ))));
+                    }
+                };
+
+                let Some(diff) = self.session.timeline().diff_branches(&name1, &name2) else {
+                    return Err(Error::new(ErrorKind::Internal(format!(
+                        "cannot diff branches '{name1}' and '{name2}'"
+                    ))));
+                };
+
+                let output = format_diff(&diff, self.session.world().interner(), 20);
+                println!("Diff between branches '{name1}' and '{name2}':\n{output}");
+
+                return Ok(Some(Value::Nil));
+            }
+        }
+
+        // Compare ticks
+        if args.len() < 2 {
+            return Err(Error::new(ErrorKind::Internal(
+                "diff requires two tick numbers: (diff N M)".to_string(),
+            )));
+        }
+
+        let tick1_val = self.eval_form(&args[0])?;
+        let Value::Int(tick1) = tick1_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "diff tick must be an integer".to_string(),
+            )));
+        };
+
+        let tick2_val = self.eval_form(&args[1])?;
+        let Value::Int(tick2) = tick2_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "diff tick must be an integer".to_string(),
+            )));
+        };
+
+        #[allow(clippy::cast_sign_loss)]
+        let (t1, t2) = (tick1.max(0) as u64, tick2.max(0) as u64);
+
+        let Some(diff) = self.session.timeline().diff_ticks(t1, t2) else {
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "cannot diff ticks {t1} and {t2} - one or both not in history"
+            ))));
+        };
+
+        let output = format_diff(&diff, self.session.world().interner(), 20);
+        println!("Diff between tick {t1} and {t2}:\n{output}");
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Handles the (history) or (history N) form.
+    ///
+    /// Shows recent tick history.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_history(&mut self, args: &[longtable_language::Ast]) -> Result<Option<Value>> {
+        let count = if args.is_empty() {
+            10
+        } else {
+            let count_val = self.eval_form(&args[0])?;
+            let Value::Int(n) = count_val else {
+                return Err(Error::new(ErrorKind::Internal(
+                    "history count must be an integer".to_string(),
+                )));
+            };
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            {
+                n.max(1) as usize
+            }
+        };
+
+        let history = self.session.timeline().recent_history(count);
+
+        if history.is_empty() {
+            println!("No history available");
+        } else {
+            println!("Recent history ({} ticks):", history.len());
+            for (tick, summary) in &history {
+                println!("  Tick {tick}: {summary}");
+            }
+        }
+
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(history.len() as i64)))
+    }
+
+    /// Handles the (timeline) form.
+    ///
+    /// Shows timeline status.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_timeline(&self) -> Result<Option<Value>> {
+        let status = self.session.timeline().status();
+        println!("{status}");
+        Ok(Some(Value::Nil))
+    }
+
     /// Loads and evaluates a file.
     ///
     /// If the path is a directory containing a `_.lt` file, that file is loaded.
@@ -1909,6 +2657,111 @@ mod tests {
 
         // explain-query with non-query should error
         let result = repl.eval("(explain-query 42)");
+        assert!(result.is_err());
+    }
+
+    // ==================== Time Travel Tests ====================
+
+    #[test]
+    fn timeline_shows_status() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // timeline command should work
+        let result = repl.eval("(timeline)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn branches_lists_branches() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // branches should list at least main
+        let result = repl.eval("(branches)");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn branch_create_and_checkout() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Create a branch
+        let result = repl.eval(r#"(branch! "test")"#);
+        assert!(result.is_ok());
+
+        // Checkout back to main
+        let result = repl.eval(r#"(checkout! "main")"#);
+        assert!(result.is_ok());
+
+        // Checkout to test branch
+        let result = repl.eval(r#"(checkout! "test")"#);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn branch_duplicate_fails() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Create branch
+        repl.eval(r#"(branch! "duplicate")"#).unwrap();
+
+        // Creating duplicate should fail
+        let result = repl.eval(r#"(branch! "duplicate")"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn checkout_nonexistent_fails() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // Checkout non-existent branch should fail
+        let result = repl.eval(r#"(checkout! "nonexistent")"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn history_empty_initially() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // history should work even when empty
+        let result = repl.eval("(history)");
+        assert!(result.is_ok());
+        // Returns 0 when no history
+        assert_eq!(result.unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn rollback_fails_without_history() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // rollback should fail when no history
+        let result = repl.eval("(rollback! 1)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn goto_tick_fails_without_history() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // goto-tick should fail when tick not in history
+        let result = repl.eval("(goto-tick! 42)");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn diff_fails_without_history() {
+        let editor = MockEditor::new(vec![]);
+        let mut repl = Repl::with_editor(editor);
+
+        // diff should fail when ticks not in history
+        let result = repl.eval("(diff 1 2)");
         assert!(result.is_err());
     }
 }

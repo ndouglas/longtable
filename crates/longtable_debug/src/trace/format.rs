@@ -251,6 +251,7 @@ impl JsonFormatter {
 }
 
 impl TraceFormatter for JsonFormatter {
+    #[allow(clippy::too_many_lines)]
     fn format(&self, record: &TraceRecord, interner: &Interner) -> String {
         let event_type = record.event_type();
         let keyword_name =
