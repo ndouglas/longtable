@@ -1,7 +1,13 @@
-//! Relationship storage with bidirectional indices.
+//! Relationship schema storage.
 //!
-//! Relationships connect entities with typed edges. Bidirectional indices
-//! allow O(1) traversal in both directions.
+//! This module stores relationship schemas (cardinality, on-delete policies).
+//!
+//! # Note
+//!
+//! As of Phase 5.5.7, relationships are stored as entities with `:rel/type`,
+//! `:rel/source`, and `:rel/target` components. The `forward` and `reverse`
+//! indices are legacy and kept only for deserialization compatibility with
+//! older saved worlds. New code should use `World::find_relationships()`.
 
 use std::collections::{HashMap, HashSet};
 
@@ -12,19 +18,30 @@ use serde::{Deserialize, Serialize};
 
 use crate::schema::{Cardinality, OnDelete, OnViolation, RelationshipSchema};
 
-/// Stores relationship edges between entities.
+/// Stores relationship schemas and legacy edge data.
 ///
-/// Maintains bidirectional indices for efficient traversal:
-/// - Forward: source -> relationship -> targets
-/// - Reverse: target -> relationship -> sources
+/// # Schema Storage
+///
+/// The primary purpose of this type is to store relationship schemas
+/// (cardinality rules, on-delete policies). Use `register_schema()` and
+/// `schema()` for this.
+///
+/// # Legacy Edge Storage
+///
+/// The `forward` and `reverse` indices are legacy. As of Phase 5.5.7,
+/// relationship edges are stored as entities with `:rel/type`, `:rel/source`,
+/// and `:rel/target` components. These fields are kept for deserialization
+/// compatibility with older saved worlds but are no longer written to.
 #[derive(Clone, Debug, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct RelationshipStore {
     /// Registered schemas by relationship name.
     schemas: HashMap<KeywordId, RelationshipSchema>,
-    /// Forward index: source -> relationship -> set of targets.
+    /// Legacy: Forward index (source -> relationship -> targets).
+    /// No longer used; kept for deserialization compatibility.
     forward: HashMap<EntityId, HashMap<KeywordId, HashSet<EntityId>>>,
-    /// Reverse index: target -> relationship -> set of sources.
+    /// Legacy: Reverse index (target -> relationship -> sources).
+    /// No longer used; kept for deserialization compatibility.
     reverse: HashMap<EntityId, HashMap<KeywordId, HashSet<EntityId>>>,
 }
 

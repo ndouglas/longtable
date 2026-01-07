@@ -10,7 +10,7 @@ use longtable_foundation::{EntityId, Error, ErrorKind, Interner, KeywordId, LtMa
 use crate::component::ComponentStore;
 use crate::entity::EntityStore;
 use crate::relationship::RelationshipStore;
-use crate::schema::{ComponentSchema, RelationshipSchema};
+use crate::schema::{ComponentSchema, OnDelete, RelationshipSchema};
 
 #[cfg(feature = "serde")]
 mod serde_support {
@@ -615,6 +615,26 @@ impl World {
             .is_empty()
     }
 
+    /// Gets the relationship type from a relationship entity.
+    fn get_relationship_type(&self, rel_entity: EntityId) -> Option<KeywordId> {
+        if let Some(Value::Map(map)) = self.components.get(rel_entity, KeywordId::REL_TYPE) {
+            if let Some(Value::Keyword(kw)) = map.get(&Value::Keyword(KeywordId::VALUE)) {
+                return Some(*kw);
+            }
+        }
+        None
+    }
+
+    /// Gets the source entity from a relationship entity.
+    fn get_relationship_source(&self, rel_entity: EntityId) -> Option<EntityId> {
+        if let Some(Value::Map(map)) = self.components.get(rel_entity, KeywordId::REL_SOURCE) {
+            if let Some(Value::EntityRef(id)) = map.get(&Value::Keyword(KeywordId::VALUE)) {
+                return Some(*id);
+            }
+        }
+        None
+    }
+
     /// Destroys an entity and all its components/relationships.
     ///
     /// Returns a new World with the entity removed.
@@ -623,10 +643,43 @@ impl World {
 
         let mut new_entities = (*self.entities).clone();
         let mut new_components = (*self.components).clone();
-        let mut new_relationships = (*self.relationships).clone();
 
-        // Remove all relationships
-        let cascade_victims = new_relationships.on_entity_destroyed(entity);
+        // Find relationship entities where this entity is source OR target
+        let rel_entities_as_source = self.find_relationships(None, Some(entity), None);
+        let rel_entities_as_target = self.find_relationships(None, None, Some(entity));
+
+        // Collect cascade victims: entities that should be deleted because of OnDelete::Cascade
+        // When entity E is deleted, find relationships where E is TARGET with Cascade policy
+        let mut cascade_victims = Vec::new();
+        for rel_entity in &rel_entities_as_target {
+            if let Some(rel_type) = self.get_relationship_type(*rel_entity) {
+                if let Some(schema) = self.relationships.schema(rel_type) {
+                    if schema.on_target_delete == OnDelete::Cascade {
+                        if let Some(source) = self.get_relationship_source(*rel_entity) {
+                            if !cascade_victims.contains(&source) {
+                                cascade_victims.push(source);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Collect all relationship entities to destroy (deduplicated)
+        let mut rel_entities_to_destroy: Vec<EntityId> = rel_entities_as_source;
+        for rel in rel_entities_as_target {
+            if !rel_entities_to_destroy.contains(&rel) {
+                rel_entities_to_destroy.push(rel);
+            }
+        }
+
+        // Destroy relationship entities
+        for rel_entity in rel_entities_to_destroy {
+            if new_entities.exists(rel_entity) {
+                new_components.remove_entity(rel_entity);
+                let _ = new_entities.destroy(rel_entity);
+            }
+        }
 
         // Remove all components
         new_components.remove_entity(entity);
@@ -634,22 +687,25 @@ impl World {
         // Destroy the entity
         new_entities.destroy(entity)?;
 
-        // Process cascade deletions
+        // Process cascade deletions recursively
+        // Note: We build new World first, then call destroy on cascade victims
+        let mut world = World {
+            entities: Arc::new(new_entities),
+            components: Arc::new(new_components),
+            relationships: Arc::clone(&self.relationships),
+            previous: Some(Arc::new(self.clone())),
+            interner: Arc::clone(&self.interner),
+            tick: self.tick,
+            seed: self.seed,
+        };
+
         for victim in cascade_victims {
-            if new_entities.exists(victim) {
-                new_relationships.on_entity_destroyed(victim);
-                new_components.remove_entity(victim);
-                let _ = new_entities.destroy(victim);
+            if world.exists(victim) {
+                world = world.destroy(victim)?;
             }
         }
 
-        Ok(World {
-            entities: Arc::new(new_entities),
-            components: Arc::new(new_components),
-            relationships: Arc::new(new_relationships),
-            previous: Some(Arc::new(self.clone())),
-            ..self.clone()
-        })
+        Ok(world)
     }
 
     /// Checks if an entity exists.
@@ -745,13 +801,7 @@ impl World {
     ///
     /// Returns a new World with the relationship added.
     ///
-    /// # Dual-Write Migration (Phase 5.5.3)
-    ///
-    /// This method creates BOTH:
-    /// 1. The old-style edge in `RelationshipStore` (for backwards compatibility)
-    /// 2. A new relationship entity with `:rel/type`, `:rel/source`, `:rel/target`
-    ///
-    /// Once migration is complete (Phase 5.5.7), the old-style storage will be removed.
+    /// Uses `create_relationship` which handles cardinality enforcement.
     pub fn link(
         &self,
         source: EntityId,
@@ -761,29 +811,10 @@ impl World {
         self.entities.validate(source)?;
         self.entities.validate(target)?;
 
-        // 1. Create old-style edge (handles cardinality enforcement)
-        let mut new_relationships = (*self.relationships).clone();
-        new_relationships.link(source, relationship, target)?;
+        // Create relationship entity (handles cardinality enforcement)
+        let (world, _rel_entity) = self.create_relationship(relationship, source, target)?;
 
-        let intermediate_world = World {
-            relationships: Arc::new(new_relationships),
-            previous: Some(Arc::new(self.clone())),
-            ..self.clone()
-        };
-
-        // 2. Also create relationship entity (dual-write)
-        // Skip if relationship entity already exists (idempotent)
-        let existing =
-            intermediate_world.find_relationships(Some(relationship), Some(source), Some(target));
-        if !existing.is_empty() {
-            return Ok(intermediate_world);
-        }
-
-        // Create the relationship entity
-        let (final_world, _rel_entity) =
-            intermediate_world.spawn_relationship(relationship, source, target)?;
-
-        Ok(final_world)
+        Ok(world)
     }
 
     /// Removes a relationship edge.
@@ -798,13 +829,18 @@ impl World {
         self.entities.validate(source)?;
         self.entities.validate(target)?;
 
-        let mut new_relationships = (*self.relationships).clone();
-        new_relationships.unlink(source, relationship, target);
+        // Find and destroy the relationship entity
+        let rel_entities = self.find_relationships(Some(relationship), Some(source), Some(target));
 
+        let mut world = self.clone();
+        for rel_entity in rel_entities {
+            world = world.destroy(rel_entity)?;
+        }
+
+        // Update previous reference
         Ok(World {
-            relationships: Arc::new(new_relationships),
             previous: Some(Arc::new(self.clone())),
-            ..self.clone()
+            ..world
         })
     }
 
@@ -1497,5 +1533,102 @@ mod tests {
                 .to_string()
                 .contains("unknown relationship")
         );
+    }
+
+    // --- Orphan Cleanup Tests ---
+
+    #[test]
+    fn destroy_source_removes_relationship_entity() {
+        let mut world = setup_world();
+
+        let in_room = world.interner_mut().intern_keyword("in-room");
+        world = world
+            .register_relationship(
+                RelationshipSchema::new(in_room).with_cardinality(Cardinality::ManyToOne),
+            )
+            .unwrap();
+
+        let (world, player) = world.spawn(&LtMap::new()).unwrap();
+        let (world, room) = world.spawn(&LtMap::new()).unwrap();
+
+        // Create relationship: player -[in-room]-> room
+        let (world, rel_entity) = world.create_relationship(in_room, player, room).unwrap();
+
+        // Verify relationship entity exists
+        assert!(world.exists(rel_entity));
+        assert_eq!(world.entity_count(), 3); // player, room, relationship
+
+        // Destroy the source entity (player)
+        let world = world.destroy(player).unwrap();
+
+        // Relationship entity should also be destroyed
+        assert!(!world.exists(rel_entity));
+        assert_eq!(world.entity_count(), 1); // only room remains
+    }
+
+    #[test]
+    fn destroy_target_removes_relationship_entity() {
+        let mut world = setup_world();
+
+        let in_room = world.interner_mut().intern_keyword("in-room");
+        world = world
+            .register_relationship(
+                RelationshipSchema::new(in_room).with_cardinality(Cardinality::ManyToOne),
+            )
+            .unwrap();
+
+        let (world, player) = world.spawn(&LtMap::new()).unwrap();
+        let (world, room) = world.spawn(&LtMap::new()).unwrap();
+
+        // Create relationship: player -[in-room]-> room
+        let (world, rel_entity) = world.create_relationship(in_room, player, room).unwrap();
+
+        // Verify relationship entity exists
+        assert!(world.exists(rel_entity));
+
+        // Destroy the target entity (room)
+        let world = world.destroy(room).unwrap();
+
+        // Relationship entity should also be destroyed
+        assert!(!world.exists(rel_entity));
+        assert_eq!(world.entity_count(), 1); // only player remains
+    }
+
+    #[test]
+    fn destroy_cleans_up_multiple_relationships() {
+        let mut world = setup_world();
+
+        let in_room = world.interner_mut().intern_keyword("in-room");
+        let owns = world.interner_mut().intern_keyword("owns");
+        world = world
+            .register_relationship(
+                RelationshipSchema::new(in_room).with_cardinality(Cardinality::ManyToOne),
+            )
+            .unwrap();
+        world = world
+            .register_relationship(
+                RelationshipSchema::new(owns).with_cardinality(Cardinality::OneToMany),
+            )
+            .unwrap();
+
+        let (world, player) = world.spawn(&LtMap::new()).unwrap();
+        let (world, room) = world.spawn(&LtMap::new()).unwrap();
+        let (world, item) = world.spawn(&LtMap::new()).unwrap();
+
+        // Create relationships:
+        // player -[in-room]-> room
+        // player -[owns]-> item
+        let (world, rel1) = world.create_relationship(in_room, player, room).unwrap();
+        let (world, rel2) = world.create_relationship(owns, player, item).unwrap();
+
+        assert_eq!(world.entity_count(), 5); // player, room, item, 2 relationships
+
+        // Destroy player (source of both relationships)
+        let world = world.destroy(player).unwrap();
+
+        // Both relationship entities should be destroyed
+        assert!(!world.exists(rel1));
+        assert!(!world.exists(rel2));
+        assert_eq!(world.entity_count(), 2); // only room and item remain
     }
 }
