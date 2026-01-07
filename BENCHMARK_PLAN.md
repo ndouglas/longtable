@@ -324,12 +324,13 @@ Expand beyond serialization to cover REPL and session operations.
 
 ## Implementation Order
 
-| Priority | Stage | Crate | Rationale |
-|----------|-------|-------|-----------|
-| 1 | Stage 1 | `longtable_debug` | Phase 6 code completely unbenchmarked |
-| 2 | Stage 2 | `longtable_stdlib` | Core functionality, partial coverage exists |
-| 3 | Stage 3 | `longtable_runtime` | User-facing operations need measurement |
-| 4 | Stage 4 | All | Polish and edge case coverage |
+| Priority | Stage | Crate | Rationale | Status |
+|----------|-------|-------|-----------|--------|
+| 1 | Stage 1 | `longtable_debug` | Phase 6 code completely unbenchmarked | ✅ Complete |
+| 2 | Stage 2 | `longtable_language` | Stdlib coverage (was stdlib placeholder) | ✅ Complete |
+| 3 | Stage 3 | `longtable_runtime` | User-facing operations need measurement | ⏳ Pending |
+| 4 | Stage 4 | All | Polish and edge case coverage | ⏳ Pending |
+| 5 | Stage 5 | All | Memory profiling & large-scale (10K-1M) | ⏳ Pending |
 
 ---
 
@@ -401,12 +402,143 @@ harness = false
 
 ---
 
+## Stage 5: Memory & Large-Scale Benchmarks
+
+Stress testing and memory profiling to understand system limits.
+
+### File: `crates/longtable_language/benches/scale_benchmarks.rs`
+
+#### 5.1 Large-Scale Collection Operations
+```rust
+// Scale progression: 10K, 100K, 1M elements
+- map_10k / map_100k / map_1m
+- filter_10k / filter_100k / filter_1m
+- reduce_10k / reduce_100k / reduce_1m
+- sort_10k / sort_100k (1M may timeout)
+
+// Verify linear scaling
+- range_10k / range_100k / range_1m
+- concat_large (combine multiple 10K vectors)
+- flatten_deep (nested structures)
+```
+
+#### 5.2 Memory Allocation Benchmarks
+```rust
+// Using criterion's measurement capabilities + custom allocator tracking
+- allocation_pressure_map (measure allocs per operation)
+- allocation_pressure_filter
+- allocation_pressure_sort
+
+// Persistent data structure overhead
+- vector_append_1k / vector_append_10k (structural sharing cost)
+- map_insert_sequence (1K, 10K sequential inserts)
+- map_insert_random (random key patterns)
+
+// Peak memory usage
+- peak_memory_sort_100k
+- peak_memory_distinct_100k
+```
+
+#### 5.3 World/Entity Scale Tests
+
+**File**: `crates/longtable_storage/benches/scale_benchmarks.rs`
+
+```rust
+// Entity scaling
+- world_10k_entities_tick
+- world_100k_entities_tick
+- world_1m_entities_sparse (most inactive)
+
+// Query scaling
+- query_10k_entities_full_scan
+- query_100k_entities_indexed
+- query_100k_entities_complex_pattern
+
+// Relationship scaling
+- relationships_10k_edges
+- relationships_100k_edges
+- relationship_traversal_deep (10+ hops)
+```
+
+#### 5.4 Rule Engine Scale Tests
+
+**File**: `crates/longtable_engine/benches/scale_benchmarks.rs`
+
+```rust
+// Rule count scaling
+- tick_10_rules_1k_entities
+- tick_100_rules_1k_entities
+- tick_1000_rules_1k_entities
+
+// Pattern matching at scale
+- pattern_match_10k_candidates
+- pattern_match_100k_candidates
+
+// Derived component scaling
+- derived_10k_dependencies
+- derived_chain_depth_10 / _20 / _50
+```
+
+#### 5.5 Time Travel Scale Tests
+
+**File**: `crates/longtable_debug/benches/scale_benchmarks.rs`
+
+```rust
+// History scaling
+- history_buffer_1k_snapshots
+- history_buffer_10k_snapshots
+- snapshot_capture_10k_entities
+- snapshot_capture_100k_entities
+
+// Diff at scale
+- diff_worlds_10k_entities
+- diff_worlds_100k_entities
+
+// Memory pressure from time travel
+- timeline_memory_100_snapshots_10k_entities
+```
+
+#### 5.6 Stress & Edge Case Benchmarks
+```rust
+// Pathological cases
+- deeply_nested_data_100_levels
+- wide_map_10k_keys
+- long_string_operations (1MB strings)
+
+// Concurrent-like patterns (sequential but simulating load)
+- rapid_world_clone_sequence
+- interleaved_read_write_pattern
+
+// GC pressure simulation
+- churn_create_discard_10k_values
+- retained_vs_transient_ratio
+```
+
+**Estimated LOC**: ~800
+**Expected runtime**: 10-30 minutes for full suite
+
+### Cargo.toml Updates
+
+```toml
+# For memory tracking (optional)
+[dev-dependencies]
+tracking-allocator = "0.4"  # or similar
+
+[[bench]]
+name = "scale_benchmarks"
+harness = false
+```
+
+---
+
 ## Success Criteria
 
 - [ ] All 6 crates have benchmark files
 - [ ] Zero-overhead verification for disabled debug features
 - [ ] Throughput metrics for all data-processing operations
-- [ ] Multi-scale testing (100, 1K, 10K) where applicable
+- [ ] Multi-scale testing (100, 1K, 10K, 100K) where applicable
+- [ ] Large-scale tests (1M) for critical paths
+- [ ] Memory allocation profiling for key operations
 - [ ] All benchmarks pass `cargo bench` without warnings
 - [ ] Baseline measurements documented for regression tracking
 
@@ -414,10 +546,11 @@ harness = false
 
 ## Estimated Total New Benchmarks
 
-| Stage | Benchmarks | LOC |
-|-------|------------|-----|
-| Stage 1 (debug) | ~50 | ~800 |
-| Stage 2 (stdlib) | ~40 | ~600 |
-| Stage 3 (runtime) | ~20 | ~400 |
-| Stage 4 (expansions) | ~25 | ~500 |
-| **Total** | **~135** | **~2300** |
+| Stage | Benchmarks | LOC | Status |
+|-------|------------|-----|--------|
+| Stage 1 (debug) | ~100 | 1450 | ✅ Complete |
+| Stage 2 (stdlib) | ~42 | 420 | ✅ Complete |
+| Stage 3 (runtime) | ~20 | ~400 | ⏳ Pending |
+| Stage 4 (expansions) | ~25 | ~500 | ⏳ Pending |
+| Stage 5 (scale/memory) | ~60 | ~800 | ⏳ Pending |
+| **Total** | **~247** | **~3570** |
