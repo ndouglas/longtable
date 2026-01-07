@@ -1,21 +1,48 @@
-//! Basic provenance tracking for Longtable.
+//! Provenance tracking for Longtable.
 //!
-//! Phase 4 implements minimal effect logging—enough for basic `why` queries
-//! and error context. Full tracing remains in Phase 6.
-//!
-//! This module tracks:
+//! This module tracks who wrote what and when, supporting:
 //! - Last-writer per (entity, component) field
-//! - Basic "why did this value change" queries
+//! - Multi-hop "why did this value change" queries
+//! - Configurable verbosity levels (Minimal/Standard/Full)
+//! - Optional full history tracking for time travel debugging
 
 use std::collections::HashMap;
 
-use longtable_foundation::{EntityId, KeywordId};
+use longtable_foundation::{EntityId, KeywordId, Value};
+
+// =============================================================================
+// Verbosity Levels
+// =============================================================================
+
+/// Verbosity level for provenance tracking.
+///
+/// Higher verbosity captures more information but uses more memory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ProvenanceVerbosity {
+    /// Minimal: Last-writer only, no value or binding snapshots.
+    /// This is the most memory-efficient mode with minimal overhead.
+    #[default]
+    Minimal,
+
+    /// Standard: Captures previous values and binding snapshots.
+    /// Enables meaningful "why" queries with change context.
+    Standard,
+
+    /// Full: Captures expression IDs for source location tracking.
+    /// Enables step-through debugging and source attribution.
+    Full,
+}
 
 // =============================================================================
 // Write Record
 // =============================================================================
 
 /// Record of who wrote a value and when.
+///
+/// The fields captured depend on the verbosity level:
+/// - Minimal: rule, tick, context only
+/// - Standard: + `previous_value`, `bindings_snapshot`
+/// - Full: + `expr_id`
 #[derive(Clone, Debug)]
 pub struct WriteRecord {
     /// Which rule performed the write
@@ -24,45 +51,163 @@ pub struct WriteRecord {
     pub tick: u64,
     /// Optional binding context (entity variables involved)
     pub context: Vec<(String, EntityId)>,
+
+    // --- Standard+ verbosity fields ---
+    /// The value that was overwritten (None if new component or Minimal verbosity)
+    pub previous_value: Option<Value>,
+    /// Full variable bindings at effect time (None if Minimal verbosity)
+    pub bindings_snapshot: Option<Vec<(String, Value)>>,
+
+    // --- Full verbosity fields ---
+    /// Expression ID for source location tracking (None if < Full verbosity)
+    pub expr_id: Option<u32>,
 }
 
 impl WriteRecord {
-    /// Creates a new write record.
+    /// Creates a new write record with minimal information.
     #[must_use]
     pub fn new(rule: KeywordId, tick: u64) -> Self {
         Self {
             rule,
             tick,
             context: Vec::new(),
+            previous_value: None,
+            bindings_snapshot: None,
+            expr_id: None,
         }
     }
 
-    /// Adds binding context.
+    /// Adds binding context (entity variables).
     #[must_use]
     pub fn with_context(mut self, var: impl Into<String>, entity: EntityId) -> Self {
         self.context.push((var.into(), entity));
         self
     }
+
+    /// Sets the previous value (Standard+ verbosity).
+    #[must_use]
+    pub fn with_previous_value(mut self, value: Value) -> Self {
+        self.previous_value = Some(value);
+        self
+    }
+
+    /// Sets the full bindings snapshot (Standard+ verbosity).
+    #[must_use]
+    pub fn with_bindings(mut self, bindings: Vec<(String, Value)>) -> Self {
+        self.bindings_snapshot = Some(bindings);
+        self
+    }
+
+    /// Sets the expression ID (Full verbosity).
+    #[must_use]
+    pub fn with_expr_id(mut self, expr_id: u32) -> Self {
+        self.expr_id = Some(expr_id);
+        self
+    }
+}
+
+// =============================================================================
+// Write History
+// =============================================================================
+
+/// History of writes for a single (entity, component) pair.
+///
+/// Only populated when verbosity > Minimal.
+#[derive(Clone, Debug, Default)]
+pub struct WriteHistory {
+    /// All writes in chronological order (oldest first).
+    pub writes: Vec<WriteRecord>,
 }
 
 // =============================================================================
 // Provenance Tracker
 // =============================================================================
 
+/// Maximum history entries per (entity, component) to prevent unbounded growth.
+const DEFAULT_MAX_HISTORY_PER_KEY: usize = 100;
+
 /// Tracks who wrote what and when.
-#[derive(Clone, Debug, Default)]
+///
+/// The tracker supports three verbosity levels:
+/// - Minimal: Only tracks last writer (low overhead)
+/// - Standard: Tracks last writer + full history with value snapshots
+/// - Full: Standard + expression IDs for source attribution
+#[derive(Clone, Debug)]
 pub struct ProvenanceTracker {
-    /// Last writer for each (entity, component) pair
+    /// Last writer for each (entity, component) pair (always maintained)
     last_writer: HashMap<(EntityId, KeywordId), WriteRecord>,
+
+    /// Full history per (entity, component) - only when verbosity > Minimal
+    history: Option<HashMap<(EntityId, KeywordId), WriteHistory>>,
+
+    /// Current verbosity level
+    verbosity: ProvenanceVerbosity,
+
     /// Current tick number
     tick: u64,
+
+    /// Maximum history entries per key
+    max_history_per_key: usize,
+}
+
+impl Default for ProvenanceTracker {
+    fn default() -> Self {
+        Self {
+            last_writer: HashMap::new(),
+            history: None,
+            verbosity: ProvenanceVerbosity::Minimal,
+            tick: 0,
+            max_history_per_key: DEFAULT_MAX_HISTORY_PER_KEY,
+        }
+    }
 }
 
 impl ProvenanceTracker {
-    /// Creates a new provenance tracker.
+    /// Creates a new provenance tracker with Minimal verbosity.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a provenance tracker with the specified verbosity.
+    #[must_use]
+    pub fn with_verbosity(verbosity: ProvenanceVerbosity) -> Self {
+        let history = if verbosity == ProvenanceVerbosity::Minimal {
+            None
+        } else {
+            Some(HashMap::new())
+        };
+
+        Self {
+            last_writer: HashMap::new(),
+            history,
+            verbosity,
+            tick: 0,
+            max_history_per_key: DEFAULT_MAX_HISTORY_PER_KEY,
+        }
+    }
+
+    /// Returns the current verbosity level.
+    #[must_use]
+    pub fn verbosity(&self) -> ProvenanceVerbosity {
+        self.verbosity
+    }
+
+    /// Sets the verbosity level.
+    ///
+    /// Note: Downgrading from Standard/Full to Minimal will clear history.
+    pub fn set_verbosity(&mut self, verbosity: ProvenanceVerbosity) {
+        if verbosity == ProvenanceVerbosity::Minimal {
+            self.history = None;
+        } else if self.history.is_none() {
+            self.history = Some(HashMap::new());
+        }
+        self.verbosity = verbosity;
+    }
+
+    /// Sets the maximum history entries per (entity, component) key.
+    pub fn set_max_history(&mut self, max: usize) {
+        self.max_history_per_key = max;
     }
 
     /// Advances to the next tick.
@@ -76,10 +221,10 @@ impl ProvenanceTracker {
         self.tick
     }
 
-    /// Records a write to an entity's component.
+    /// Records a write to an entity's component (minimal information).
     pub fn record_write(&mut self, entity: EntityId, component: KeywordId, rule: KeywordId) {
-        self.last_writer
-            .insert((entity, component), WriteRecord::new(rule, self.tick));
+        let record = WriteRecord::new(rule, self.tick);
+        self.insert_record(entity, component, record);
     }
 
     /// Records a write with binding context.
@@ -92,13 +237,74 @@ impl ProvenanceTracker {
     ) {
         let mut record = WriteRecord::new(rule, self.tick);
         record.context = context;
-        self.last_writer.insert((entity, component), record);
+        self.insert_record(entity, component, record);
+    }
+
+    /// Records a write with full information based on verbosity level.
+    ///
+    /// This is the primary recording method for Phase 6+ that captures
+    /// all available provenance information.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_write_full(
+        &mut self,
+        entity: EntityId,
+        component: KeywordId,
+        rule: KeywordId,
+        context: Vec<(String, EntityId)>,
+        previous_value: Option<Value>,
+        bindings: Option<Vec<(String, Value)>>,
+        expr_id: Option<u32>,
+    ) {
+        let mut record = WriteRecord::new(rule, self.tick);
+        record.context = context;
+
+        // Only capture additional fields based on verbosity
+        if self.verbosity != ProvenanceVerbosity::Minimal {
+            record.previous_value = previous_value;
+            record.bindings_snapshot = bindings;
+
+            if self.verbosity == ProvenanceVerbosity::Full {
+                record.expr_id = expr_id;
+            }
+        }
+
+        self.insert_record(entity, component, record);
+    }
+
+    /// Internal helper to insert a record and update history.
+    fn insert_record(&mut self, entity: EntityId, component: KeywordId, record: WriteRecord) {
+        let key = (entity, component);
+
+        // Update history if enabled
+        if let Some(history) = &mut self.history {
+            let write_history = history.entry(key).or_default();
+            write_history.writes.push(record.clone());
+
+            // Enforce max history limit
+            while write_history.writes.len() > self.max_history_per_key {
+                write_history.writes.remove(0);
+            }
+        }
+
+        // Always update last writer
+        self.last_writer.insert(key, record);
     }
 
     /// Gets the last writer for an entity's component.
     #[must_use]
     pub fn last_writer(&self, entity: EntityId, component: KeywordId) -> Option<&WriteRecord> {
         self.last_writer.get(&(entity, component))
+    }
+
+    /// Gets the full write history for an entity's component.
+    ///
+    /// Returns None if verbosity is Minimal or no history exists.
+    #[must_use]
+    pub fn history(&self, entity: EntityId, component: KeywordId) -> Option<&[WriteRecord]> {
+        self.history
+            .as_ref()
+            .and_then(|h| h.get(&(entity, component)))
+            .map(|wh| wh.writes.as_slice())
     }
 
     /// Answers "why does this entity have this value?"
@@ -140,11 +346,28 @@ impl ProvenanceTracker {
     /// Clears all provenance data.
     pub fn clear(&mut self) {
         self.last_writer.clear();
+        if let Some(history) = &mut self.history {
+            history.clear();
+        }
     }
 
     /// Clears provenance for a specific entity.
     pub fn clear_entity(&mut self, entity: EntityId) {
         self.last_writer.retain(|(e, _), _| *e != entity);
+        if let Some(history) = &mut self.history {
+            history.retain(|(e, _), _| *e != entity);
+        }
+    }
+
+    /// Prunes history entries older than the specified tick.
+    pub fn prune_before_tick(&mut self, tick: u64) {
+        if let Some(history) = &mut self.history {
+            for write_history in history.values_mut() {
+                write_history.writes.retain(|r| r.tick >= tick);
+            }
+            // Remove empty histories
+            history.retain(|_, wh| !wh.writes.is_empty());
+        }
     }
 }
 
@@ -288,5 +511,201 @@ mod tests {
 
         // e2 writes still there
         assert!(tracker.last_writer(e2, health).is_some());
+    }
+
+    #[test]
+    fn verbosity_levels() {
+        // Test Minimal (default)
+        let tracker = ProvenanceTracker::new();
+        assert_eq!(tracker.verbosity(), ProvenanceVerbosity::Minimal);
+
+        // Test with_verbosity constructor
+        let tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Standard);
+        assert_eq!(tracker.verbosity(), ProvenanceVerbosity::Standard);
+
+        let tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Full);
+        assert_eq!(tracker.verbosity(), ProvenanceVerbosity::Full);
+    }
+
+    #[test]
+    fn history_tracking_minimal() {
+        let (_interner, health, _mana, rule1) = setup();
+        let mut tracker = ProvenanceTracker::new(); // Minimal verbosity
+
+        let entity = EntityId::new(1, 0);
+
+        tracker.record_write(entity, health, rule1);
+
+        // History should not be available in Minimal mode
+        assert!(tracker.history(entity, health).is_none());
+
+        // But last_writer should still work
+        assert!(tracker.last_writer(entity, health).is_some());
+    }
+
+    #[test]
+    fn history_tracking_standard() {
+        let (_interner, health, _mana, rule1) = setup();
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Standard);
+
+        let entity = EntityId::new(1, 0);
+
+        // Record multiple writes
+        tracker.record_write(entity, health, rule1);
+        tracker.begin_tick();
+        tracker.record_write(entity, health, rule1);
+        tracker.begin_tick();
+        tracker.record_write(entity, health, rule1);
+
+        // History should be available
+        let history = tracker.history(entity, health);
+        assert!(history.is_some());
+        assert_eq!(history.unwrap().len(), 3);
+
+        // Check tick ordering
+        let writes = history.unwrap();
+        assert_eq!(writes[0].tick, 0);
+        assert_eq!(writes[1].tick, 1);
+        assert_eq!(writes[2].tick, 2);
+    }
+
+    #[test]
+    fn record_write_full() {
+        use longtable_foundation::Value;
+
+        let (_interner, health, _mana, rule1) = setup();
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Full);
+
+        let entity = EntityId::new(1, 0);
+        let prev_value = Value::Int(100);
+        let bindings = vec![("?e".to_string(), Value::EntityRef(entity))];
+
+        tracker.record_write_full(
+            entity,
+            health,
+            rule1,
+            vec![("?e".to_string(), entity)],
+            Some(prev_value.clone()),
+            Some(bindings.clone()),
+            Some(42),
+        );
+
+        let record = tracker.last_writer(entity, health).unwrap();
+        assert_eq!(record.rule, rule1);
+        assert_eq!(record.previous_value, Some(prev_value));
+        assert!(record.bindings_snapshot.is_some());
+        assert_eq!(record.expr_id, Some(42));
+    }
+
+    #[test]
+    fn record_write_full_respects_verbosity() {
+        use longtable_foundation::Value;
+
+        let (_interner, health, _mana, rule1) = setup();
+
+        // Minimal: should not capture extra fields
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Minimal);
+        let entity = EntityId::new(1, 0);
+
+        tracker.record_write_full(
+            entity,
+            health,
+            rule1,
+            vec![],
+            Some(Value::Int(100)),
+            Some(vec![]),
+            Some(42),
+        );
+
+        let record = tracker.last_writer(entity, health).unwrap();
+        assert!(record.previous_value.is_none());
+        assert!(record.bindings_snapshot.is_none());
+        assert!(record.expr_id.is_none());
+
+        // Standard: should capture value and bindings but not expr_id
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Standard);
+        tracker.record_write_full(
+            entity,
+            health,
+            rule1,
+            vec![],
+            Some(Value::Int(100)),
+            Some(vec![]),
+            Some(42),
+        );
+
+        let record = tracker.last_writer(entity, health).unwrap();
+        assert!(record.previous_value.is_some());
+        assert!(record.bindings_snapshot.is_some());
+        assert!(record.expr_id.is_none()); // Not captured in Standard
+    }
+
+    #[test]
+    fn history_max_limit() {
+        let (_interner, health, _mana, rule1) = setup();
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Standard);
+        tracker.set_max_history(3);
+
+        let entity = EntityId::new(1, 0);
+
+        // Record 5 writes
+        for _ in 0..5 {
+            tracker.record_write(entity, health, rule1);
+            tracker.begin_tick();
+        }
+
+        // Should only keep last 3
+        let history = tracker.history(entity, health).unwrap();
+        assert_eq!(history.len(), 3);
+
+        // Should be the most recent writes (ticks 2, 3, 4)
+        assert_eq!(history[0].tick, 2);
+        assert_eq!(history[1].tick, 3);
+        assert_eq!(history[2].tick, 4);
+    }
+
+    #[test]
+    fn prune_before_tick() {
+        let (_interner, health, mana, rule1) = setup();
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Standard);
+
+        let entity = EntityId::new(1, 0);
+
+        // Record writes at different ticks
+        tracker.record_write(entity, health, rule1); // tick 0
+        tracker.begin_tick();
+        tracker.record_write(entity, health, rule1); // tick 1
+        tracker.record_write(entity, mana, rule1); // tick 1
+        tracker.begin_tick();
+        tracker.record_write(entity, health, rule1); // tick 2
+
+        // Prune before tick 2
+        tracker.prune_before_tick(2);
+
+        // Health should have 1 entry (tick 2)
+        let health_history = tracker.history(entity, health).unwrap();
+        assert_eq!(health_history.len(), 1);
+        assert_eq!(health_history[0].tick, 2);
+
+        // Mana history should be gone entirely (only had tick 1)
+        assert!(tracker.history(entity, mana).is_none());
+    }
+
+    #[test]
+    fn set_verbosity_clears_history_on_downgrade() {
+        let (_interner, health, _mana, rule1) = setup();
+        let mut tracker = ProvenanceTracker::with_verbosity(ProvenanceVerbosity::Standard);
+
+        let entity = EntityId::new(1, 0);
+
+        tracker.record_write(entity, health, rule1);
+        assert!(tracker.history(entity, health).is_some());
+
+        // Downgrade to Minimal
+        tracker.set_verbosity(ProvenanceVerbosity::Minimal);
+        assert!(tracker.history(entity, health).is_none());
+
+        // last_writer should still work
+        assert!(tracker.last_writer(entity, health).is_some());
     }
 }
