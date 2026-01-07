@@ -1,0 +1,16 @@
+[package]
+name = "longtable_parser"
+version = "0.1.0"
+edition = "2024"
+description = "Natural language parser for text adventure games"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ndouglas/longtable"
+
+[dependencies]
+longtable_foundation = { path = "../longtable_foundation" }
+longtable_storage = { path = "../longtable_storage" }
+longtable_language = { path = "../longtable_language" }
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"

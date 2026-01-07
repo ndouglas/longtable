@@ -443,6 +443,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "longtable_parser"
+version = "0.1.0"
+dependencies = [
+ "longtable_foundation",
+ "longtable_language",
+ "longtable_storage",
+ "proptest",
+ "thiserror",
+]
+
+[[package]]
 name = "longtable_runtime"
 version = "0.1.0"
 dependencies = [

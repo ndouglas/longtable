@@ -9,9 +9,11 @@ use longtable_foundation::{Error, ErrorKind, Result};
 
 use super::Declaration;
 use super::types::{
-    Cardinality, ComponentDecl, ConstraintDecl, ConstraintViolation, DerivedDecl, FieldDecl,
-    LinkDecl, OnTargetDelete, OnViolation, OrderDirection, Pattern, PatternClause, PatternValue,
-    QueryDecl, RelationshipDecl, RuleDecl, SpawnDecl, StorageKind,
+    ActionDecl, AdverbDecl, Cardinality, CommandDecl, ComponentDecl, ConstraintDecl,
+    ConstraintViolation, DerivedDecl, DirectionDecl, FieldDecl, LinkDecl, NounTypeDecl,
+    OnTargetDelete, OnViolation, OrderDirection, Pattern, PatternClause, PatternValue,
+    Precondition, PrepositionDecl, PronounDecl, PronounGender, PronounNumber, QueryDecl,
+    RelationshipDecl, RuleDecl, ScopeDecl, SpawnDecl, StorageKind, SyntaxElement, VerbDecl,
 };
 
 /// Analyzes AST and extracts typed declarations.
@@ -54,6 +56,34 @@ impl DeclarationAnalyzer {
         }
         if let Some(link) = Self::analyze_link(ast)? {
             return Ok(Some(Declaration::Link(link)));
+        }
+        // Parser vocabulary declarations
+        if let Some(verb) = Self::analyze_verb(ast)? {
+            return Ok(Some(Declaration::Verb(verb)));
+        }
+        if let Some(prep) = Self::analyze_preposition(ast)? {
+            return Ok(Some(Declaration::Preposition(prep)));
+        }
+        if let Some(dir) = Self::analyze_direction(ast)? {
+            return Ok(Some(Declaration::Direction(dir)));
+        }
+        if let Some(noun_type) = Self::analyze_noun_type(ast)? {
+            return Ok(Some(Declaration::NounType(noun_type)));
+        }
+        if let Some(cmd) = Self::analyze_command(ast)? {
+            return Ok(Some(Declaration::Command(cmd)));
+        }
+        if let Some(action) = Self::analyze_action(ast)? {
+            return Ok(Some(Declaration::Action(action)));
+        }
+        if let Some(pronoun) = Self::analyze_pronoun(ast)? {
+            return Ok(Some(Declaration::Pronoun(pronoun)));
+        }
+        if let Some(scope) = Self::analyze_scope(ast)? {
+            return Ok(Some(Declaration::Scope(scope)));
+        }
+        if let Some(adverb) = Self::analyze_adverb(ast)? {
+            return Ok(Some(Declaration::Adverb(adverb)));
         }
 
         Ok(None)
@@ -1906,5 +1936,1193 @@ impl DeclarationAnalyzer {
         };
 
         Ok(Some(LinkDecl::new(source, relationship, target, span)))
+    }
+
+    // =========================================================================
+    // Parser Vocabulary Declaration Analysis
+    // =========================================================================
+
+    /// Analyze a top-level form and return a verb if it's a verb declaration.
+    ///
+    /// Verb form: `(verb: name :synonyms [...])`
+    pub fn analyze_verb(ast: &Ast) -> Result<Option<VerbDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (verb: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "verb:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "verb: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get verb name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("verb name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut verb = VerbDecl::new(name, span);
+
+        // Parse optional :synonyms
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "synonyms" => {
+                    verb.synonyms = Self::analyze_symbol_list(value)?;
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown verb clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(verb))
+    }
+
+    /// Analyze a top-level form and return a preposition if it's a preposition declaration.
+    ///
+    /// Preposition form: `(preposition: name :implies relationship)`
+    pub fn analyze_preposition(ast: &Ast) -> Result<Option<PrepositionDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (preposition: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "preposition:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "preposition: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get preposition name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!(
+                        "preposition name must be a symbol, got {}",
+                        other.type_name()
+                    ),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut prep = PrepositionDecl::new(name, span);
+
+        // Parse optional :implies
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "implies" => {
+                    prep.implies = Some(match value {
+                        Ast::Keyword(k, _) => k.clone(),
+                        Ast::Symbol(s, _) => s.clone(),
+                        other => {
+                            return Err(Error::new(ErrorKind::ParseError {
+                                message: format!(
+                                    ":implies must be a keyword or symbol, got {}",
+                                    other.type_name()
+                                ),
+                                line: other.span().line,
+                                column: other.span().column,
+                                context: String::new(),
+                            }));
+                        }
+                    });
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown preposition clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(prep))
+    }
+
+    /// Analyze a top-level form and return a direction if it's a direction declaration.
+    ///
+    /// Direction form: `(direction: name :synonyms [...] :opposite dir)`
+    pub fn analyze_direction(ast: &Ast) -> Result<Option<DirectionDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (direction: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "direction:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "direction: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get direction name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("direction name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut dir = DirectionDecl::new(name, span);
+
+        // Parse optional clauses
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "synonyms" => {
+                    dir.synonyms = Self::analyze_symbol_list(value)?;
+                }
+                "opposite" => {
+                    dir.opposite = Some(match value {
+                        Ast::Symbol(s, _) => s.clone(),
+                        other => {
+                            return Err(Error::new(ErrorKind::ParseError {
+                                message: format!(
+                                    ":opposite must be a symbol, got {}",
+                                    other.type_name()
+                                ),
+                                line: other.span().line,
+                                column: other.span().column,
+                                context: String::new(),
+                            }));
+                        }
+                    });
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown direction clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(dir))
+    }
+
+    /// Analyze a top-level form and return a noun type if it's a type declaration.
+    ///
+    /// Type form: `(type: name :extends [...] :where [...])`
+    pub fn analyze_noun_type(ast: &Ast) -> Result<Option<NounTypeDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (type: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "type:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "type: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get type name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("type name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut noun_type = NounTypeDecl::new(name, span);
+
+        // Parse optional clauses
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "extends" => {
+                    noun_type.extends = Self::analyze_symbol_list(value)?;
+                }
+                "where" => {
+                    noun_type.pattern = Self::analyze_where_clause(value)?;
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown type clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(noun_type))
+    }
+
+    /// Analyze a top-level form and return a command if it's a command declaration.
+    ///
+    /// Command form: `(command: name :syntax [...] :action action-name :priority n)`
+    #[allow(clippy::too_many_lines)]
+    pub fn analyze_command(ast: &Ast) -> Result<Option<CommandDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (command: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "command:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "command: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get command name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("command name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut syntax = Vec::new();
+        let mut action = String::new();
+        let mut priority = 0i32;
+
+        // Parse keyword arguments
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "syntax" => {
+                    syntax = Self::analyze_syntax_pattern(value)?;
+                }
+                "action" => {
+                    action = match value {
+                        Ast::Symbol(s, _) => s.clone(),
+                        other => {
+                            return Err(Error::new(ErrorKind::ParseError {
+                                message: format!(
+                                    ":action must be a symbol, got {}",
+                                    other.type_name()
+                                ),
+                                line: other.span().line,
+                                column: other.span().column,
+                                context: String::new(),
+                            }));
+                        }
+                    };
+                }
+                "priority" => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        priority = match value {
+                            Ast::Int(n, _) => *n as i32,
+                            other => {
+                                return Err(Error::new(ErrorKind::ParseError {
+                                    message: format!(
+                                        ":priority must be an integer, got {}",
+                                        other.type_name()
+                                    ),
+                                    line: other.span().line,
+                                    column: other.span().column,
+                                    context: String::new(),
+                                }));
+                            }
+                        };
+                    }
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown command clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        // Validate required fields
+        if action.is_empty() {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "command: requires :action clause".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        let mut cmd = CommandDecl::new(name, action, span);
+        cmd.syntax = syntax;
+        cmd.priority = priority;
+
+        Ok(Some(cmd))
+    }
+
+    /// Analyze a syntax pattern vector into `SyntaxElement`s.
+    fn analyze_syntax_pattern(ast: &Ast) -> Result<Vec<SyntaxElement>> {
+        let elements = match ast {
+            Ast::Vector(elements, _) => elements,
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!(":syntax must be a vector, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut result = Vec::new();
+
+        for element in elements {
+            let syntax_elem = match element {
+                // :verb marker
+                Ast::Keyword(k, _) if k == "verb" => SyntaxElement::Verb,
+                // :preposition literal
+                Ast::Keyword(k, _) => SyntaxElement::Preposition(k.clone()),
+                // Literal word
+                Ast::Symbol(s, _) => SyntaxElement::Literal(s.clone()),
+                // Noun slot: [?var] or [?var type]
+                Ast::Vector(parts, span) => Self::analyze_noun_slot(parts, *span)?,
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!(
+                            "syntax element must be keyword, symbol, or vector, got {}",
+                            other.type_name()
+                        ),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+            result.push(syntax_elem);
+        }
+
+        Ok(result)
+    }
+
+    /// Analyze a noun slot like [?var] or [?var type] or [?var? type].
+    fn analyze_noun_slot(parts: &[Ast], span: Span) -> Result<SyntaxElement> {
+        if parts.is_empty() || parts.len() > 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "noun slot must be [?var] or [?var type]".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get the variable
+        let (var, is_optional, is_direction) = match &parts[0] {
+            Ast::Symbol(s, _) if s.starts_with('?') => {
+                let var_name = &s[1..];
+                // Check for optional marker (trailing ?)
+                if let Some(stripped) = var_name.strip_suffix('?') {
+                    (stripped.to_string(), true, false)
+                } else {
+                    (var_name.to_string(), false, false)
+                }
+            }
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("noun slot variable must be ?var, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        // Get optional type constraint
+        let type_constraint = if parts.len() == 2 {
+            match &parts[1] {
+                Ast::Symbol(s, _) => {
+                    // Check for special "direction" type
+                    if s == "direction" {
+                        return Ok(SyntaxElement::Direction { var });
+                    }
+                    Some(s.clone())
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!(
+                            "type constraint must be a symbol, got {}",
+                            other.type_name()
+                        ),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        } else {
+            None
+        };
+
+        if is_direction {
+            Ok(SyntaxElement::Direction { var })
+        } else if is_optional {
+            Ok(SyntaxElement::OptionalNoun {
+                var,
+                type_constraint,
+            })
+        } else {
+            Ok(SyntaxElement::Noun {
+                var,
+                type_constraint,
+            })
+        }
+    }
+
+    /// Analyze a top-level form and return an action if it's an action declaration.
+    ///
+    /// Action form: `(action: name :params [...] :precondition ... :handler ...)`
+    #[allow(clippy::too_many_lines)]
+    pub fn analyze_action(ast: &Ast) -> Result<Option<ActionDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (action: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "action:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "action: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get action name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("action name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut action = ActionDecl::new(name, span);
+
+        // Parse keyword arguments
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "params" => {
+                    action.params = Self::analyze_variable_list(value)?;
+                }
+                "precondition" => {
+                    // Precondition can be inline (:when ... :else ...) or a pattern
+                    let precond = Self::analyze_precondition(value, &elements[i..], &mut i)?;
+                    action.preconditions.push(precond);
+                }
+                "handler" => {
+                    action.handler = Self::analyze_handler_clause(value);
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown action clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(action))
+    }
+
+    /// Analyze a precondition clause.
+    fn analyze_precondition(
+        first_value: &Ast,
+        remaining: &[Ast],
+        index: &mut usize,
+    ) -> Result<Precondition> {
+        // Precondition format:
+        // :precondition :when [[pattern]] :else "message"
+        // or just a pattern directly
+
+        match first_value {
+            Ast::Keyword(k, _) if k == "when" => {
+                // :when [[pattern]] :else "message" format
+                if remaining.is_empty() {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: ":when requires a pattern value".to_string(),
+                        line: first_value.span().line,
+                        column: first_value.span().column,
+                        context: String::new(),
+                    }));
+                }
+
+                let pattern = Self::analyze_where_clause(&remaining[0])?;
+                *index += 1;
+
+                // Look for :else
+                let message = if remaining.len() > 2 {
+                    if let Ast::Keyword(k, _) = &remaining[1] {
+                        if k == "else" {
+                            *index += 2;
+                            remaining[2].clone()
+                        } else {
+                            // Default message
+                            Ast::String("Precondition failed.".to_string(), first_value.span())
+                        }
+                    } else {
+                        Ast::String("Precondition failed.".to_string(), first_value.span())
+                    }
+                } else {
+                    Ast::String("Precondition failed.".to_string(), first_value.span())
+                };
+
+                Ok(Precondition {
+                    pattern,
+                    guard: None,
+                    message,
+                })
+            }
+            // Direct pattern
+            Ast::Vector(_, _) => {
+                let pattern = Self::analyze_where_clause(first_value)?;
+                Ok(Precondition {
+                    pattern,
+                    guard: None,
+                    message: Ast::String("Precondition failed.".to_string(), first_value.span()),
+                })
+            }
+            other => Err(Error::new(ErrorKind::ParseError {
+                message: format!(
+                    ":precondition must be :when or a pattern, got {}",
+                    other.type_name()
+                ),
+                line: other.span().line,
+                column: other.span().column,
+                context: String::new(),
+            })),
+        }
+    }
+
+    /// Analyze a handler clause (can be a single expression or a vector of expressions).
+    fn analyze_handler_clause(ast: &Ast) -> Vec<Ast> {
+        match ast {
+            Ast::Vector(elements, _) => elements.clone(),
+            // Single expression - wrap in a vector
+            other => vec![other.clone()],
+        }
+    }
+
+    /// Analyze a list of ?variables.
+    fn analyze_variable_list(ast: &Ast) -> Result<Vec<String>> {
+        let elements = match ast {
+            Ast::Vector(elements, _) => elements,
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("params must be a vector, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut result = Vec::new();
+        for element in elements {
+            match element {
+                Ast::Symbol(s, _) if s.starts_with('?') => {
+                    result.push(s[1..].to_string());
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!(
+                            "parameter must be a ?variable, got {}",
+                            other.type_name()
+                        ),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Analyze a top-level form and return a pronoun if it's a pronoun declaration.
+    ///
+    /// Pronoun form: `(pronoun: name :gender :neuter :number :singular)`
+    #[allow(clippy::too_many_lines)]
+    pub fn analyze_pronoun(ast: &Ast) -> Result<Option<PronounDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (pronoun: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "pronoun:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "pronoun: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get pronoun name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("pronoun name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut pronoun = PronounDecl::new(name, span);
+
+        // Parse optional clauses
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "gender" => {
+                    pronoun.gender = match value {
+                        Ast::Keyword(k, _) => match k.as_str() {
+                            "masculine" => PronounGender::Masculine,
+                            "feminine" => PronounGender::Feminine,
+                            "neuter" => PronounGender::Neuter,
+                            other => {
+                                return Err(Error::new(ErrorKind::ParseError {
+                                    message: format!("invalid gender :{other}"),
+                                    line: value.span().line,
+                                    column: value.span().column,
+                                    context: String::new(),
+                                }));
+                            }
+                        },
+                        other => {
+                            return Err(Error::new(ErrorKind::ParseError {
+                                message: format!(
+                                    ":gender must be a keyword, got {}",
+                                    other.type_name()
+                                ),
+                                line: other.span().line,
+                                column: other.span().column,
+                                context: String::new(),
+                            }));
+                        }
+                    };
+                }
+                "number" => {
+                    pronoun.number = match value {
+                        Ast::Keyword(k, _) => match k.as_str() {
+                            "singular" => PronounNumber::Singular,
+                            "plural" => PronounNumber::Plural,
+                            other => {
+                                return Err(Error::new(ErrorKind::ParseError {
+                                    message: format!("invalid number :{other}"),
+                                    line: value.span().line,
+                                    column: value.span().column,
+                                    context: String::new(),
+                                }));
+                            }
+                        },
+                        other => {
+                            return Err(Error::new(ErrorKind::ParseError {
+                                message: format!(
+                                    ":number must be a keyword, got {}",
+                                    other.type_name()
+                                ),
+                                line: other.span().line,
+                                column: other.span().column,
+                                context: String::new(),
+                            }));
+                        }
+                    };
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown pronoun clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(pronoun))
+    }
+
+    /// Analyze a top-level form and return a scope if it's a scope declaration.
+    ///
+    /// Scope form: `(scope: name :extends [...] :where [...])`
+    pub fn analyze_scope(ast: &Ast) -> Result<Option<ScopeDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (scope: name ...) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "scope:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "scope: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get scope name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("scope name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut scope = ScopeDecl::new(name, span);
+
+        // Parse optional clauses
+        let mut i = 2;
+        while i < elements.len() {
+            let key = match &elements[i] {
+                Ast::Keyword(k, _) => k.as_str(),
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected keyword, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            };
+
+            i += 1;
+            if i >= elements.len() {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("missing value for :{key}"),
+                    line: span.line,
+                    column: span.column,
+                    context: String::new(),
+                }));
+            }
+
+            let value = &elements[i];
+            i += 1;
+
+            match key {
+                "extends" => {
+                    scope.extends = Self::analyze_symbol_list(value)?;
+                }
+                "where" => {
+                    scope.pattern = Self::analyze_where_clause(value)?;
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("unknown scope clause :{other}"),
+                        line: value.span().line,
+                        column: value.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(Some(scope))
+    }
+
+    /// Analyze a top-level form and return an adverb if it's an adverb declaration.
+    ///
+    /// Adverb form: `(adverb: name)`
+    pub fn analyze_adverb(ast: &Ast) -> Result<Option<AdverbDecl>> {
+        let list = match ast {
+            Ast::List(elements, span) => (elements, *span),
+            _ => return Ok(None),
+        };
+
+        let (elements, span) = list;
+        if elements.is_empty() {
+            return Ok(None);
+        }
+
+        // Check for (adverb: name) form
+        match &elements[0] {
+            Ast::Symbol(s, _) if s == "adverb:" => {}
+            _ => return Ok(None),
+        }
+
+        if elements.len() < 2 {
+            return Err(Error::new(ErrorKind::ParseError {
+                message: "adverb: requires a name".to_string(),
+                line: span.line,
+                column: span.column,
+                context: String::new(),
+            }));
+        }
+
+        // Get adverb name
+        let name = match &elements[1] {
+            Ast::Symbol(s, _) => s.clone(),
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("adverb name must be a symbol, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        Ok(Some(AdverbDecl::new(name, span)))
+    }
+
+    /// Helper to analyze a vector of symbols into a list of strings.
+    fn analyze_symbol_list(ast: &Ast) -> Result<Vec<String>> {
+        let elements = match ast {
+            Ast::Vector(elements, _) => elements,
+            other => {
+                return Err(Error::new(ErrorKind::ParseError {
+                    message: format!("expected a vector, got {}", other.type_name()),
+                    line: other.span().line,
+                    column: other.span().column,
+                    context: String::new(),
+                }));
+            }
+        };
+
+        let mut result = Vec::new();
+        for element in elements {
+            match element {
+                Ast::Symbol(s, _) => {
+                    result.push(s.clone());
+                }
+                other => {
+                    return Err(Error::new(ErrorKind::ParseError {
+                        message: format!("expected symbol, got {}", other.type_name()),
+                        line: other.span().line,
+                        column: other.span().column,
+                        context: String::new(),
+                    }));
+                }
+            }
+        }
+
+        Ok(result)
     }
 }

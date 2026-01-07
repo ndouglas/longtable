@@ -516,3 +516,362 @@ impl LinkDecl {
         }
     }
 }
+
+// =============================================================================
+// Parser Vocabulary Declarations
+// =============================================================================
+
+/// A verb declaration for the parser vocabulary.
+///
+/// Corresponds to:
+/// ```clojure
+/// (verb: attack
+///   :synonyms [kill hit strike stab])
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct VerbDecl {
+    /// Canonical verb name
+    pub name: String,
+    /// Synonym words that map to this verb
+    pub synonyms: Vec<String>,
+    /// Source span
+    pub span: Span,
+}
+
+impl VerbDecl {
+    /// Creates a new verb declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            synonyms: Vec::new(),
+            span,
+        }
+    }
+}
+
+/// A preposition declaration for the parser vocabulary.
+///
+/// Corresponds to:
+/// ```clojure
+/// (preposition: with
+///   :implies :instrument)
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct PrepositionDecl {
+    /// Preposition word
+    pub name: String,
+    /// Semantic role this preposition implies (e.g., "instrument", "destination")
+    pub implies: Option<String>,
+    /// Source span
+    pub span: Span,
+}
+
+impl PrepositionDecl {
+    /// Creates a new preposition declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            implies: None,
+            span,
+        }
+    }
+}
+
+/// A direction declaration for the parser vocabulary.
+///
+/// Corresponds to:
+/// ```clojure
+/// (direction: north
+///   :synonyms [n]
+///   :opposite south)
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct DirectionDecl {
+    /// Canonical direction name
+    pub name: String,
+    /// Synonym words (e.g., "n" for "north")
+    pub synonyms: Vec<String>,
+    /// Opposite direction (e.g., "south" for "north")
+    pub opposite: Option<String>,
+    /// Source span
+    pub span: Span,
+}
+
+impl DirectionDecl {
+    /// Creates a new direction declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            synonyms: Vec::new(),
+            opposite: None,
+            span,
+        }
+    }
+}
+
+/// A noun type declaration for the parser.
+///
+/// Corresponds to:
+/// ```clojure
+/// (type: container
+///   :where [[?obj :container/capacity _]])
+///
+/// (type: weapon
+///   :extends [thing]
+///   :where [[?obj :weapon/damage _]])
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct NounTypeDecl {
+    /// Type name
+    pub name: String,
+    /// Types this extends (inherits from)
+    pub extends: Vec<String>,
+    /// Pattern that entities must match to be this type
+    pub pattern: Pattern,
+    /// Source span
+    pub span: Span,
+}
+
+impl NounTypeDecl {
+    /// Creates a new noun type declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            extends: Vec::new(),
+            pattern: Pattern::new(),
+            span,
+        }
+    }
+}
+
+/// An element in a command syntax pattern.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SyntaxElement {
+    /// The verb position (always first)
+    Verb,
+    /// A literal word that must appear
+    Literal(String),
+    /// A noun slot with variable binding and optional type constraint
+    Noun {
+        /// Variable name (e.g., "target" for `?target`)
+        var: String,
+        /// Type constraint (e.g., "container")
+        type_constraint: Option<String>,
+    },
+    /// An optional noun slot
+    OptionalNoun {
+        /// Variable name
+        var: String,
+        /// Type constraint
+        type_constraint: Option<String>,
+    },
+    /// A direction slot
+    Direction {
+        /// Variable name
+        var: String,
+    },
+    /// A preposition that must appear
+    Preposition(String),
+}
+
+/// A command declaration defining how to parse player input.
+///
+/// Corresponds to:
+/// ```clojure
+/// (command: put-in
+///   :syntax [:verb [?obj thing] :in [?dest container]]
+///   :action put-in)
+///
+/// (command: attack
+///   :syntax [:verb [?target] :with [?weapon weapon]]
+///   :action attack)
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandDecl {
+    /// Command name
+    pub name: String,
+    /// Syntax pattern elements
+    pub syntax: Vec<SyntaxElement>,
+    /// Action to invoke when this command matches
+    pub action: String,
+    /// Priority (higher = matched first when ambiguous)
+    pub priority: i32,
+    /// Source span
+    pub span: Span,
+}
+
+impl CommandDecl {
+    /// Creates a new command declaration.
+    pub fn new(name: impl Into<String>, action: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            syntax: Vec::new(),
+            action: action.into(),
+            priority: 0,
+            span,
+        }
+    }
+}
+
+/// A precondition for an action.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Precondition {
+    /// Pattern to check
+    pub pattern: Pattern,
+    /// Guard expression that must be true
+    pub guard: Option<Ast>,
+    /// Error message if precondition fails
+    pub message: Ast,
+}
+
+/// An action declaration defining game behavior.
+///
+/// Corresponds to:
+/// ```clojure
+/// (action: attack
+///   :params [?actor ?target ?weapon]
+///   :precondition
+///     :when [[?target :health/current _]]
+///     :else "You can't attack that."
+///   :handler
+///     (let [damage (get ?weapon :weapon/damage)]
+///       (update! ?target :health/current - damage)))
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct ActionDecl {
+    /// Action name
+    pub name: String,
+    /// Parameter variable names
+    pub params: Vec<String>,
+    /// Preconditions that must be met
+    pub preconditions: Vec<Precondition>,
+    /// Handler expression(s)
+    pub handler: Vec<Ast>,
+    /// Source span
+    pub span: Span,
+}
+
+impl ActionDecl {
+    /// Creates a new action declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            params: Vec::new(),
+            preconditions: Vec::new(),
+            handler: Vec::new(),
+            span,
+        }
+    }
+}
+
+/// Grammatical gender for pronoun resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PronounGender {
+    /// Masculine (he/him)
+    Masculine,
+    /// Feminine (she/her)
+    Feminine,
+    /// Neuter (it)
+    #[default]
+    Neuter,
+}
+
+/// Grammatical number for pronoun resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PronounNumber {
+    /// Singular
+    #[default]
+    Singular,
+    /// Plural
+    Plural,
+}
+
+/// A pronoun declaration for the parser.
+///
+/// Corresponds to:
+/// ```clojure
+/// (pronoun: it
+///   :gender :neuter
+///   :number :singular)
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct PronounDecl {
+    /// Pronoun word
+    pub name: String,
+    /// Grammatical gender
+    pub gender: PronounGender,
+    /// Grammatical number
+    pub number: PronounNumber,
+    /// Source span
+    pub span: Span,
+}
+
+impl PronounDecl {
+    /// Creates a new pronoun declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            gender: PronounGender::default(),
+            number: PronounNumber::default(),
+            span,
+        }
+    }
+}
+
+/// A scope declaration defining entity visibility for noun resolution.
+///
+/// Corresponds to:
+/// ```clojure
+/// (scope: reachable
+///   :extends [immediate]
+///   :where [[?obj :location/in ?container]
+///           [?container :container/open true]])
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScopeDecl {
+    /// Scope name
+    pub name: String,
+    /// Scopes this extends
+    pub extends: Vec<String>,
+    /// Pattern defining additional visible entities
+    pub pattern: Pattern,
+    /// Source span
+    pub span: Span,
+}
+
+impl ScopeDecl {
+    /// Creates a new scope declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            extends: Vec::new(),
+            pattern: Pattern::new(),
+            span,
+        }
+    }
+}
+
+/// An adverb declaration for the parser.
+///
+/// Corresponds to:
+/// ```clojure
+/// (adverb: carefully)
+/// (adverb: quickly)
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct AdverbDecl {
+    /// Adverb word
+    pub name: String,
+    /// Source span
+    pub span: Span,
+}
+
+impl AdverbDecl {
+    /// Creates a new adverb declaration.
+    pub fn new(name: impl Into<String>, span: Span) -> Self {
+        Self {
+            name: name.into(),
+            span,
+        }
+    }
+}

@@ -4,6 +4,7 @@ members = [
     "crates/longtable_foundation",
     "crates/longtable_storage",
     "crates/longtable_language",
+    "crates/longtable_parser",
     "crates/longtable_engine",
     "crates/longtable_stdlib",
     "crates/longtable_runtime",
@@ -67,6 +68,7 @@ categories = ["game-development", "simulation"]
 longtable_foundation = { path = "crates/longtable_foundation" }
 longtable_storage = { path = "crates/longtable_storage" }
 longtable_language = { path = "crates/longtable_language" }
+longtable_parser = { path = "crates/longtable_parser" }
 longtable_engine = { path = "crates/longtable_engine" }
 longtable_stdlib = { path = "crates/longtable_stdlib" }
 longtable_runtime = { path = "crates/longtable_runtime" }

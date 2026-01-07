@@ -18,9 +18,11 @@ mod tests;
 
 // Re-export types
 pub use types::{
-    Cardinality, ComponentDecl, ConstraintDecl, ConstraintViolation, DerivedDecl, FieldDecl,
-    LinkDecl, OnTargetDelete, OnViolation, OrderDirection, Pattern, PatternClause, PatternValue,
-    QueryDecl, RelationshipDecl, RuleDecl, SpawnDecl, StorageKind,
+    ActionDecl, AdverbDecl, Cardinality, CommandDecl, ComponentDecl, ConstraintDecl,
+    ConstraintViolation, DerivedDecl, DirectionDecl, FieldDecl, LinkDecl, NounTypeDecl,
+    OnTargetDelete, OnViolation, OrderDirection, Pattern, PatternClause, PatternValue,
+    Precondition, PrepositionDecl, PronounDecl, PronounGender, PronounNumber, QueryDecl,
+    RelationshipDecl, RuleDecl, ScopeDecl, SpawnDecl, StorageKind, SyntaxElement, VerbDecl,
 };
 
 // Re-export analyzer
@@ -51,4 +53,22 @@ pub enum Declaration {
     Spawn(SpawnDecl),
     /// A link declaration (create relationship).
     Link(LinkDecl),
+    /// A verb declaration (parser vocabulary).
+    Verb(VerbDecl),
+    /// A preposition declaration (parser vocabulary).
+    Preposition(PrepositionDecl),
+    /// A direction declaration (parser vocabulary).
+    Direction(DirectionDecl),
+    /// A noun type declaration (parser vocabulary).
+    NounType(NounTypeDecl),
+    /// A command declaration (parser syntax).
+    Command(CommandDecl),
+    /// An action declaration (parser behavior).
+    Action(ActionDecl),
+    /// A pronoun declaration (parser vocabulary).
+    Pronoun(PronounDecl),
+    /// A scope declaration (parser visibility).
+    Scope(ScopeDecl),
+    /// An adverb declaration (parser vocabulary).
+    Adverb(AdverbDecl),
 }
