@@ -1329,7 +1329,7 @@ tests/
 
 **Total: 345 tests** — All passing with clean clippy.
 
-### 7.2 Example: Counter Machine (Deliberately Ugly)
+### 7.2 Example: Counter Machine (Deliberately Ugly) ✓
 
 Before the adventure game, build a **brutally mechanical** example that exposes semantics without hiding them behind narrative:
 
@@ -1380,6 +1380,8 @@ examples/counter/
 - Kill switch triggers if limit removed
 
 This example should feel boring. That's the point.
+
+**Implemented**: 11 tests in `tests/examples/counter.rs` covering all test cases using the spike API.
 
 ### 7.3 Example: Adventure Game
 

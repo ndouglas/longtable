@@ -385,6 +385,13 @@ impl RuleEngine {
         }
     }
 
+    /// Set the maximum activations before the kill switch triggers.
+    #[must_use]
+    pub fn with_max_activations(mut self, limit: usize) -> Self {
+        self.max_activations = limit;
+        self
+    }
+
     /// Reset for a new tick.
     pub fn begin_tick(&mut self) {
         self.refracted.clear();

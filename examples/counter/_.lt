@@ -1,0 +1,77 @@
+;; counter/_.lt
+;; Deliberately ugly. Tests refraction, chaining, and termination.
+;;
+;; This example demonstrates core rule engine semantics:
+;; 1. Refraction: A rule won't fire twice with the same bindings in one tick
+;; 2. Chaining: Rules can trigger other rules within a tick
+;; 3. Termination: Proper use of state prevents infinite loops
+;; 4. Kill switch: Engine halts if too many activations fire
+
+;; =============================================================================
+;; Components
+;; =============================================================================
+
+;; A counter component with an integer value field
+(component: counter
+  :value :int)
+
+;; Tag component: marks an entity as needing an increment
+(component: increment-request
+  :bool :default true)
+
+;; Tag component: marks an entity as done counting
+(component: done
+  :bool :default true)
+
+;; =============================================================================
+;; Rules
+;; =============================================================================
+
+;; Rule 1: Increment counter when requested
+;; Matches entities that have both :counter/value and :increment-request
+;; Effect: increment value, remove the request
+(rule: do-increment
+  :where [[?e :counter/value ?v]
+          [?e :increment-request]]
+  :then [(set! ?e :counter/value (+ ?v 1))
+         (remove! ?e :increment-request)])
+
+;; Rule 2: Request another increment if under limit
+;; Only fires when:
+;; - Entity has a counter value
+;; - Entity does NOT have an increment-request pending
+;; - Entity is NOT marked as done
+;; - Counter value is less than 10
+(rule: maybe-again
+  :where [[?e :counter/value ?v]
+          (not [?e :increment-request])
+          (not [?e :done])]
+  :guard [(< ?v 10)]
+  :then [(set! ?e :increment-request true)])
+
+;; Rule 3: Mark done when limit reached
+;; Fires when counter reaches 10 and entity isn't already done
+(rule: finish
+  :where [[?e :counter/value ?v]
+          (not [?e :done])]
+  :guard [(>= ?v 10)]
+  :then [(set! ?e :done true)])
+
+;; =============================================================================
+;; Expected Behavior
+;; =============================================================================
+;;
+;; Starting state: entity with :counter/value 0, :increment-request true
+;;
+;; Tick 1:
+;;   - do-increment fires: value -> 1, request removed
+;;   - maybe-again fires: adds request (value < 10)
+;;   - do-increment fires again: value -> 2, request removed
+;;   ... continues until value = 10
+;;   - finish fires: marks done
+;;   - maybe-again doesn't fire (entity has :done)
+;;
+;; Result: Counter reaches exactly 10, not 11
+;;
+;; Without refraction, do-increment would fire infinitely on the same binding.
+;; Without the :done flag, maybe-again would keep adding requests forever.
