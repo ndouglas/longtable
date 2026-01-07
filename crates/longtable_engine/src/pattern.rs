@@ -237,16 +237,14 @@ impl PatternMatcher {
         let first = &pattern.clauses[0];
         let mut results: Vec<Bindings> = Vec::new();
 
-        // Find entities with the first clause's component
-        for entity in world.with_component(first.component) {
-            let mut bindings = Bindings::new();
-            bindings.set(first.entity_var.clone(), Value::EntityRef(entity));
-
-            // Try to bind the value
-            if let Some(bound) = Self::try_bind_clause(first, entity, world, &bindings) {
+        // Check if this is a relationship clause
+        if Self::is_relationship(first.component, world) {
+            // Match against relationship entities
+            let empty_bindings = Bindings::new();
+            for bindings in Self::match_relationship_clause(first, world, &empty_bindings) {
                 // Try to match remaining positive clauses
                 if let Some(positive_bindings) =
-                    Self::match_remaining(&pattern.clauses[1..], world, bound)
+                    Self::match_remaining(&pattern.clauses[1..], world, bindings)
                 {
                     // Check negations
                     if Self::check_negations(&pattern.negations, world, &positive_bindings) {
@@ -254,9 +252,121 @@ impl PatternMatcher {
                     }
                 }
             }
+        } else {
+            // Find entities with the first clause's component
+            for entity in world.with_component(first.component) {
+                let mut bindings = Bindings::new();
+                bindings.set(first.entity_var.clone(), Value::EntityRef(entity));
+
+                // Try to bind the value
+                if let Some(bound) = Self::try_bind_clause(first, entity, world, &bindings) {
+                    // Try to match remaining positive clauses
+                    if let Some(positive_bindings) =
+                        Self::match_remaining(&pattern.clauses[1..], world, bound)
+                    {
+                        // Check negations
+                        if Self::check_negations(&pattern.negations, world, &positive_bindings) {
+                            results.push(positive_bindings);
+                        }
+                    }
+                }
+            }
         }
 
         results
+    }
+
+    /// Check if a keyword is a registered relationship type.
+    fn is_relationship(keyword: KeywordId, world: &World) -> bool {
+        world.relationship_schema(keyword).is_some()
+    }
+
+    /// Match a relationship clause against relationship entities.
+    ///
+    /// For a clause like `[?e :in-room ?room]`:
+    /// - Find relationship entities where `:rel/type = :in-room`
+    /// - Bind `?e` to the `:rel/source` value
+    /// - Bind `?room` (the binding variable) to the `:rel/target` value
+    fn match_relationship_clause(
+        clause: &CompiledClause,
+        world: &World,
+        existing_bindings: &Bindings,
+    ) -> Vec<Bindings> {
+        let mut results = Vec::new();
+
+        // Check if entity_var is already bound (allows filtering by source)
+        let source_filter = existing_bindings.get_entity(&clause.entity_var);
+
+        // Find relationship entities of this type
+        let rel_entities = world.find_relationships(Some(clause.component), source_filter, None);
+
+        for rel_entity in rel_entities {
+            // Extract source from :rel/source
+            let source =
+                Self::extract_relationship_entity(rel_entity, KeywordId::REL_SOURCE, world);
+            // Extract target from :rel/target
+            let target =
+                Self::extract_relationship_entity(rel_entity, KeywordId::REL_TARGET, world);
+
+            let (Some(source_id), Some(target_id)) = (source, target) else {
+                continue;
+            };
+
+            let mut bindings = existing_bindings.clone();
+
+            // Bind entity_var to source
+            if let Some(existing) = bindings.get_entity(&clause.entity_var) {
+                // Already bound - must match
+                if existing != source_id {
+                    continue;
+                }
+            } else {
+                bindings.set(clause.entity_var.clone(), Value::EntityRef(source_id));
+            }
+
+            // Handle the binding (target)
+            match &clause.binding {
+                CompiledBinding::Variable(var) => {
+                    // Check if variable is already bound
+                    if let Some(existing) = bindings.get(var) {
+                        // Must match existing binding (unification)
+                        if existing != &Value::EntityRef(target_id) {
+                            continue;
+                        }
+                    } else {
+                        bindings.set(var.clone(), Value::EntityRef(target_id));
+                    }
+                }
+                CompiledBinding::Literal(lit) => {
+                    // Must match literal
+                    if &Value::EntityRef(target_id) != lit {
+                        continue;
+                    }
+                }
+                CompiledBinding::Wildcard => {
+                    // Always matches
+                }
+            }
+
+            results.push(bindings);
+        }
+
+        results
+    }
+
+    /// Extract an entity ID from a relationship entity's component.
+    fn extract_relationship_entity(
+        rel_entity: EntityId,
+        component: KeywordId,
+        world: &World,
+    ) -> Option<EntityId> {
+        let value = world.get(rel_entity, component).ok()??;
+        if let Value::Map(map) = value {
+            if let Some(Value::EntityRef(id)) = map.get(&Value::Keyword(KeywordId::VALUE)) {
+                return Some(*id);
+            }
+        }
+        None
     }
 
     fn try_bind_clause(
@@ -311,6 +421,19 @@ impl PatternMatcher {
         }
 
         let clause = &clauses[0];
+
+        // Check if this is a relationship clause
+        if Self::is_relationship(clause.component, world) {
+            // Match against relationship entities
+            for new_bindings in Self::match_relationship_clause(clause, world, &bindings) {
+                if let Some(final_bindings) =
+                    Self::match_remaining(&clauses[1..], world, new_bindings)
+                {
+                    return Some(final_bindings);
+                }
+            }
+            return None;
+        }
 
         // Check if entity variable is already bound
         if let Some(entity) = bindings.get_entity(&clause.entity_var) {
@@ -892,5 +1015,158 @@ mod tests {
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].get_entity("e"), Some(e1));
         assert_eq!(matches[0].get("x"), Some(&Value::Bool(true)));
+    }
+
+    // =========================================================================
+    // Relationship Pattern Matching Tests
+    // =========================================================================
+
+    use longtable_storage::RelationshipSchema;
+
+    #[test]
+    fn match_relationship_pattern() {
+        let mut world = World::new(42);
+
+        // Register components and relationship
+        let tag_player = world.interner_mut().intern_keyword("tag/player");
+        let tag_room = world.interner_mut().intern_keyword("tag/room");
+        let in_room = world.interner_mut().intern_keyword("in-room");
+
+        world = world
+            .register_component(ComponentSchema::tag(tag_player))
+            .unwrap();
+        world = world
+            .register_component(ComponentSchema::tag(tag_room))
+            .unwrap();
+        world = world
+            .register_relationship(RelationshipSchema::new(in_room))
+            .unwrap();
+
+        // Create entities
+        let (w, player) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(player, tag_player, Value::Bool(true)).unwrap();
+
+        let (w, room1) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(room1, tag_room, Value::Bool(true)).unwrap();
+
+        let (w, room2) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        world = world.set(room2, tag_room, Value::Bool(true)).unwrap();
+
+        // Create relationship: player in room1
+        world = world.link(player, in_room, room1).unwrap();
+
+        // Compile pattern: [?p :tag/player true] [?p :in-room ?r]
+        let decl_pattern = DeclPattern {
+            clauses: vec![
+                DeclClause {
+                    entity_var: "p".to_string(),
+                    component: "tag/player".to_string(),
+                    value: PatternValue::Literal(Ast::Bool(true, Span::default())),
+                    span: Span::default(),
+                },
+                DeclClause {
+                    entity_var: "p".to_string(),
+                    component: "in-room".to_string(),
+                    value: PatternValue::Variable("r".to_string()),
+                    span: Span::default(),
+                },
+            ],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Should find the player in room1
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].get_entity("p"), Some(player));
+        assert_eq!(matches[0].get_entity("r"), Some(room1));
+    }
+
+    #[test]
+    fn match_relationship_as_first_clause() {
+        let mut world = World::new(42);
+
+        // Register relationship
+        let in_room = world.interner_mut().intern_keyword("in-room");
+        world = world
+            .register_relationship(RelationshipSchema::new(in_room))
+            .unwrap();
+
+        // Create entities
+        let (w, player) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        let (w, room) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+
+        // Create relationship
+        world = world.link(player, in_room, room).unwrap();
+
+        // Compile pattern: [?p :in-room ?r]
+        let decl_pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "p".to_string(),
+                component: "in-room".to_string(),
+                value: PatternValue::Variable("r".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Should find the relationship
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].get_entity("p"), Some(player));
+        assert_eq!(matches[0].get_entity("r"), Some(room));
+    }
+
+    #[test]
+    fn match_multiple_relationships() {
+        let mut world = World::new(42);
+
+        // Register relationships
+        let in_room = world.interner_mut().intern_keyword("in-room");
+        world = world
+            .register_relationship(RelationshipSchema::new(in_room))
+            .unwrap();
+
+        // Create entities
+        let (w, player1) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        let (w, player2) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+        let (w, room) = world.spawn(&LtMap::new()).unwrap();
+        world = w;
+
+        // Create relationships
+        world = world.link(player1, in_room, room).unwrap();
+        world = world.link(player2, in_room, room).unwrap();
+
+        // Compile pattern: [?p :in-room ?r]
+        let decl_pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "p".to_string(),
+                component: "in-room".to_string(),
+                value: PatternValue::Variable("r".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+
+        let compiled = PatternCompiler::compile(&decl_pattern, world.interner_mut()).unwrap();
+        let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+        // Should find both relationships
+        assert_eq!(matches.len(), 2);
+
+        // Both should point to the same room
+        for m in &matches {
+            assert_eq!(m.get_entity("r"), Some(room));
+        }
     }
 }

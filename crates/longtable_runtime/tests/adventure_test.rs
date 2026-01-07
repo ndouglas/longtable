@@ -347,3 +347,90 @@ fn test_serialization_roundtrip() {
         world.interner().keyword_count()
     );
 }
+
+#[test]
+fn test_relationship_query() {
+    use longtable_engine::{PatternCompiler, PatternMatcher};
+    use longtable_language::Span;
+    use longtable_language::declaration::{Pattern, PatternClause, PatternValue};
+
+    let mut world = create_adventure_world();
+
+    // Compile pattern: [?player :tag/player true] [?player :in-room ?room]
+    let pattern = Pattern {
+        clauses: vec![
+            PatternClause {
+                entity_var: "player".to_string(),
+                component: "tag/player".to_string(),
+                value: PatternValue::Literal(longtable_language::Ast::Bool(true, Span::default())),
+                span: Span::default(),
+            },
+            PatternClause {
+                entity_var: "player".to_string(),
+                component: "in-room".to_string(),
+                value: PatternValue::Variable("room".to_string()),
+                span: Span::default(),
+            },
+        ],
+        negations: vec![],
+    };
+
+    let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+    let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+    // Should find the player in the cave entrance
+    assert_eq!(matches.len(), 1);
+    assert!(matches[0].get_entity("player").is_some());
+    assert!(matches[0].get_entity("room").is_some());
+
+    // Verify the room is the cave entrance (entity 1 in our world)
+    let room_id = matches[0].get_entity("room").unwrap();
+
+    // Get the room's name to verify
+    let name_kw = world.interner_mut().intern_keyword("name");
+    let value_kw = world.interner_mut().intern_keyword("value");
+
+    if let Some(Value::Map(name_map)) = world.get(room_id, name_kw).ok().flatten() {
+        if let Some(Value::String(name)) = name_map.get(&Value::Keyword(value_kw)) {
+            assert_eq!(name.as_ref(), "Cave Entrance");
+        }
+    }
+}
+
+#[test]
+fn test_find_all_items_in_rooms() {
+    use longtable_engine::{PatternCompiler, PatternMatcher};
+    use longtable_language::Span;
+    use longtable_language::declaration::{Pattern, PatternClause, PatternValue};
+
+    let mut world = create_adventure_world();
+
+    // Compile pattern: [?item :tag/item true] [?item :in-room ?room]
+    let pattern = Pattern {
+        clauses: vec![
+            PatternClause {
+                entity_var: "item".to_string(),
+                component: "tag/item".to_string(),
+                value: PatternValue::Literal(longtable_language::Ast::Bool(true, Span::default())),
+                span: Span::default(),
+            },
+            PatternClause {
+                entity_var: "item".to_string(),
+                component: "in-room".to_string(),
+                value: PatternValue::Variable("room".to_string()),
+                span: Span::default(),
+            },
+        ],
+        negations: vec![],
+    };
+
+    let compiled = PatternCompiler::compile(&pattern, world.interner_mut()).unwrap();
+    let matches = PatternMatcher::match_pattern(&compiled, &world);
+
+    // Should find items in rooms (the test world has brass-lantern in cave entrance, sword in main hall)
+    assert!(
+        matches.len() >= 2,
+        "Expected at least 2 items in rooms, found {}",
+        matches.len()
+    );
+}

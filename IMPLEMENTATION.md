@@ -1090,10 +1090,11 @@ When source or target entity is deleted, relationship entities must be cleaned u
 
 ### 5.5.4 Query Migration
 
-- [ ] Update pattern compiler to recognize relationship keywords
-- [ ] Desugar `[?e :rel ?t]` to three-clause pattern when `:rel` is a relationship
-- [ ] Test: relationship queries return correct results
-- [ ] Test: adventure game relationship queries work
+- [x] Modified `PatternMatcher` to detect relationship keywords via `world.relationship_schema()`
+- [x] Relationship patterns like `[?e :in-room ?r]` now match against relationship entities
+- [x] Extracts `:rel/source` as entity_var, `:rel/target` as binding variable
+- [x] Works for relationships as first clause or subsequent clauses
+- [x] Test: 3 new tests for relationship pattern matching (881 total tests)
 
 ### 5.5.5 Read Migration
 
