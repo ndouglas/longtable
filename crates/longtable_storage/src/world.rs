@@ -809,21 +809,69 @@ impl World {
     }
 
     /// Gets targets of a relationship from a source.
+    ///
+    /// # Read Migration (Phase 5.5.5)
+    ///
+    /// Now reads from relationship entities instead of the old `RelationshipStore`.
+    /// Finds relationship entities where `:rel/type = relationship` and `:rel/source = source`,
+    /// then extracts `:rel/target` from each.
     pub fn targets(
         &self,
         source: EntityId,
         relationship: KeywordId,
     ) -> impl Iterator<Item = EntityId> + '_ {
-        self.relationships.targets(source, relationship)
+        // Find relationship entities matching type and source
+        let rel_entities = self.find_relationships(Some(relationship), Some(source), None);
+
+        // Extract targets from relationship entities
+        rel_entities.into_iter().filter_map(|rel_entity| {
+            self.get(rel_entity, KeywordId::REL_TARGET)
+                .ok()
+                .flatten()
+                .and_then(|value| {
+                    if let Value::Map(map) = value {
+                        if let Some(Value::EntityRef(target)) =
+                            map.get(&Value::Keyword(KeywordId::VALUE))
+                        {
+                            return Some(*target);
+                        }
+                    }
+                    None
+                })
+        })
     }
 
     /// Gets sources pointing to a target.
+    ///
+    /// # Read Migration (Phase 5.5.5)
+    ///
+    /// Now reads from relationship entities instead of the old `RelationshipStore`.
+    /// Finds relationship entities where `:rel/type = relationship` and `:rel/target = target`,
+    /// then extracts `:rel/source` from each.
     pub fn sources(
         &self,
         target: EntityId,
         relationship: KeywordId,
     ) -> impl Iterator<Item = EntityId> + '_ {
-        self.relationships.sources(target, relationship)
+        // Find relationship entities matching type and target
+        let rel_entities = self.find_relationships(Some(relationship), None, Some(target));
+
+        // Extract sources from relationship entities
+        rel_entities.into_iter().filter_map(|rel_entity| {
+            self.get(rel_entity, KeywordId::REL_SOURCE)
+                .ok()
+                .flatten()
+                .and_then(|value| {
+                    if let Value::Map(map) = value {
+                        if let Some(Value::EntityRef(source)) =
+                            map.get(&Value::Keyword(KeywordId::VALUE))
+                        {
+                            return Some(*source);
+                        }
+                    }
+                    None
+                })
+        })
     }
 
     // --- Tick Operations ---

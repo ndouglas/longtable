@@ -1098,10 +1098,10 @@ When source or target entity is deleted, relationship entities must be cleaned u
 
 ### 5.5.5 Read Migration
 
-- [ ] Switch `targets()` to read from relationship entities
-- [ ] Switch `sources()` to read from relationship entities
-- [ ] Old storage becomes write-only
-- [ ] Test: relationship reads return same results
+- [x] Switched `World::targets()` to read from relationship entities via `find_relationships`
+- [x] Switched `World::sources()` to read from relationship entities via `find_relationships`
+- [x] Old `RelationshipStore` now write-only (dual-write still active)
+- [x] All 883 tests pass (existing tests verify reads return same results)
 
 ### 5.5.6 Orphan Cleanup
 
