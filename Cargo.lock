@@ -388,6 +388,7 @@ dependencies = [
  "longtable_engine",
  "longtable_foundation",
  "longtable_language",
+ "longtable_parser",
  "longtable_runtime",
  "longtable_stdlib",
  "longtable_storage",

@@ -25,6 +25,7 @@ description = "Rule-based simulation engine combining a LISP-like DSL with an ar
 longtable_foundation.workspace = true
 longtable_storage.workspace = true
 longtable_language.workspace = true
+longtable_parser.workspace = true
 longtable_engine.workspace = true
 longtable_stdlib.workspace = true
 longtable_runtime.workspace = true
@@ -53,6 +54,14 @@ path = "tests/engine/main.rs"
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
+
+[[test]]
+name = "parser"
+path = "tests/parser/main.rs"
+
+[[test]]
+name = "examples"
+path = "tests/examples/main.rs"
 
 [workspace.package]
 version = "0.1.0"

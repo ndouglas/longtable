@@ -116,6 +116,18 @@ impl VocabularyRegistry {
         Self::default()
     }
 
+    /// Looks up a word string to find its KeywordId.
+    ///
+    /// This requires the word to have been previously registered.
+    /// Returns None if the word is not in the vocabulary.
+    #[must_use]
+    pub fn vocabulary_lookup_word(&self, _word: &str) -> Option<KeywordId> {
+        // TODO: This needs integration with the interner
+        // For now, we don't have word->keyword mapping
+        // This will be implemented when we connect to the World's interner
+        None
+    }
+
     /// Registers a verb with its synonyms.
     pub fn register_verb(&mut self, verb: Verb) {
         for syn in &verb.synonyms {
