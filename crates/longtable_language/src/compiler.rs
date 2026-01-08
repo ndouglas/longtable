@@ -672,6 +672,13 @@ impl Compiler {
                 "sources" => return self.compile_sources(args, span, code),
                 // Entity construction
                 "entity-ref" => return self.compile_entity_ref(args, span, code),
+                // World mutation operations
+                "spawn" => return self.compile_spawn(args, span, code),
+                "destroy" => return self.compile_destroy(args, span, code),
+                "set-component" => return self.compile_set_component(args, span, code),
+                "set-field" => return self.compile_set_field(args, span, code),
+                "link" => return self.compile_link(args, span, code),
+                "unlink" => return self.compile_unlink(args, span, code),
                 _ => {}
             }
 
@@ -1989,6 +1996,156 @@ impl Compiler {
         Ok(())
     }
 
+    // =========================================================================
+    // World Mutation Operations
+    // =========================================================================
+
+    /// Compiles (spawn components-map) -> entity-id
+    ///
+    /// Creates a new entity with the given components.
+    fn compile_spawn(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 1 {
+            return Err(self.error(span, "spawn requires exactly 1 argument (components-map)"));
+        }
+
+        // Compile the components map
+        self.compile_node(&args[0], code)?;
+        // Emit Spawn opcode
+        code.emit(Opcode::Spawn);
+
+        Ok(())
+    }
+
+    /// Compiles (destroy entity) -> nil
+    ///
+    /// Destroys an entity.
+    fn compile_destroy(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 1 {
+            return Err(self.error(span, "destroy requires exactly 1 argument (entity)"));
+        }
+
+        // Compile the entity
+        self.compile_node(&args[0], code)?;
+        // Emit Destroy opcode
+        code.emit(Opcode::Destroy);
+        // Destroy returns nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (set-component entity component-kw value) -> nil
+    ///
+    /// Sets a component value on an entity.
+    fn compile_set_component(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 3 {
+            return Err(self.error(
+                span,
+                "set-component requires exactly 3 arguments (entity component value)",
+            ));
+        }
+
+        // Compile entity
+        self.compile_node(&args[0], code)?;
+        // Compile component keyword
+        self.compile_node(&args[1], code)?;
+        // Compile value
+        self.compile_node(&args[2], code)?;
+        // Emit SetComponent opcode
+        code.emit(Opcode::SetComponent);
+        // SetComponent returns nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (set-field entity component-kw field-kw value) -> nil
+    ///
+    /// Sets a field value within a component on an entity.
+    fn compile_set_field(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 4 {
+            return Err(self.error(
+                span,
+                "set-field requires exactly 4 arguments (entity component field value)",
+            ));
+        }
+
+        // Compile entity
+        self.compile_node(&args[0], code)?;
+        // Compile component keyword
+        self.compile_node(&args[1], code)?;
+        // Compile field keyword
+        self.compile_node(&args[2], code)?;
+        // Compile value
+        self.compile_node(&args[3], code)?;
+        // Emit SetField opcode
+        code.emit(Opcode::SetField);
+        // SetField returns nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (link source rel-kw target) -> nil
+    ///
+    /// Creates a relationship between two entities.
+    fn compile_link(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 3 {
+            return Err(self.error(
+                span,
+                "link requires exactly 3 arguments (source rel-type target)",
+            ));
+        }
+
+        // Compile source entity
+        self.compile_node(&args[0], code)?;
+        // Compile relationship type keyword
+        self.compile_node(&args[1], code)?;
+        // Compile target entity
+        self.compile_node(&args[2], code)?;
+        // Emit Link opcode
+        code.emit(Opcode::Link);
+        // Link returns nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (unlink source rel-kw target) -> nil
+    ///
+    /// Removes a relationship between two entities.
+    fn compile_unlink(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 3 {
+            return Err(self.error(
+                span,
+                "unlink requires exactly 3 arguments (source rel-type target)",
+            ));
+        }
+
+        // Compile source entity
+        self.compile_node(&args[0], code)?;
+        // Compile relationship type keyword
+        self.compile_node(&args[1], code)?;
+        // Compile target entity
+        self.compile_node(&args[2], code)?;
+        // Emit Unlink opcode
+        code.emit(Opcode::Unlink);
+        // Unlink returns nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
     /// Compiles a quoted expression (as data, not evaluated).
     fn compile_quoted(&mut self, ast: &Ast, code: &mut Bytecode) -> Result<()> {
         // Convert AST to runtime value
@@ -2635,5 +2792,55 @@ mod tests {
 
         // They should have different slots
         assert_ne!(compiler.globals.get("a"), compiler.globals.get("b"));
+    }
+
+    // =========================================================================
+    // World mutation operation tests
+    // =========================================================================
+
+    #[test]
+    fn compile_spawn() {
+        let prog = compile_test("(spawn {:name \"test\"})");
+        assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Spawn)));
+    }
+
+    #[test]
+    fn compile_destroy() {
+        let prog = compile_test("(destroy (entity-ref 1 0))");
+        assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Destroy)));
+    }
+
+    #[test]
+    fn compile_set_component() {
+        let prog = compile_test("(set-component (entity-ref 1 0) :name \"test\")");
+        assert!(
+            prog.code
+                .ops
+                .iter()
+                .any(|op| matches!(op, Opcode::SetComponent))
+        );
+    }
+
+    #[test]
+    fn compile_set_field() {
+        let prog = compile_test("(set-field (entity-ref 1 0) :position :x 10)");
+        assert!(
+            prog.code
+                .ops
+                .iter()
+                .any(|op| matches!(op, Opcode::SetField))
+        );
+    }
+
+    #[test]
+    fn compile_link() {
+        let prog = compile_test("(link (entity-ref 1 0) :contains (entity-ref 2 0))");
+        assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Link)));
+    }
+
+    #[test]
+    fn compile_unlink() {
+        let prog = compile_test("(unlink (entity-ref 1 0) :contains (entity-ref 2 0))");
+        assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Unlink)));
     }
 }

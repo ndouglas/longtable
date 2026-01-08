@@ -22,10 +22,10 @@ Everything else should be in the language itself.
 
 **Target: `longtable_language/src/compiler.rs`**
 
-| Form         | Current              | Target               | Notes                                            |
-| ------------ | -------------------- | -------------------- | ------------------------------------------------ |
+| Form         | Current              | Target               | Notes                                                     |
+| ------------ | -------------------- | -------------------- | --------------------------------------------------------- |
 | `fn:`        | `def`/`defn` in REPL | Compiler declaration | ✅ DONE - Matches `component:`, `action:`, etc. convention |
-| `entity-ref` | REPL + Compiler      | Compiler only        | ✅ DONE                                           |
+| `entity-ref` | REPL + Compiler      | Compiler only        | ✅ DONE                                                    |
 
 ### Implementation ✅ COMPLETED
 
@@ -55,25 +55,28 @@ The compiler now has a "global environment" that persists across compilations:
 
 ---
 
-## Phase 2: World Operations → VM Opcodes
+## Phase 2: World Operations → VM Opcodes ✅ DONE
 
 **Target: `longtable_language/src/opcode.rs` + `vm.rs`**
 
-| Form            | Current       | Target                 | Notes            |
-| --------------- | ------------- | ---------------------- | ---------------- |
-| `spawn`         | REPL `spawn:` | `Opcode::Spawn`        | ✅ Already exists |
-| `link`          | REPL `link:`  | `Opcode::Link`         | ✅ Already exists |
-| `unlink`        | ?             | `Opcode::Unlink`       | ✅ Already exists |
-| `destroy`       | ?             | `Opcode::Destroy`      | ✅ Already exists |
-| `set-component` | ?             | `Opcode::SetComponent` | ✅ Already exists |
-| `set-field`     | ?             | `Opcode::SetField`     | ✅ Already exists |
+| Form            | Current       | Target                 | Notes                        |
+| --------------- | ------------- | ---------------------- | ---------------------------- |
+| `spawn`         | REPL `spawn:` | `Opcode::Spawn`        | ✅ DONE - Compiler form added |
+| `link`          | REPL `link:`  | `Opcode::Link`         | ✅ DONE - Compiler form added |
+| `unlink`        | ?             | `Opcode::Unlink`       | ✅ DONE - Compiler form added |
+| `destroy`       | ?             | `Opcode::Destroy`      | ✅ DONE - Compiler form added |
+| `set-component` | ?             | `Opcode::SetComponent` | ✅ DONE - Compiler form added |
+| `set-field`     | ?             | `Opcode::SetField`     | ✅ DONE - Compiler form added |
 
-### Implementation
+### Implementation ✅ COMPLETED
 
-The opcodes exist but need compiler support to generate them from function calls:
+All world mutation operations now compile to their corresponding opcodes:
 - `(spawn {:name "foo"})` → compile map, emit `Opcode::Spawn`
+- `(destroy entity)` → compile entity, emit `Opcode::Destroy`
+- `(set-component entity :component value)` → compile args, emit `Opcode::SetComponent`
+- `(set-field entity :component :field value)` → compile args, emit `Opcode::SetField`
 - `(link source :rel-type target)` → compile args, emit `Opcode::Link`
-- etc.
+- `(unlink source :rel-type target)` → compile args, emit `Opcode::Unlink`
 
 ---
 
@@ -130,10 +133,10 @@ Similar to Phase 3 - declarations produce effects that get applied to registries
 
 **Target: `longtable_language/src/vm/native/`**
 
-| Form      | Current       | Target          | Notes                      |
-| --------- | ------------- | --------------- | -------------------------- |
-| `print`   | N/A           | Native function | ✅ DONE - Print without newline      |
-| `println` | `say` in REPL | Native function | ✅ DONE - Print with newline         |
+| Form      | Current       | Target          | Notes                                |
+| --------- | ------------- | --------------- | ------------------------------------ |
+| `print`   | N/A           | Native function | ✅ DONE - Print without newline       |
+| `println` | `say` in REPL | Native function | ✅ DONE - Print with newline          |
 | `inspect` | REPL          | Native function | Pending - Debug print with type info |
 
 **Note:** `say` is reserved for the DSL (action handlers use `(say "message")` which will call `println` internally).
@@ -199,15 +202,26 @@ Could stay as REPL forms since they need session context, OR pass session to nat
 
 ## Final REPL Special Forms
 
-After refactoring, the REPL should only have:
+**Current status:** 45 forms (down from ~54)
 
-1. **`run`** - Enter input mode
-2. **`repl`** - Exit input mode
-3. **Debugging commands** (if not moved to functions)
-4. **Time travel commands** (if not moved to functions)
-5. **File I/O** (if not moved to functions)
+Removed forms (now compiler/native):
+- `def` → `fn:` compiler form
+- `say` → `println` native function
+- `entity-ref` → compiler form
+- `spawn:` → `(spawn ...)` compiler form
+- `link:` → `(link ...)` compiler form
 
-Target: **~10-15 forms** down from **54**.
+Remaining REPL forms that legitimately need session/world context:
+1. **Mode switching:** `run`, `repl`
+2. **File I/O:** `load`, `save!`, `load-world!`
+3. **Session ops:** `tick!`, `input!`, `inspect`
+4. **Schema declarations:** `component:`, `relationship:` (need World at load time)
+5. **Vocabulary declarations:** `verb:`, `direction:`, `preposition:`, `pronoun:`, `adverb:`, `type:`, `scope:`, `command:`, `action:` (need parser registries)
+6. **Engine forms:** `rule:`, `query`
+7. **Debugging:** `trace`, `get-traces`, `break`, `unbreak`, `breakpoints`, `watch`, `unwatch`, `watches`, `debug`, `continue`, `step-rule`, `step-phase`, `step-tick`, `why`, `explain-query`
+8. **Time travel:** `rollback!`, `goto-tick!`, `branch!`, `checkout!`, `branches`, `merge!`, `diff`, `history`, `timeline`
+
+Target: These forms legitimately require REPL context and can stay as special forms.
 
 ---
 
@@ -215,7 +229,7 @@ Target: **~10-15 forms** down from **54**.
 
 1. **Phase 1** - `fn:` declaration (unblocks stdlib loading) ✅ DONE
 2. **Phase 5** - `print`/`println` as native (unblocks action handlers) ✅ DONE
-3. **Phase 2** - World operations as compiler forms
+3. **Phase 2** - World operations as compiler forms ✅ DONE
 4. **Phase 3** - Schema declarations
 5. **Phase 4** - Parser vocabulary
 6. **Phase 6** - Query/rule compilation

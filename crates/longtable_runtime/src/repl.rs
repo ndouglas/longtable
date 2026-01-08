@@ -10,8 +10,7 @@ use longtable_engine::{
     Bindings, InputEvent, PatternCompiler, PatternMatcher, QueryCompiler, QueryExecutor,
     RuleCompiler, TickExecutor,
 };
-use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
-use longtable_foundation::{LtMap, Type};
+use longtable_foundation::{EntityId, Error, ErrorKind, Result, Type, Value};
 use longtable_language::{
     Ast, Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
     NamespaceInfo, OnTargetDelete, RelationshipDecl, RuleDecl, StorageKind, Vm, parse,
@@ -347,48 +346,8 @@ impl<E: LineEditor> Repl<E> {
         };
 
         match &list[0] {
-            // (def name value)
-            Ast::Symbol(s, _) if s == "def" => {
-                if list.len() != 3 {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "def requires exactly 2 arguments: (def name value)".to_string(),
-                    )));
-                }
-
-                let name = match &list[1] {
-                    Ast::Symbol(n, _) => n.clone(),
-                    other => {
-                        return Err(Error::new(ErrorKind::Internal(format!(
-                            "def name must be a symbol, got {}",
-                            other.type_name()
-                        ))));
-                    }
-                };
-
-                // Evaluate the value
-                let value = self.eval_form(&list[2])?;
-
-                // Store in session
-                self.session.set_variable(name, value.clone());
-
-                Ok(Some(value))
-            }
-
-            // (say value) - print value to console
-            Ast::Symbol(s, _) if s == "say" => {
-                if list.len() != 2 {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "say requires exactly 1 argument: (say value)".to_string(),
-                    )));
-                }
-
-                let value = self.eval_form(&list[1])?;
-                match &value {
-                    Value::String(s) => println!("{s}"),
-                    other => println!("{other}"),
-                }
-                Ok(Some(Value::Nil))
-            }
+            // NOTE: (def) is replaced by (fn:) in the compiler
+            // NOTE: (say) is replaced by (println) native function
 
             // (run) - enter input/game mode for natural language commands
             Ast::Symbol(s, _) if s == "run" => {
@@ -597,31 +556,8 @@ impl<E: LineEditor> Repl<E> {
                 }
             }
 
-            // (spawn: name :component value ...) - create entity
-            Ast::Symbol(s, _) if s == "spawn:" => {
-                // Use the declaration analyzer to parse the spawn form
-                if let Some(Declaration::Spawn(spawn)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_spawn(&spawn)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid spawn: form".to_string(),
-                    )))
-                }
-            }
-
-            // (link: source :relationship target) - create relationship
-            Ast::Symbol(s, _) if s == "link:" => {
-                // Use the declaration analyzer to parse the link form
-                if let Some(Declaration::Link(link)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_link(&link)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid link: form".to_string(),
-                    )))
-                }
-            }
+            // NOTE: (spawn:) is replaced by (spawn ...) compiler form
+            // NOTE: (link:) is replaced by (link ...) compiler form
 
             // (rule: name :when [...] :then [...]) - define rule
             Ast::Symbol(s, _) if s == "rule:" => {
@@ -725,27 +661,7 @@ impl<E: LineEditor> Repl<E> {
             // (input! "command text") - parse and execute natural language command
             Ast::Symbol(s, _) if s == "input!" => self.handle_input(&list[1..]),
 
-            // (entity-ref index generation) - reconstruct an EntityId
-            Ast::Symbol(s, _) if s == "entity-ref" => {
-                if list.len() != 3 {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "entity-ref requires 2 arguments: (entity-ref index generation)"
-                            .to_string(),
-                    )));
-                }
-                let index = self.eval_form(&list[1])?;
-                let generation = self.eval_form(&list[2])?;
-                match (index, generation) {
-                    (Value::Int(idx), Value::Int(gen_val)) => {
-                        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-                        let entity = EntityId::new(idx as u64, gen_val as u32);
-                        Ok(Some(Value::EntityRef(entity)))
-                    }
-                    _ => Err(Error::new(ErrorKind::Internal(
-                        "entity-ref arguments must be integers".to_string(),
-                    ))),
-                }
-            }
+            // NOTE: (entity-ref) is now a compiler form
 
             // ==================== Parser Vocabulary Declarations ====================
 
@@ -964,111 +880,7 @@ impl<E: LineEditor> Repl<E> {
         }
     }
 
-    /// Executes a spawn declaration to create an entity.
-    fn execute_spawn(&mut self, spawn: &longtable_language::SpawnDecl) -> Result<()> {
-        // Build component map
-        let mut components = LtMap::new();
-
-        for (comp_name, value_ast) in &spawn.components {
-            // Evaluate the value AST to get a Value
-            let value = self.eval_form(value_ast)?;
-
-            // Convert map values: string keys like ":field" need to become proper keywords
-            let value = self.convert_string_keys_to_keywords(value)?;
-
-            // Intern the component keyword
-            let keyword = self
-                .session
-                .world_mut()
-                .interner_mut()
-                .intern_keyword(comp_name);
-
-            components = components.insert(Value::Keyword(keyword), value);
-        }
-
-        // Spawn the entity
-        let world = self.session.world().clone();
-        let (new_world, entity_id) = world.spawn(&components)?;
-
-        // Update session
-        self.session.set_world(new_world);
-        self.session.register_entity(spawn.name.clone(), entity_id);
-
-        Ok(())
-    }
-
-    /// Converts string keys that look like keywords (":foo") to proper `Value::Keyword`.
-    /// This is needed because the compiler currently emits keywords as strings.
-    fn convert_string_keys_to_keywords(&mut self, value: Value) -> Result<Value> {
-        match value {
-            Value::Map(map) => {
-                let mut new_map = LtMap::new();
-                for (k, v) in map.iter() {
-                    let new_key = if let Value::String(s) = k {
-                        if let Some(keyword_name) = s.strip_prefix(':') {
-                            let kid = self
-                                .session
-                                .world_mut()
-                                .interner_mut()
-                                .intern_keyword(keyword_name);
-                            Value::Keyword(kid)
-                        } else {
-                            k.clone()
-                        }
-                    } else {
-                        k.clone()
-                    };
-                    // Recursively convert nested maps
-                    let new_val = self.convert_string_keys_to_keywords(v.clone())?;
-                    new_map = new_map.insert(new_key, new_val);
-                }
-                Ok(Value::Map(new_map))
-            }
-            Value::Vec(vec) => {
-                let new_vec: Result<Vec<_>> = vec
-                    .iter()
-                    .map(|v| self.convert_string_keys_to_keywords(v.clone()))
-                    .collect();
-                Ok(Value::Vec(new_vec?.into_iter().collect()))
-            }
-            other => Ok(other),
-        }
-    }
-
-    /// Executes a link declaration to create a relationship.
-    fn execute_link(&mut self, link: &longtable_language::LinkDecl) -> Result<()> {
-        // Resolve source entity
-        let source = self.session.get_entity(&link.source).ok_or_else(|| {
-            Error::new(ErrorKind::Internal(format!(
-                "unknown entity: {}",
-                link.source
-            )))
-        })?;
-
-        // Resolve target entity
-        let target = self.session.get_entity(&link.target).ok_or_else(|| {
-            Error::new(ErrorKind::Internal(format!(
-                "unknown entity: {}",
-                link.target
-            )))
-        })?;
-
-        // Intern the relationship keyword
-        let relationship = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&link.relationship);
-
-        // Create the link
-        let world = self.session.world().clone();
-        let new_world = world.link(source, relationship, target)?;
-
-        // Update session
-        self.session.set_world(new_world);
-
-        Ok(())
-    }
+    // NOTE: execute_spawn() and execute_link() removed - now handled by compiler forms
 
     /// Executes a query and returns results.
     fn execute_query(
