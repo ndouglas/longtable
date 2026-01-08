@@ -347,6 +347,9 @@ impl<E: LineEditor> Repl<E> {
         let mut ctx = SessionContext::new(&mut self.session);
         let result = self.vm.execute_with_runtime_context(&program, &mut ctx)?;
 
+        // Apply any effects produced by VM execution (Link, Unlink, SetComponent, etc.)
+        self.apply_vm_effects()?;
+
         // Print any output from print/println/say calls
         for line in self.vm.output() {
             print!("{line}");
@@ -354,6 +357,66 @@ impl<E: LineEditor> Repl<E> {
         self.vm.clear_output();
 
         Ok(result)
+    }
+
+    /// Applies VM effects to the world.
+    ///
+    /// Effects like `Link`, `Unlink`, `SetComponent`, etc. are collected during VM execution
+    /// and must be applied to persist the changes to the world state.
+    fn apply_vm_effects(&mut self) -> Result<()> {
+        use longtable_language::VmEffect;
+
+        let effects = self.vm.take_effects();
+        for effect in effects {
+            match effect {
+                VmEffect::Link {
+                    source,
+                    relationship,
+                    target,
+                } => {
+                    let new_world = self.session.world().link(source, relationship, target)?;
+                    *self.session.world_mut() = new_world;
+                }
+                VmEffect::Unlink {
+                    source,
+                    relationship,
+                    target,
+                } => {
+                    let new_world = self.session.world().unlink(source, relationship, target)?;
+                    *self.session.world_mut() = new_world;
+                }
+                VmEffect::SetComponent {
+                    entity,
+                    component,
+                    value,
+                } => {
+                    let new_world = self.session.world().set(entity, component, value)?;
+                    *self.session.world_mut() = new_world;
+                }
+                VmEffect::SetField {
+                    entity,
+                    component,
+                    field,
+                    value,
+                } => {
+                    let new_world = self
+                        .session
+                        .world()
+                        .set_field(entity, component, field, value)?;
+                    *self.session.world_mut() = new_world;
+                }
+                VmEffect::Spawn { components } => {
+                    // Convert map to component data and spawn
+                    let (new_world, _entity_id) = self.session.world().spawn(&components)?;
+                    *self.session.world_mut() = new_world;
+                }
+                VmEffect::Destroy { entity } => {
+                    let new_world = self.session.world().destroy(entity)?;
+                    *self.session.world_mut() = new_world;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Tries to handle special REPL forms (def, load, save!, load-world!, tick!, inspect).
@@ -2027,6 +2090,17 @@ impl<E: LineEditor> Repl<E> {
             }
         }
 
+        // Bind direction if the action expects it and there's a direction token
+        if action_decl.params.contains(&"direction".to_string()) && tokens.len() > 1 {
+            let direction_str = tokens[1].to_lowercase();
+            let direction_kw = self
+                .session
+                .world_mut()
+                .interner_mut()
+                .intern_keyword(&direction_str);
+            bindings.set("direction".to_string(), Value::Keyword(direction_kw));
+        }
+
         // If there are preconditions, evaluate them to get additional bindings
         if !action_decl.preconditions.is_empty() {
             match self.evaluate_preconditions(&action_decl, &bindings) {
@@ -2185,13 +2259,13 @@ impl<E: LineEditor> Repl<E> {
                     .collect();
                 Ast::List(substituted, *span)
             }
-            // Vectors from deserialization - substitute and convert to List for evaluation
+            // Vectors - substitute but keep as vectors (needed for let bindings, etc.)
             Ast::Vector(elements, span) => {
                 let substituted: Vec<Ast> = elements
                     .iter()
                     .map(|elem| self.substitute_variables(elem, bindings))
                     .collect();
-                Ast::List(substituted, *span)
+                Ast::Vector(substituted, *span)
             }
             // Other AST types pass through unchanged
             _ => ast.clone(),

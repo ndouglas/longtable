@@ -59,6 +59,25 @@ pub trait VmContext {
 
     /// Gets the source entities of relationships to a target.
     fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId>;
+
+    /// Finds relationship entities where the type starts with the given prefix.
+    ///
+    /// - `prefix`: String prefix to match against relationship type names (e.g., "exit/")
+    /// - `source`: Optional source entity filter
+    /// - `target`: Optional target entity filter
+    ///
+    /// Returns the relationship entity IDs matching the prefix and filters.
+    fn find_relationships_by_prefix(
+        &self,
+        prefix: &str,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId>;
+
+    /// Converts a keyword to its string representation.
+    ///
+    /// Returns the keyword name without the leading colon (e.g., `KeywordId` for `:foo/bar` returns `"foo/bar"`).
+    fn keyword_to_string(&self, keyword: KeywordId) -> Option<String>;
 }
 
 // =============================================================================
@@ -341,6 +360,23 @@ impl VmContext for WorldContext<'_> {
     fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
         self.world.sources(target, rel_type).collect()
     }
+
+    fn find_relationships_by_prefix(
+        &self,
+        prefix: &str,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        self.world
+            .find_relationships_by_prefix(prefix, source, target)
+    }
+
+    fn keyword_to_string(&self, keyword: KeywordId) -> Option<String> {
+        self.world
+            .interner()
+            .get_keyword(keyword)
+            .map(|s| s.to_string())
+    }
 }
 
 // =============================================================================
@@ -404,6 +440,19 @@ impl VmContext for NoRuntimeContext {
 
     fn sources(&self, _target: EntityId, _rel_type: KeywordId) -> Vec<EntityId> {
         Vec::new()
+    }
+
+    fn find_relationships_by_prefix(
+        &self,
+        _prefix: &str,
+        _source: Option<EntityId>,
+        _target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        Vec::new()
+    }
+
+    fn keyword_to_string(&self, _keyword: KeywordId) -> Option<String> {
+        None
     }
 }
 
@@ -553,6 +602,20 @@ impl<C: VmContext> VmContext for ReadOnlyContext<'_, C> {
 
     fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
         self.inner.sources(target, rel_type)
+    }
+
+    fn find_relationships_by_prefix(
+        &self,
+        prefix: &str,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        self.inner
+            .find_relationships_by_prefix(prefix, source, target)
+    }
+
+    fn keyword_to_string(&self, keyword: KeywordId) -> Option<String> {
+        self.inner.keyword_to_string(keyword)
     }
 }
 

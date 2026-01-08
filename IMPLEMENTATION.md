@@ -959,6 +959,9 @@ Implement all spec functions organized by category:
 - [x] String functions (str/*, format) — split, join, trim, replace, starts-with?, ends-with?, contains?, blank?, substring, upper, lower, format
 - [x] Predicate functions (nil?, some?, type checks) — nil?, int?, float?, string?, keyword?, symbol?, vector?, list?, map?, set?, bool?, number?, coll?, fn?, entity?
 - [x] Higher-order function opcodes — Map, Filter, Reduce, Every, Some, TakeWhile, DropWhile, Remove, GroupBy, ZipWith, Repeatedly
+- [x] Relationship query functions — find-relationships-by-prefix (prefix-based relationship search for namespace queries like "exit/")
+- [x] Type conversion functions — keyword->string (converts keyword to string for manipulation)
+- [x] Room description functions — describe-room, list-exits, format-direction-list, exit-direction-name (stdlib functions for text adventure room descriptions with prose exit listing)
 - [x] Test each function with spec examples (164+ native function tests across collection.rs, math.rs, predicates.rs, string.rs + 22 HOF opcode tests in vm/tests.rs)
 - [ ] Document each function
 

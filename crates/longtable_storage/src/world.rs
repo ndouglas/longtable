@@ -600,6 +600,46 @@ impl World {
             .collect()
     }
 
+    /// Finds relationship entities where the type name starts with the given prefix.
+    ///
+    /// This is useful for querying relationships by namespace, e.g., `"exit/"` to find
+    /// all exit relationships (`:exit/north`, `:exit/south`, etc.).
+    ///
+    /// Parameters are optional filters:
+    /// - `prefix`: String prefix to match against relationship type names
+    /// - `source`: Only return relationships from this source entity
+    /// - `target`: Only return relationships to this target entity
+    ///
+    /// Returns entity IDs of matching relationship entities.
+    ///
+    /// Note: This is currently O(n) over all entities. Will be optimized
+    /// with indexes in Phase 5.6.
+    #[must_use]
+    pub fn find_relationships_by_prefix(
+        &self,
+        prefix: &str,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        // First, get all relationships filtered by source/target
+        let candidates = self.find_relationships(None, source, target);
+
+        // Then filter by prefix
+        candidates
+            .into_iter()
+            .filter(|&entity| {
+                if let Some(Value::Map(map)) = self.components.get(entity, KeywordId::REL_TYPE) {
+                    if let Some(Value::Keyword(kw)) = map.get(&Value::Keyword(KeywordId::VALUE)) {
+                        if let Some(name) = self.interner.get_keyword(*kw) {
+                            return name.starts_with(prefix);
+                        }
+                    }
+                }
+                false
+            })
+            .collect()
+    }
+
     /// Checks if an entity has an outgoing relationship of the given type.
     ///
     /// Note: This is currently O(n) over all relationship entities.

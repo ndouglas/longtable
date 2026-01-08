@@ -440,6 +440,23 @@ impl VmContext for SessionContext<'_> {
     fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
         self.session.world.sources(target, rel_type).collect()
     }
+
+    fn find_relationships_by_prefix(
+        &self,
+        prefix: &str,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        self.session
+            .world
+            .find_relationships_by_prefix(prefix, source, target)
+    }
+
+    fn keyword_to_string(&self, keyword: KeywordId) -> Option<String> {
+        self.interner()
+            .get_keyword(keyword)
+            .map(ToString::to_string)
+    }
 }
 
 // =============================================================================
@@ -775,6 +792,10 @@ fn value_to_ast(value: &Value, interner: &Interner) -> longtable_language::Ast {
         Value::Vec(vec) => {
             let elements: Vec<Ast> = vec.iter().map(|v| value_to_ast(v, interner)).collect();
             Ast::Vector(elements, span)
+        }
+        Value::List(list) => {
+            let elements: Vec<Ast> = list.iter().map(|v| value_to_ast(v, interner)).collect();
+            Ast::List(elements, span)
         }
         Value::Set(set) => {
             let elements: Vec<Ast> = set.iter().map(|v| value_to_ast(v, interner)).collect();

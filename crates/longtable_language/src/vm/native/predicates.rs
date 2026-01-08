@@ -69,9 +69,9 @@ pub(crate) fn native_symbol_p(args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(matches!(args.first(), Some(Value::Symbol(_)))))
 }
 
-/// Predicate: list? (vectors are lists in our model)
+/// Predicate: list? - true for List (function call AST form)
 pub(crate) fn native_list_p(args: &[Value]) -> Result<Value> {
-    Ok(Value::Bool(matches!(args.first(), Some(Value::Vec(_)))))
+    Ok(Value::Bool(matches!(args.first(), Some(Value::List(_)))))
 }
 
 /// Predicate: vector?
@@ -102,11 +102,11 @@ pub(crate) fn native_number_p(args: &[Value]) -> Result<Value> {
     )))
 }
 
-/// Predicate: coll? - true for vec, set, or map
+/// Predicate: coll? - true for vec, list, set, or map
 pub(crate) fn native_coll_p(args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(matches!(
         args.first(),
-        Some(Value::Vec(_) | Value::Set(_) | Value::Map(_))
+        Some(Value::Vec(_) | Value::List(_) | Value::Set(_) | Value::Map(_))
     )))
 }
 
@@ -135,6 +135,7 @@ pub(crate) fn native_type(args: &[Value]) -> Result<Value> {
         Some(Value::Keyword(_)) => "keyword",
         Some(Value::EntityRef(_)) => "entity",
         Some(Value::Vec(_)) => "vector",
+        Some(Value::List(_)) => "list",
         Some(Value::Set(_)) => "set",
         Some(Value::Map(_)) => "map",
         Some(Value::Fn(_)) => "fn",

@@ -66,6 +66,10 @@ pub(crate) fn format_value(value: &Value) -> String {
             let items: Vec<_> = v.iter().map(format_value).collect();
             format!("[{}]", items.join(" "))
         }
+        Value::List(l) => {
+            let items: Vec<_> = l.iter().map(format_value).collect();
+            format!("({})", items.join(" "))
+        }
         Value::Set(s) => {
             let items: Vec<_> = s.iter().map(format_value).collect();
             format!("#{{{}}}", items.join(" "))

@@ -32,8 +32,10 @@ pub enum Value {
     Keyword(KeywordId),
     /// Entity reference.
     EntityRef(EntityId),
-    /// Persistent vector.
+    /// Persistent vector (data).
     Vec(LtVec<Value>),
+    /// List (function calls in serialized AST).
+    List(LtVec<Value>),
     /// Persistent set.
     Set(LtSet<Value>),
     /// Persistent map.
@@ -170,7 +172,7 @@ impl Value {
             Self::Symbol(_) => Type::Symbol,
             Self::Keyword(_) => Type::Keyword,
             Self::EntityRef(_) => Type::EntityRef,
-            Self::Vec(_) => Type::vec(Type::Any),
+            Self::Vec(_) | Self::List(_) => Type::vec(Type::Any),
             Self::Set(_) => Type::set(Type::Any),
             Self::Map(_) => Type::map(Type::Any, Type::Any),
             Self::Fn(_) => Type::Fn(crate::types::Arity::Variadic(0)),
@@ -307,7 +309,7 @@ impl PartialEq for Value {
             (Self::Symbol(a), Self::Symbol(b)) => a == b,
             (Self::Keyword(a), Self::Keyword(b)) => a == b,
             (Self::EntityRef(a), Self::EntityRef(b)) => a == b,
-            (Self::Vec(a), Self::Vec(b)) => a == b,
+            (Self::Vec(a), Self::Vec(b)) | (Self::List(a), Self::List(b)) => a == b,
             (Self::Set(a), Self::Set(b)) => a == b,
             (Self::Map(a), Self::Map(b)) => a == b,
             (Self::Fn(a), Self::Fn(b)) => a == b,
@@ -331,6 +333,7 @@ impl Hash for Value {
             Self::Keyword(id) => id.hash(state),
             Self::EntityRef(id) => id.hash(state),
             Self::Vec(v) => v.hash(state),
+            Self::List(l) => l.hash(state),
             Self::Set(s) => s.hash(state),
             Self::Map(m) => m.hash(state),
             Self::Fn(f) => f.hash(state),
@@ -371,6 +374,7 @@ impl fmt::Debug for Value {
             Self::Keyword(id) => write!(f, "Keyword({id:?})"),
             Self::EntityRef(id) => write!(f, "{id:?}"),
             Self::Vec(v) => write!(f, "{v:?}"),
+            Self::List(l) => write!(f, "({l:?})"),
             Self::Set(s) => write!(f, "#{s:?}"),
             Self::Map(m) => write!(f, "{m:?}"),
             Self::Fn(func) => write!(f, "{func:?}"),
@@ -398,6 +402,16 @@ impl fmt::Display for Value {
                     write!(f, "{item}")?;
                 }
                 write!(f, "]")
+            }
+            Self::List(l) => {
+                write!(f, "(")?;
+                for (i, item) in l.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, " ")?;
+                    }
+                    write!(f, "{item}")?;
+                }
+                write!(f, ")")
             }
             Self::Set(s) => {
                 write!(f, "#{{")?;
@@ -791,6 +805,13 @@ mod serde_support {
                     }
                     seq.end()
                 }
+                Value::List(l) => {
+                    // Serialize list as a tagged map to distinguish from Vec
+                    let mut map = serializer.serialize_map(Some(1))?;
+                    let items: Vec<_> = l.iter().cloned().collect();
+                    map.serialize_entry("__list__", &items)?;
+                    map.end()
+                }
                 Value::Set(s) => {
                     let mut map = serializer.serialize_map(Some(1))?;
                     let items: Vec<_> = s.iter().cloned().collect();
@@ -894,6 +915,10 @@ mod serde_support {
                     "__entity__" => {
                         let (index, generation): (u64, u32) = map.next_value()?;
                         Ok(Value::EntityRef(EntityId::new(index, generation)))
+                    }
+                    "__list__" => {
+                        let items: Vec<Value> = map.next_value()?;
+                        Ok(Value::List(items.into_iter().collect()))
                     }
                     "__set__" => {
                         let items: Vec<Value> = map.next_value()?;

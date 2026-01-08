@@ -688,6 +688,11 @@ impl Compiler {
                 "get-field" => return self.compile_get_field(args, span, code),
                 "with-component" => return self.compile_with_component(args, span, code),
                 "find-relationships" => return self.compile_find_relationships(args, span, code),
+                "find-relationships-by-prefix" => {
+                    return self.compile_find_relationships_by_prefix(args, span, code);
+                }
+                "keyword->string" => return self.compile_keyword_to_string(args, span, code),
+                "string->keyword" => return self.compile_string_to_keyword(args, span, code),
                 "targets" => return self.compile_targets(args, span, code),
                 "sources" => return self.compile_sources(args, span, code),
                 // Entity construction
@@ -1956,6 +1961,70 @@ impl Compiler {
         Ok(())
     }
 
+    /// Compiles (find-relationships-by-prefix prefix-string source-or-nil target-or-nil) -> [relationship-entities...]
+    fn compile_find_relationships_by_prefix(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 3 {
+            return Err(self.error(
+                span,
+                "find-relationships-by-prefix requires exactly 3 arguments (prefix source target)",
+            ));
+        }
+
+        // Compile prefix string
+        self.compile_node(&args[0], code)?;
+        // Compile source (or nil)
+        self.compile_node(&args[1], code)?;
+        // Compile target (or nil)
+        self.compile_node(&args[2], code)?;
+        // Emit FindRelationshipsByPrefix opcode
+        code.emit(Opcode::FindRelationshipsByPrefix);
+
+        Ok(())
+    }
+
+    /// Compiles (keyword->string keyword) -> string
+    fn compile_keyword_to_string(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 1 {
+            return Err(self.error(span, "keyword->string requires exactly 1 argument"));
+        }
+
+        // Compile keyword argument
+        self.compile_node(&args[0], code)?;
+        // Emit KeywordToString opcode
+        code.emit(Opcode::KeywordToString);
+
+        Ok(())
+    }
+
+    /// Compiles (string->keyword string) -> keyword
+    fn compile_string_to_keyword(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 1 {
+            return Err(self.error(span, "string->keyword requires exactly 1 argument"));
+        }
+
+        // Compile string argument
+        self.compile_node(&args[0], code)?;
+        // Emit StringToKeyword opcode
+        code.emit(Opcode::StringToKeyword);
+
+        Ok(())
+    }
+
     /// Compiles (targets source rel-type) -> [target-entities...]
     fn compile_targets(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
         if args.len() != 2 {
@@ -2977,7 +3046,7 @@ impl Compiler {
             Ast::Keyword(s, _) => Value::String(format!(":{s}").into()),
             Ast::List(elements, _) => {
                 let items: Result<Vec<_>> = elements.iter().map(|e| self.ast_to_value(e)).collect();
-                Value::Vec(items?.into_iter().collect())
+                Value::List(items?.into_iter().collect())
             }
             Ast::Vector(elements, _) => {
                 let items: Result<Vec<_>> = elements.iter().map(|e| self.ast_to_value(e)).collect();

@@ -99,6 +99,8 @@ pub enum Opcode {
     WithComponent,
     /// Find relationship entities: `[rel_type_or_nil, source_or_nil, target_or_nil] -> [vec<entity>]`
     FindRelationships,
+    /// Find relationships by type prefix: `[prefix_string, source_or_nil, target_or_nil] -> [vec<entity>]`
+    FindRelationshipsByPrefix,
     /// Get targets of relationships from source: `[source, rel_type] -> [vec<entity>]`
     Targets,
     /// Get sources of relationships to target: `[target, rel_type] -> [vec<entity>]`
@@ -197,6 +199,10 @@ pub enum Opcode {
     // === Misc ===
     /// Print value (for debugging): `[value] -> []`
     Print,
+    /// Convert keyword to string: `[keyword] -> [string]`
+    KeywordToString,
+    /// Convert string to keyword: `[string] -> [keyword]`
+    StringToKeyword,
 
     // === Higher-Order Functions ===
     /// Map function over collection: `[fn, coll] -> [result_vec]`

@@ -2,18 +2,76 @@
 ;; Provides commonly used functions for world interaction.
 
 ;; =============================================================================
+;; Exit Listing Functions
+;; =============================================================================
+
+;; Extracts the direction name from a relationship entity.
+;; e.g., relationship with :rel/type = :exit/north -> "north"
+(fn: exit-direction-name [rel-entity]
+  (let [rel-type (get-field rel-entity :rel/type :value)]
+    (if (nil? rel-type)
+      nil
+      (let [type-str (keyword->string rel-type)
+            parts (str/split type-str "/")]
+        (if (> (count parts) 1)
+          (get parts 1)
+          type-str)))))
+
+;; Formats a list of directions as English prose.
+;; ["north"] -> "north"
+;; ["north" "south"] -> "north or south"
+;; ["north" "south" "east"] -> "north, south, or east"
+(fn: format-direction-list [directions]
+  (let [n (count directions)]
+    (if (= n 0)
+      ""
+      (if (= n 1)
+        (first directions)
+        (if (= n 2)
+          (str (first directions) " or " (get directions 1))
+          (str (str/join ", " (take (- n 1) directions))
+               ", or " (last directions)))))))
+
+;; Lists exits from a room as prose.
+;; Returns a formatted string like "You can go north or south."
+(fn: list-exits [room]
+  (if (nil? room)
+    ""
+    (let [exit-rels (find-relationships-by-prefix "exit/" room nil)
+          directions (filter (fn [d] (not (nil? d)))
+                            (map exit-direction-name exit-rels))]
+      (if (empty? directions)
+        ""
+        (str "\nYou can go " (format-direction-list directions) ".")))))
+
+;; =============================================================================
+;; Direction Helper Functions
+;; =============================================================================
+
+;; Converts a direction keyword to an exit relationship keyword.
+;; e.g., :south -> :exit/south
+(fn: direction->exit-keyword [direction]
+  (string->keyword (str "exit/" (keyword->string direction))))
+
+;; Gets the destination room in a given direction from a room.
+;; Returns nil if no exit exists in that direction.
+(fn: get-exit [room direction]
+  (first (targets room (direction->exit-keyword direction))))
+
+;; =============================================================================
 ;; Room Description Functions
 ;; =============================================================================
 
-;; Describes a room, returning its name and description as a formatted string.
+;; Describes a room, returning its name, description, and exits as a formatted string.
 ;; Returns an empty string if room is nil.
 (fn: describe-room [room]
   (if (nil? room)
     ""
     (let [name (get-field room :name :value)
-          desc (get-field room :description :value)]
+          desc (get-field room :description :value)
+          exits (list-exits room)]
       (if name
-        (str "\n" name "\n" (if desc desc ""))
+        (str "\n" name "\n" (if desc desc "") exits)
         ""))))
 
 ;; =============================================================================

@@ -542,6 +542,38 @@ impl Vm {
                     self.push(Value::Vec(entities));
                 }
 
+                Opcode::FindRelationshipsByPrefix => {
+                    let target_val = self.pop()?;
+                    let source_val = self.pop()?;
+                    let prefix_val = self.pop()?;
+
+                    let prefix = match &prefix_val {
+                        Value::String(s) => s.as_ref(),
+                        Value::Nil => "",
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::String,
+                                actual: prefix_val.value_type(),
+                            }));
+                        }
+                    };
+                    let source = match &source_val {
+                        Value::Nil => None,
+                        _ => Some(extract_entity(&source_val)?),
+                    };
+                    let target = match &target_val {
+                        Value::Nil => None,
+                        _ => Some(extract_entity(&target_val)?),
+                    };
+
+                    let entities: LtVec<Value> = ctx
+                        .find_relationships_by_prefix(prefix, source, target)
+                        .into_iter()
+                        .map(Value::EntityRef)
+                        .collect();
+                    self.push(Value::Vec(entities));
+                }
+
                 Opcode::Targets => {
                     let rel_type_val = self.pop()?;
                     let source_val = self.pop()?;
@@ -789,6 +821,44 @@ impl Vm {
                 Opcode::Print => {
                     let value = self.pop()?;
                     self.output.push(format_value(&value));
+                }
+
+                Opcode::KeywordToString => {
+                    let value = self.pop()?;
+                    match value {
+                        Value::Keyword(kw) => {
+                            let result = ctx.keyword_to_string(kw).unwrap_or_default();
+                            self.push(Value::String(result.into()));
+                        }
+                        Value::Nil => {
+                            self.push(Value::String(String::new().into()));
+                        }
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Keyword,
+                                actual: value.value_type(),
+                            }));
+                        }
+                    }
+                }
+
+                Opcode::StringToKeyword => {
+                    let value = self.pop()?;
+                    match value {
+                        Value::String(s) => {
+                            let keyword_id = ctx.intern_keyword(&s);
+                            self.push(Value::Keyword(keyword_id));
+                        }
+                        Value::Nil => {
+                            self.push(Value::Nil);
+                        }
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::String,
+                                actual: value.value_type(),
+                            }));
+                        }
+                    }
                 }
 
                 // Higher-order functions
