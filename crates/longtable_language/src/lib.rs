@@ -76,4 +76,4 @@ pub use parser::{Parser, parse, parse_one};
 pub use span::Span;
 pub use stdlib_macros::register_stdlib_macros;
 pub use token::{Token, TokenKind};
-pub use vm::{Vm, VmContext, VmEffect, WorldContext, eval};
+pub use vm::{RuntimeContext, Vm, VmContext, VmEffect, WorldContext, eval};

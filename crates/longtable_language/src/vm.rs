@@ -29,7 +29,7 @@ mod native;
 #[cfg(test)]
 mod tests;
 
-pub use context::{VmContext, VmEffect, WorldContext};
+pub use context::{RuntimeContext, VmContext, VmEffect, WorldContext};
 
 use context::NoContext;
 use native::{

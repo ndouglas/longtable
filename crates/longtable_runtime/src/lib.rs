@@ -29,4 +29,4 @@ mod session;
 pub use editor::{LineEditor, RustylineEditor};
 pub use repl::Repl;
 pub use serialize::{from_bytes, load_from_file, save_to_file, to_bytes};
-pub use session::Session;
+pub use session::{Session, SessionContext};
