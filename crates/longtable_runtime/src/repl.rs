@@ -338,7 +338,15 @@ impl<E: LineEditor> Repl<E> {
 
         // Execute with full RuntimeContext for registration opcode support
         let mut ctx = SessionContext::new(&mut self.session);
-        self.vm.execute_with_runtime_context(&program, &mut ctx)
+        let result = self.vm.execute_with_runtime_context(&program, &mut ctx)?;
+
+        // Print any output from print/println/say calls
+        for line in self.vm.output() {
+            print!("{line}");
+        }
+        self.vm.clear_output();
+
+        Ok(result)
     }
 
     /// Tries to handle special REPL forms (def, load, save!, load-world!, tick!, inspect).
@@ -2086,8 +2094,14 @@ impl<E: LineEditor> Repl<E> {
 
     /// Executes a single action handler expression with variable bindings.
     fn execute_action_handler(&mut self, handler: &Ast, bindings: &Bindings) -> Result<Value> {
+        // Convert Vector to List for evaluation (handlers may be deserialized as vectors)
+        let handler = match handler {
+            Ast::Vector(elements, span) => Ast::List(elements.clone(), *span),
+            other => other.clone(),
+        };
+
         // Check for special forms like (say "...")
-        if let Ast::List(elements, _) = handler {
+        if let Ast::List(ref elements, _) = handler {
             if let Some(Ast::Symbol(name, _)) = elements.first() {
                 if name == "say" {
                     // Handle (say expr) specially
@@ -2105,7 +2119,7 @@ impl<E: LineEditor> Repl<E> {
         }
 
         // Fall back to general evaluation with bindings
-        self.eval_with_bindings(handler, bindings)
+        self.eval_with_bindings(&handler, bindings)
     }
 
     /// Evaluates an AST with variable bindings.
@@ -2124,18 +2138,21 @@ impl<E: LineEditor> Repl<E> {
         }
 
         // For function calls, substitute variables in arguments
-        if let Ast::List(elements, span) = ast {
-            if !elements.is_empty() {
-                // Substitute variables in each element
-                let substituted: Vec<Ast> = elements
-                    .iter()
-                    .map(|elem| self.substitute_variables(elem, bindings))
-                    .collect();
+        // Handle both List and Vector (vectors from deserialization should be treated as lists)
+        let (Ast::List(elements, span) | Ast::Vector(elements, span)) = ast else {
+            return self.eval_form(ast);
+        };
 
-                // Evaluate the substituted form
-                let new_ast = Ast::List(substituted, *span);
-                return self.eval_form(&new_ast);
-            }
+        if !elements.is_empty() {
+            // Substitute variables in each element
+            let substituted: Vec<Ast> = elements
+                .iter()
+                .map(|elem| self.substitute_variables(elem, bindings))
+                .collect();
+
+            // Evaluate the substituted form as a list (function call)
+            let new_ast = Ast::List(substituted, *span);
+            return self.eval_form(&new_ast);
         }
 
         // Fall back to normal evaluation
@@ -2155,6 +2172,14 @@ impl<E: LineEditor> Repl<E> {
                 ast.clone()
             }
             Ast::List(elements, span) => {
+                let substituted: Vec<Ast> = elements
+                    .iter()
+                    .map(|elem| self.substitute_variables(elem, bindings))
+                    .collect();
+                Ast::List(substituted, *span)
+            }
+            // Vectors from deserialization - substitute and convert to List for evaluation
+            Ast::Vector(elements, span) => {
                 let substituted: Vec<Ast> = elements
                     .iter()
                     .map(|elem| self.substitute_variables(elem, bindings))

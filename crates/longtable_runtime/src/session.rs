@@ -9,13 +9,17 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use longtable_debug::{DebugSession, Timeline, Tracer};
+use longtable_engine::PatternCompiler;
+use longtable_engine::rule::CompiledRule;
 use longtable_foundation::{EntityId, Error, ErrorKind, Interner, KeywordId, Result, Type, Value};
+use longtable_language::Span;
+use longtable_language::declaration::{Pattern, PatternClause, PatternValue, Precondition};
 use longtable_language::{ActionDecl, ModuleRegistry, NamespaceContext, RuntimeContext, VmContext};
 use longtable_parser::scope::CompiledScope;
 use longtable_parser::vocabulary::{
     CommandSyntax, Direction, NounType, Preposition, Pronoun, PronounGender, PronounNumber, Verb,
 };
-use longtable_parser::{ActionRegistry, VocabularyRegistry};
+use longtable_parser::{ActionRegistry, CompiledAction, VocabularyRegistry};
 use longtable_storage::World;
 use longtable_storage::schema::{
     Cardinality, ComponentSchema, FieldSchema, OnDelete, RelationshipSchema,
@@ -67,6 +71,10 @@ pub struct Session {
     /// Full action declarations keyed by action name.
     /// Includes params, preconditions, and handlers.
     action_decls: HashMap<KeywordId, ActionDecl>,
+
+    /// Compiled rules for tick execution.
+    /// Rules are compiled when registered via `register_rule`.
+    compiled_rules: Vec<CompiledRule>,
 }
 
 impl Session {
@@ -88,6 +96,7 @@ impl Session {
             action_registry: ActionRegistry::new(),
             scopes: Vec::new(),
             action_decls: HashMap::new(),
+            compiled_rules: Vec::new(),
         }
     }
 
@@ -109,6 +118,7 @@ impl Session {
             action_registry: ActionRegistry::new(),
             scopes: Vec::new(),
             action_decls: HashMap::new(),
+            compiled_rules: Vec::new(),
         }
     }
 
@@ -297,6 +307,23 @@ impl Session {
     #[must_use]
     pub fn get_action_decl(&self, action_name: KeywordId) -> Option<&ActionDecl> {
         self.action_decls.get(&action_name)
+    }
+
+    /// Returns a reference to the compiled rules.
+    #[must_use]
+    pub fn compiled_rules(&self) -> &[CompiledRule] {
+        &self.compiled_rules
+    }
+
+    /// Adds a compiled rule.
+    pub fn add_compiled_rule(&mut self, rule: CompiledRule) {
+        self.compiled_rules.push(rule);
+    }
+
+    /// Returns the number of compiled rules.
+    #[must_use]
+    pub fn compiled_rule_count(&self) -> usize {
+        self.compiled_rules.len()
     }
 }
 
@@ -495,22 +522,73 @@ impl RuntimeContext for SessionContext<'_> {
     }
 
     fn register_action(&mut self, data: &Value) -> Result<()> {
-        // Actions have complex structure - extract name and store
-        let _name = extract_keyword_field(data, "name", self.interner())?;
-        // TODO: Compile action and register in action_registry
-        // For now, this is a placeholder
+        // Extract :name
+        let name_kw = extract_keyword_field(data, "name", self.interner())?;
+        let name_str = self
+            .interner()
+            .get_keyword(name_kw)
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Extract :params as Vec<String>
+        let params = extract_string_vec(data, "params", self.interner());
+
+        // Extract :preconditions
+        let preconditions = parse_preconditions_from_value(data, self.interner())?;
+
+        // Extract :handler as Vec<Ast>
+        let handler = parse_handler_from_value(data, self.interner());
+
+        // Construct ActionDecl
+        let action_decl = ActionDecl {
+            name: name_str,
+            params,
+            preconditions,
+            handler,
+            span: Span::default(),
+        };
+
+        // Store in action_decls for execution
+        self.session.register_action_decl(name_kw, action_decl);
+
+        // Register in action_registry for existence check
+        let compiled_action = CompiledAction::new(name_kw);
+        self.session.action_registry_mut().register(compiled_action);
+
         Ok(())
     }
 
     fn register_rule(&mut self, data: &Value) -> Result<EntityId> {
-        // Rules are entities with :meta/rule component
-        // This will spawn an entity and compile the rule
-        let _name = extract_keyword_field(data, "name", self.interner())?;
-        // TODO: Spawn rule entity, compile pattern/action, store in World
-        // For now, return a placeholder entity ID
-        Err(Error::new(ErrorKind::Internal(
-            "rule registration not yet implemented".to_string(),
-        )))
+        // Parse the rule data from Value map
+        let name = extract_keyword_field(data, "name", self.interner())?;
+        #[allow(clippy::cast_possible_truncation)]
+        let salience = extract_int_field(data, "salience", self.interner()).unwrap_or(0) as i32;
+        let once = extract_bool_field(data, "once", self.interner()).unwrap_or(false);
+        let enabled = extract_bool_field(data, "enabled", self.interner()).unwrap_or(true);
+
+        // Parse the pattern
+        let pattern = parse_pattern_from_value(data, self.interner())?;
+
+        // Compile the pattern
+        let compiled_pattern =
+            PatternCompiler::compile(&pattern, self.session.world_mut().interner_mut())?;
+
+        // Create the compiled rule
+        let rule = CompiledRule {
+            name,
+            salience,
+            pattern: compiled_pattern,
+            once,
+            enabled,
+        };
+
+        // Store the compiled rule in the session
+        self.session.add_compiled_rule(rule);
+
+        // Create a placeholder entity ID for the rule
+        // In the future, rules could be first-class entities
+        let rule_entity = EntityId::new(0, 0);
+        Ok(rule_entity)
     }
 
     fn intern_keyword(&mut self, name: &str) -> KeywordId {
@@ -624,6 +702,239 @@ fn extract_int_field(value: &Value, field_name: &str, interner: &Interner) -> Op
     }
 
     None
+}
+
+/// Extracts an optional boolean field.
+fn extract_bool_field(value: &Value, field_name: &str, interner: &Interner) -> Option<bool> {
+    let map = value.as_map()?;
+
+    for (k, v) in map.iter() {
+        if let Value::Keyword(kw) = k {
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    if let Value::Bool(b) = v {
+                        return Some(*b);
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Extracts a Value field from a Value map.
+fn extract_value_field(value: &Value, field_name: &str, interner: &Interner) -> Option<Value> {
+    let map = value.as_map()?;
+
+    for (k, v) in map.iter() {
+        if let Value::Keyword(kw) = k {
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    return Some(v.clone());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Converts a Value back to an AST node.
+///
+/// This is the inverse of `ast_to_value` in the compiler.
+/// Note: Some information is lost in the round-trip (e.g., symbols become prefixed strings).
+fn value_to_ast(value: &Value, interner: &Interner) -> longtable_language::Ast {
+    use longtable_language::Ast;
+    let span = Span::default();
+
+    match value {
+        Value::Nil => Ast::Nil(span),
+        Value::Bool(b) => Ast::Bool(*b, span),
+        Value::Int(n) => Ast::Int(*n, span),
+        Value::Float(f) => Ast::Float(*f, span),
+        Value::String(s) => {
+            let s_str = s.to_string();
+            // Check if it's a serialized symbol ('foo) or keyword (:foo)
+            if let Some(sym_name) = s_str.strip_prefix('\'') {
+                Ast::Symbol(sym_name.to_string(), span)
+            } else if let Some(kw_name) = s_str.strip_prefix(':') {
+                Ast::Keyword(kw_name.to_string(), span)
+            } else {
+                Ast::String(s_str, span)
+            }
+        }
+        Value::Keyword(kw) => {
+            let name = interner.get_keyword(*kw).unwrap_or("unknown");
+            Ast::Keyword(name.to_string(), span)
+        }
+        Value::Symbol(sym) => {
+            let name = interner.get_symbol(*sym).unwrap_or("unknown");
+            Ast::Symbol(name.to_string(), span)
+        }
+        Value::Vec(vec) => {
+            let elements: Vec<Ast> = vec.iter().map(|v| value_to_ast(v, interner)).collect();
+            Ast::Vector(elements, span)
+        }
+        Value::Set(set) => {
+            let elements: Vec<Ast> = set.iter().map(|v| value_to_ast(v, interner)).collect();
+            Ast::Set(elements, span)
+        }
+        Value::Map(map) => {
+            let entries: Vec<(Ast, Ast)> = map
+                .iter()
+                .map(|(k, v)| (value_to_ast(k, interner), value_to_ast(v, interner)))
+                .collect();
+            Ast::Map(entries, span)
+        }
+        Value::EntityRef(id) => {
+            // Represent as a tagged literal
+            #[allow(clippy::cast_possible_wrap)]
+            Ast::Tagged(
+                "entity".to_string(),
+                Box::new(Ast::Vector(
+                    vec![
+                        Ast::Int(id.index as i64, span),
+                        Ast::Int(i64::from(id.generation), span),
+                    ],
+                    span,
+                )),
+                span,
+            )
+        }
+        Value::Fn(_) => {
+            // Functions can't be serialized back to AST
+            Ast::Nil(span)
+        }
+    }
+}
+
+/// Extracts a vector of strings from a field.
+fn extract_string_vec(value: &Value, field_name: &str, interner: &Interner) -> Vec<String> {
+    let Some(map) = value.as_map() else {
+        return Vec::new();
+    };
+
+    for (k, v) in map.iter() {
+        if let Value::Keyword(kw) = k {
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    if let Value::Vec(vec) = v {
+                        return vec
+                            .iter()
+                            .filter_map(|v| {
+                                if let Value::String(s) = v {
+                                    Some(s.to_string())
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                    }
+                }
+            }
+        }
+    }
+
+    Vec::new()
+}
+
+/// Parses preconditions from a Value map.
+fn parse_preconditions_from_value(data: &Value, interner: &Interner) -> Result<Vec<Precondition>> {
+    let Some(preconditions_val) = extract_value_field(data, "preconditions", interner) else {
+        return Ok(Vec::new());
+    };
+
+    if let Value::Vec(vec) = preconditions_val {
+        vec.iter()
+            .map(|p| parse_single_precondition(p, interner))
+            .collect()
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// Parses a single Precondition from a Value map.
+fn parse_single_precondition(val: &Value, interner: &Interner) -> Result<Precondition> {
+    // Pattern
+    let pattern_val = extract_value_field(val, "pattern", interner).ok_or_else(|| {
+        Error::new(ErrorKind::Internal(
+            "precondition missing pattern".to_string(),
+        ))
+    })?;
+
+    // Parse pattern - we need to wrap it in a map with :pattern key for parse_pattern_from_value
+    let pattern = parse_pattern_from_pattern_value(&pattern_val, interner)?;
+
+    // Guard - Optional<Ast>
+    let guard_val = extract_value_field(val, "guard", interner);
+    let guard = match guard_val {
+        Some(Value::Nil) | None => None,
+        Some(v) => Some(value_to_ast(&v, interner)),
+    };
+
+    // Message - Ast for failure message
+    let message_val = extract_value_field(val, "message", interner).ok_or_else(|| {
+        Error::new(ErrorKind::Internal(
+            "precondition missing message".to_string(),
+        ))
+    })?;
+    let message = value_to_ast(&message_val, interner);
+
+    Ok(Precondition {
+        pattern,
+        guard,
+        message,
+    })
+}
+
+/// Parses a Pattern directly from a pattern value map (with :clauses and :negations).
+fn parse_pattern_from_pattern_value(pattern_val: &Value, interner: &Interner) -> Result<Pattern> {
+    let Some(map) = pattern_val.as_map() else {
+        return Ok(Pattern::default());
+    };
+
+    let mut clauses = Vec::new();
+    let mut negations = Vec::new();
+
+    for (k, v) in map.iter() {
+        if let Value::Keyword(kw) = k {
+            if let Some(name) = interner.get_keyword(*kw) {
+                match name {
+                    "clauses" => {
+                        if let Value::Vec(vec) = v {
+                            for clause_val in vec.iter() {
+                                clauses.push(parse_single_clause(clause_val, interner)?);
+                            }
+                        }
+                    }
+                    "negations" => {
+                        if let Value::Vec(vec) = v {
+                            for clause_val in vec.iter() {
+                                negations.push(parse_single_clause(clause_val, interner)?);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(Pattern { clauses, negations })
+}
+
+/// Parses handler AST expressions from a Value map.
+fn parse_handler_from_value(data: &Value, interner: &Interner) -> Vec<longtable_language::Ast> {
+    let Some(handler_val) = extract_value_field(data, "handler", interner) else {
+        return Vec::new();
+    };
+
+    if let Value::Vec(vec) = handler_val {
+        vec.iter().map(|h| value_to_ast(h, interner)).collect()
+    } else {
+        Vec::new()
+    }
 }
 
 /// Parses a component schema from a Value map.
@@ -805,4 +1116,92 @@ fn parse_command_syntax(value: &Value, interner: &Interner) -> Result<CommandSyn
         priority,
         syntax_source,
     })
+}
+
+// =============================================================================
+// Pattern parsing helpers for rule registration
+// =============================================================================
+
+/// Parses a Pattern from a Value map.
+fn parse_pattern_from_value(data: &Value, interner: &Interner) -> Result<Pattern> {
+    let pattern_val = extract_value_field(data, "pattern", interner)
+        .ok_or_else(|| Error::new(ErrorKind::Internal("rule missing pattern".to_string())))?;
+
+    let clauses_val = extract_value_field(&pattern_val, "clauses", interner)
+        .ok_or_else(|| Error::new(ErrorKind::Internal("pattern missing clauses".to_string())))?;
+
+    let negations_val =
+        extract_value_field(&pattern_val, "negations", interner).unwrap_or(Value::Nil);
+
+    let clauses = parse_single_clauses(&clauses_val, interner)?;
+    let negations = if matches!(negations_val, Value::Nil) {
+        Vec::new()
+    } else {
+        parse_single_clauses(&negations_val, interner)?
+    };
+
+    Ok(Pattern { clauses, negations })
+}
+
+/// Parses a `Vec<PatternClause>` from a `Value::Vec`.
+fn parse_single_clauses(val: &Value, interner: &Interner) -> Result<Vec<PatternClause>> {
+    let vec = val
+        .as_vec()
+        .ok_or_else(|| Error::new(ErrorKind::Internal("expected vec for clauses".to_string())))?;
+
+    vec.iter()
+        .map(|c| parse_single_clause(c, interner))
+        .collect()
+}
+
+/// Parses a single `PatternClause` from a Value map.
+fn parse_single_clause(val: &Value, interner: &Interner) -> Result<PatternClause> {
+    let entity_var = extract_string_field(val, "entity-var", interner)
+        .ok_or_else(|| Error::new(ErrorKind::Internal("clause missing entity-var".to_string())))?;
+
+    let component = extract_string_field(val, "component", interner)
+        .ok_or_else(|| Error::new(ErrorKind::Internal("clause missing component".to_string())))?;
+
+    let value_val = extract_value_field(val, "value", interner)
+        .ok_or_else(|| Error::new(ErrorKind::Internal("clause missing value".to_string())))?;
+
+    let value = parse_pattern_value_from_map(&value_val, interner)?;
+
+    Ok(PatternClause {
+        entity_var,
+        component,
+        value,
+        span: Span::default(),
+    })
+}
+
+/// Parses a `PatternValue` from a Value map.
+fn parse_pattern_value_from_map(val: &Value, interner: &Interner) -> Result<PatternValue> {
+    let type_kw = extract_keyword_field(val, "type", interner)?;
+    let type_name = interner.get_keyword(type_kw).unwrap_or("unknown");
+
+    match type_name {
+        "variable" => {
+            let var_name = extract_string_field(val, "var-name", interner).ok_or_else(|| {
+                Error::new(ErrorKind::Internal(
+                    "variable pattern missing var-name".to_string(),
+                ))
+            })?;
+            Ok(PatternValue::Variable(var_name))
+        }
+        "wildcard" => Ok(PatternValue::Wildcard),
+        "literal" => {
+            let lit_value = extract_value_field(val, "lit-value", interner).ok_or_else(|| {
+                Error::new(ErrorKind::Internal(
+                    "literal pattern missing lit-value".to_string(),
+                ))
+            })?;
+            // Convert the Value back to an AST for literal matching
+            let ast = value_to_ast(&lit_value, interner);
+            Ok(PatternValue::Literal(ast))
+        }
+        _ => Err(Error::new(ErrorKind::Internal(format!(
+            "unknown pattern value type: {type_name}"
+        )))),
+    }
 }

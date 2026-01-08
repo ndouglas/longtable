@@ -339,6 +339,7 @@ impl Compiler {
             // Misc
             "print",
             "println",
+            "say", // Alias for println (DSL output function)
             "type",
             // Stage S1: Critical functions
             "inc",
@@ -2708,35 +2709,238 @@ impl Compiler {
     }
 
     /// Converts an `ActionDecl` to a Value map.
+    ///
+    /// Serializes the full action declaration including params, preconditions, and handler.
     fn action_decl_to_value(&mut self, decl: &crate::declaration::ActionDecl) -> Result<Value> {
         let mut map: LtMap<Value, Value> = LtMap::new();
 
+        // :name
         let name_key = self.intern_keyword("name");
         let name_val = self.intern_keyword(&decl.name);
         map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
 
-        // For now, store minimal info. Full action compilation is more complex.
+        // :params - serialize as Vec of Strings
+        let params_key = self.intern_keyword("params");
+        let params_val: Vec<Value> = decl
+            .params
+            .iter()
+            .map(|p| Value::String(p.as_str().into()))
+            .collect();
+        map = map.insert(
+            Value::Keyword(params_key),
+            Value::Vec(params_val.into_iter().collect()),
+        );
+
+        // :preconditions - Vec of maps with pattern, guard, message
+        let preconditions_key = self.intern_keyword("preconditions");
+        let preconditions_val: Result<Vec<_>> = decl
+            .preconditions
+            .iter()
+            .map(|p| self.precondition_to_value(p))
+            .collect();
+        map = map.insert(
+            Value::Keyword(preconditions_key),
+            Value::Vec(preconditions_val?.into_iter().collect()),
+        );
+
+        // :handler - Vec of serialized AST
+        let handler_key = self.intern_keyword("handler");
+        let handler_val: Result<Vec<_>> =
+            decl.handler.iter().map(|h| self.ast_to_value(h)).collect();
+        map = map.insert(
+            Value::Keyword(handler_key),
+            Value::Vec(handler_val?.into_iter().collect()),
+        );
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `Precondition` to a Value map.
+    fn precondition_to_value(
+        &mut self,
+        precond: &crate::declaration::Precondition,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        // :pattern - reuse existing pattern_to_value
+        let pattern_key = self.intern_keyword("pattern");
+        let pattern_val = self.pattern_to_value(&precond.pattern)?;
+        map = map.insert(Value::Keyword(pattern_key), pattern_val);
+
+        // :guard - Option<Ast>, serialize as Nil if None
+        let guard_key = self.intern_keyword("guard");
+        let guard_val = match &precond.guard {
+            Some(ast) => self.ast_to_value(ast)?,
+            None => Value::Nil,
+        };
+        map = map.insert(Value::Keyword(guard_key), guard_val);
+
+        // :message - Ast for failure message
+        let message_key = self.intern_keyword("message");
+        let message_val = self.ast_to_value(&precond.message)?;
+        map = map.insert(Value::Keyword(message_key), message_val);
+
         Ok(Value::Map(map))
     }
 
     /// Converts a `RuleDecl` to a Value map.
+    ///
+    /// Serializes the full rule declaration including pattern, guards, effects, and bindings.
     fn rule_decl_to_value(&mut self, decl: &crate::declaration::RuleDecl) -> Result<Value> {
         let mut map: LtMap<Value, Value> = LtMap::new();
 
+        // :name
         let name_key = self.intern_keyword("name");
         let name_val = self.intern_keyword(&decl.name);
         map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
 
+        // :salience
         let salience_key = self.intern_keyword("salience");
         map = map.insert(
             Value::Keyword(salience_key),
             Value::Int(i64::from(decl.salience)),
         );
 
+        // :once
         let once_key = self.intern_keyword("once");
         map = map.insert(Value::Keyword(once_key), Value::Bool(decl.once));
 
-        // For now, store minimal info. Full rule compilation is more complex.
+        // :enabled
+        let enabled_key = self.intern_keyword("enabled");
+        map = map.insert(Value::Keyword(enabled_key), Value::Bool(decl.enabled));
+
+        // :pattern - serialize as map with :clauses and :negations
+        let pattern_key = self.intern_keyword("pattern");
+        let pattern_val = self.pattern_to_value(&decl.pattern)?;
+        map = map.insert(Value::Keyword(pattern_key), pattern_val);
+
+        // :guards - serialize each guard AST
+        let guards_key = self.intern_keyword("guards");
+        let guards_val: Result<Vec<_>> = decl.guards.iter().map(|g| self.ast_to_value(g)).collect();
+        map = map.insert(
+            Value::Keyword(guards_key),
+            Value::Vec(guards_val?.into_iter().collect()),
+        );
+
+        // :effects - serialize each effect AST
+        let effects_key = self.intern_keyword("effects");
+        let effects_val: Result<Vec<_>> =
+            decl.effects.iter().map(|e| self.ast_to_value(e)).collect();
+        map = map.insert(
+            Value::Keyword(effects_key),
+            Value::Vec(effects_val?.into_iter().collect()),
+        );
+
+        // :bindings - serialize as vec of [name, value] pairs
+        let bindings_key = self.intern_keyword("bindings");
+        let bindings_val: Result<Vec<_>> = decl
+            .bindings
+            .iter()
+            .map(|(name, ast)| {
+                let name_val = Value::String(name.as_str().into());
+                let ast_val = self.ast_to_value(ast)?;
+                Ok(Value::Vec(vec![name_val, ast_val].into_iter().collect()))
+            })
+            .collect();
+        map = map.insert(
+            Value::Keyword(bindings_key),
+            Value::Vec(bindings_val?.into_iter().collect()),
+        );
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a Pattern to a Value map.
+    fn pattern_to_value(&mut self, pattern: &crate::declaration::Pattern) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        // :clauses
+        let clauses_key = self.intern_keyword("clauses");
+        let clauses_val: Result<Vec<_>> = pattern
+            .clauses
+            .iter()
+            .map(|c| self.pattern_clause_to_value(c))
+            .collect();
+        map = map.insert(
+            Value::Keyword(clauses_key),
+            Value::Vec(clauses_val?.into_iter().collect()),
+        );
+
+        // :negations
+        let negations_key = self.intern_keyword("negations");
+        let negations_val: Result<Vec<_>> = pattern
+            .negations
+            .iter()
+            .map(|c| self.pattern_clause_to_value(c))
+            .collect();
+        map = map.insert(
+            Value::Keyword(negations_key),
+            Value::Vec(negations_val?.into_iter().collect()),
+        );
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `PatternClause` to a Value map.
+    fn pattern_clause_to_value(
+        &mut self,
+        clause: &crate::declaration::PatternClause,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        // :entity-var
+        let entity_var_key = self.intern_keyword("entity-var");
+        map = map.insert(
+            Value::Keyword(entity_var_key),
+            Value::String(clause.entity_var.as_str().into()),
+        );
+
+        // :component
+        let component_key = self.intern_keyword("component");
+        map = map.insert(
+            Value::Keyword(component_key),
+            Value::String(clause.component.as_str().into()),
+        );
+
+        // :value - serialize based on PatternValue variant
+        let value_key = self.intern_keyword("value");
+        let value_val = self.pattern_value_to_value(&clause.value)?;
+        map = map.insert(Value::Keyword(value_key), value_val);
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `PatternValue` to a Value map.
+    fn pattern_value_to_value(&mut self, pv: &crate::declaration::PatternValue) -> Result<Value> {
+        use crate::declaration::PatternValue;
+
+        let mut map: LtMap<Value, Value> = LtMap::new();
+        let type_key = self.intern_keyword("type");
+
+        match pv {
+            PatternValue::Variable(name) => {
+                let var_type = self.intern_keyword("variable");
+                map = map.insert(Value::Keyword(type_key), Value::Keyword(var_type));
+
+                let name_key = self.intern_keyword("var-name");
+                map = map.insert(
+                    Value::Keyword(name_key),
+                    Value::String(name.as_str().into()),
+                );
+            }
+            PatternValue::Wildcard => {
+                let wildcard_type = self.intern_keyword("wildcard");
+                map = map.insert(Value::Keyword(type_key), Value::Keyword(wildcard_type));
+            }
+            PatternValue::Literal(ast) => {
+                let literal_type = self.intern_keyword("literal");
+                map = map.insert(Value::Keyword(type_key), Value::Keyword(literal_type));
+
+                let lit_value_key = self.intern_keyword("lit-value");
+                map = map.insert(Value::Keyword(lit_value_key), self.ast_to_value(ast)?);
+            }
+        }
+
         Ok(Value::Map(map))
     }
 
