@@ -59,9 +59,10 @@ pub use compiler::{
     compile_expression,
 };
 pub use declaration::{
-    Cardinality, ComponentDecl, Declaration, DeclarationAnalyzer, FieldDecl, LinkDecl,
-    OnTargetDelete, Pattern, PatternClause, PatternValue, RelationshipDecl, RuleDecl, SpawnDecl,
-    StorageKind,
+    ActionDecl, AdverbDecl, Cardinality, CommandDecl, ComponentDecl, Declaration,
+    DeclarationAnalyzer, DirectionDecl, FieldDecl, LinkDecl, NounTypeDecl, OnTargetDelete, Pattern,
+    PatternClause, PatternValue, PrepositionDecl, PronounDecl, PronounGender, PronounNumber,
+    RelationshipDecl, RuleDecl, ScopeDecl, SpawnDecl, StorageKind, SyntaxElement, VerbDecl,
 };
 pub use gensym::GensymGenerator;
 pub use lexer::Lexer;

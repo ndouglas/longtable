@@ -1,0 +1,230 @@
+;; Adventure Game Vocabulary
+;; Defines all words the parser understands.
+
+;; =============================================================================
+;; DIRECTIONS
+;; =============================================================================
+
+;; Cardinal directions
+(direction: north :synonyms [n] :opposite south)
+(direction: south :synonyms [s] :opposite north)
+(direction: east :synonyms [e] :opposite west)
+(direction: west :synonyms [w] :opposite east)
+
+;; Vertical directions
+(direction: up :synonyms [u climb ascend] :opposite down)
+(direction: down :synonyms [d descend] :opposite up)
+
+;; Special directions
+(direction: in :synonyms [enter inside] :opposite out)
+(direction: out :synonyms [exit outside leave] :opposite in)
+
+;; =============================================================================
+;; VERBS - Movement
+;; =============================================================================
+
+(verb: go :synonyms [walk move travel head proceed])
+(verb: enter :synonyms [go-in go-into])
+(verb: exit :synonyms [leave go-out depart])
+(verb: climb :synonyms [scale])
+
+;; =============================================================================
+;; VERBS - Looking & Examining
+;; =============================================================================
+
+(verb: look :synonyms [l])
+(verb: examine :synonyms [x ex inspect study])
+(verb: read :synonyms [peruse])
+(verb: search :synonyms [look-in look-inside])
+
+;; =============================================================================
+;; VERBS - Manipulation
+;; =============================================================================
+
+(verb: take :synonyms [get grab pick-up acquire obtain])
+(verb: drop :synonyms [put-down release discard])
+(verb: put :synonyms [place set insert])
+(verb: give :synonyms [hand offer])
+(verb: show :synonyms [display present])
+(verb: throw :synonyms [toss hurl chuck lob])
+
+;; =============================================================================
+;; VERBS - Containers & Doors
+;; =============================================================================
+
+(verb: open :synonyms [])
+(verb: close :synonyms [shut])
+(verb: lock :synonyms [])
+(verb: unlock :synonyms [])
+
+;; =============================================================================
+;; VERBS - Combat
+;; =============================================================================
+
+(verb: attack :synonyms [kill hit strike stab slash fight])
+(verb: block :synonyms [parry deflect])
+
+;; =============================================================================
+;; VERBS - Communication
+;; =============================================================================
+
+(verb: say :synonyms [speak shout yell])
+(verb: ask :synonyms [question query])
+(verb: tell :synonyms [inform])
+(verb: greet :synonyms [hello hi wave])
+
+;; =============================================================================
+;; VERBS - Interaction
+;; =============================================================================
+
+(verb: use :synonyms [operate activate])
+(verb: push :synonyms [press shove])
+(verb: pull :synonyms [tug yank])
+(verb: turn :synonyms [rotate twist spin])
+(verb: touch :synonyms [feel poke tap])
+(verb: light :synonyms [ignite])
+(verb: extinguish :synonyms [snuff douse put-out])
+
+;; =============================================================================
+;; VERBS - Inventory
+;; =============================================================================
+
+(verb: inventory :synonyms [i inv items])
+(verb: wear :synonyms [don put-on])
+(verb: remove :synonyms [take-off doff])
+
+;; =============================================================================
+;; VERBS - Meta
+;; =============================================================================
+
+(verb: wait :synonyms [z])
+(verb: save :synonyms [])
+(verb: restore :synonyms [load])
+(verb: quit :synonyms [q bye])
+(verb: help :synonyms [? hint])
+(verb: score :synonyms [])
+(verb: again :synonyms [g])
+(verb: undo :synonyms [])
+
+;; =============================================================================
+;; PREPOSITIONS
+;; =============================================================================
+
+(preposition: in :implies container)
+(preposition: into :implies destination)
+(preposition: on :implies surface)
+(preposition: onto :implies surface)
+(preposition: with :implies instrument)
+(preposition: to :implies recipient)
+(preposition: at :implies target)
+(preposition: from :implies source)
+(preposition: about :implies topic)
+(preposition: through :implies passage)
+(preposition: under :implies beneath)
+(preposition: behind :implies obscured)
+(preposition: around :implies area)
+(preposition: for :implies purpose)
+
+;; =============================================================================
+;; PRONOUNS
+;; =============================================================================
+
+(pronoun: it :gender :neuter :number :singular)
+(pronoun: him :gender :masculine :number :singular)
+(pronoun: her :gender :feminine :number :singular)
+(pronoun: them :gender :neuter :number :plural)
+(pronoun: all :gender :neuter :number :plural)
+
+;; =============================================================================
+;; ADVERBS
+;; =============================================================================
+
+(adverb: carefully)
+(adverb: quickly)
+(adverb: quietly)
+(adverb: loudly)
+(adverb: slowly)
+(adverb: gently)
+(adverb: forcefully)
+
+;; =============================================================================
+;; NOUN TYPES (for type-constrained commands)
+;; =============================================================================
+
+;; Base type - anything with a name
+(type: thing
+  :where [[?obj :name _]])
+
+;; Items that can be picked up
+(type: takeable
+  :extends [thing]
+  :where [[?obj :tag/takeable true]])
+
+;; Containers
+(type: container
+  :extends [thing]
+  :where [[?obj :tag/container true]])
+
+;; Things that can be opened
+(type: openable
+  :extends [thing]
+  :where [[?obj :tag/openable true]])
+
+;; Things that are locked
+(type: lockable
+  :extends [openable]
+  :where [[?obj :tag/locked _]])
+
+;; Weapons
+(type: weapon
+  :extends [takeable]
+  :where [[?obj :weapon/damage _]])
+
+;; Living beings
+(type: living
+  :extends [thing]
+  :where [[?obj :health/current _]])
+
+;; Light sources
+(type: light-source
+  :extends [takeable]
+  :where [[?obj :light-source/radius _]])
+
+;; Rooms/locations
+(type: room
+  :where [[?obj :tag/room true]])
+
+;; NPCs
+(type: npc
+  :extends [living]
+  :where [[?obj :tag/npc true]])
+
+;; Doors
+(type: door
+  :extends [openable]
+  :where [[?obj :tag/door true]])
+
+;; =============================================================================
+;; SCOPES (visibility for noun resolution)
+;; =============================================================================
+
+;; Immediate scope - things in the room and inventory
+(scope: here
+  :where [[?actor :in-room ?room]
+          [?obj :in-room ?room]])
+
+;; Inventory scope
+(scope: carrying
+  :where [[?obj :contained-in ?actor]])
+
+;; Reachable scope - here + inventory + open containers
+(scope: reachable
+  :extends [here carrying]
+  :where [[?obj :contained-in ?container]
+          [?container :tag/open true]])
+
+;; Visible scope - reachable + transparent containers
+(scope: visible
+  :extends [reachable]
+  :where [[?obj :contained-in ?container]
+          [?container :tag/transparent true]])

@@ -1,0 +1,369 @@
+;; Adventure Game Commands
+;; Defines syntax patterns for parsing player input.
+
+;; =============================================================================
+;; MOVEMENT COMMANDS
+;; =============================================================================
+
+;; Bare direction: "north", "n", "up"
+(command: go-direction
+  :syntax [:direction ?dir]
+  :action go
+  :bindings {:direction ?dir})
+
+;; Go + direction: "go north", "walk east"
+(command: go-explicit
+  :syntax [:verb/go ?dir:direction]
+  :action go
+  :bindings {:direction ?dir})
+
+;; Enter/exit shortcuts
+(command: enter-room
+  :syntax [:verb/enter ?target:door]
+  :action go-through
+  :bindings {:target ?target})
+
+(command: exit-room
+  :syntax [:verb/exit]
+  :action go-out
+  :bindings {})
+
+;; =============================================================================
+;; LOOKING COMMANDS
+;; =============================================================================
+
+;; Look around: "look", "l"
+(command: look-around
+  :syntax [:verb/look]
+  :action look
+  :bindings {})
+
+;; Examine object: "examine sword", "x lamp", "look at chest"
+(command: examine-thing
+  :syntax [:verb/examine ?target:thing]
+  :action examine
+  :bindings {:target ?target})
+
+(command: look-at-thing
+  :syntax [:verb/look :prep/at ?target:thing]
+  :action examine
+  :bindings {:target ?target})
+
+;; Search container: "search chest", "look in box"
+(command: search-container
+  :syntax [:verb/search ?target:container]
+  :action search
+  :bindings {:target ?target})
+
+(command: look-in-container
+  :syntax [:verb/look :prep/in ?target:container]
+  :action search
+  :bindings {:target ?target})
+
+;; Read text: "read sign", "read scroll"
+(command: read-thing
+  :syntax [:verb/read ?target:thing]
+  :action read
+  :bindings {:target ?target})
+
+;; =============================================================================
+;; INVENTORY COMMANDS
+;; =============================================================================
+
+;; Show inventory: "inventory", "i", "inv"
+(command: show-inventory
+  :syntax [:verb/inventory]
+  :action inventory
+  :bindings {})
+
+;; Take item: "take sword", "get lamp", "pick up key"
+(command: take-thing
+  :syntax [:verb/take ?target:takeable]
+  :action take
+  :bindings {:target ?target})
+
+(command: take-all
+  :syntax [:verb/take :all]
+  :action take-all
+  :bindings {})
+
+;; Drop item: "drop sword", "put down lamp"
+(command: drop-thing
+  :syntax [:verb/drop ?target:thing]
+  :action drop
+  :bindings {:target ?target})
+
+(command: drop-all
+  :syntax [:verb/drop :all]
+  :action drop-all
+  :bindings {})
+
+;; =============================================================================
+;; CONTAINER COMMANDS
+;; =============================================================================
+
+;; Put in container: "put sword in chest", "insert key into box"
+(command: put-in
+  :syntax [:verb/put ?item:thing :prep/in ?container:container]
+  :action put-in
+  :bindings {:item ?item :container ?container})
+
+(command: put-into
+  :syntax [:verb/put ?item:thing :prep/into ?container:container]
+  :action put-in
+  :bindings {:item ?item :container ?container})
+
+;; Put on surface: "put lamp on table"
+(command: put-on
+  :syntax [:verb/put ?item:thing :prep/on ?surface:thing]
+  :action put-on
+  :bindings {:item ?item :surface ?surface})
+
+;; Take from container: "take sword from chest", "get key from box"
+(command: take-from
+  :syntax [:verb/take ?item:thing :prep/from ?container:container]
+  :action take-from
+  :bindings {:item ?item :container ?container})
+
+;; =============================================================================
+;; DOOR/OPENABLE COMMANDS
+;; =============================================================================
+
+;; Open: "open chest", "open door"
+(command: open-thing
+  :syntax [:verb/open ?target:openable]
+  :action open
+  :bindings {:target ?target})
+
+;; Close: "close chest", "shut door"
+(command: close-thing
+  :syntax [:verb/close ?target:openable]
+  :action close
+  :bindings {:target ?target})
+
+;; Lock: "lock door", "lock chest with key"
+(command: lock-thing
+  :syntax [:verb/lock ?target:lockable]
+  :action lock
+  :bindings {:target ?target})
+
+(command: lock-with
+  :syntax [:verb/lock ?target:lockable :prep/with ?key:thing]
+  :action lock
+  :bindings {:target ?target :key ?key})
+
+;; Unlock: "unlock door", "unlock chest with silver key"
+(command: unlock-thing
+  :syntax [:verb/unlock ?target:lockable]
+  :action unlock
+  :bindings {:target ?target})
+
+(command: unlock-with
+  :syntax [:verb/unlock ?target:lockable :prep/with ?key:thing]
+  :action unlock
+  :bindings {:target ?target :key ?key})
+
+;; =============================================================================
+;; COMBAT COMMANDS
+;; =============================================================================
+
+;; Attack: "attack troll", "kill goblin", "hit monster with sword"
+(command: attack-target
+  :syntax [:verb/attack ?target:living]
+  :action attack
+  :bindings {:target ?target})
+
+(command: attack-with
+  :syntax [:verb/attack ?target:living :prep/with ?weapon:weapon]
+  :action attack
+  :bindings {:target ?target :weapon ?weapon})
+
+;; Block: "block", "parry"
+(command: block-attack
+  :syntax [:verb/block]
+  :action block
+  :bindings {})
+
+;; =============================================================================
+;; COMMUNICATION COMMANDS
+;; =============================================================================
+
+;; Greet: "greet wizard", "hello troll", "wave at guard"
+(command: greet-npc
+  :syntax [:verb/greet ?target:npc]
+  :action greet
+  :bindings {:target ?target})
+
+;; Talk: "talk to wizard", "speak with guard"
+(command: talk-to
+  :syntax [:verb/say :prep/to ?target:npc]
+  :action talk
+  :bindings {:target ?target})
+
+;; Ask about: "ask wizard about magic", "question guard about treasure"
+(command: ask-about
+  :syntax [:verb/ask ?target:npc :prep/about ?topic]
+  :action ask
+  :bindings {:target ?target :topic ?topic})
+
+;; Tell about: "tell wizard about dragon"
+(command: tell-about
+  :syntax [:verb/tell ?target:npc :prep/about ?topic]
+  :action tell
+  :bindings {:target ?target :topic ?topic})
+
+;; =============================================================================
+;; ITEM INTERACTION COMMANDS
+;; =============================================================================
+
+;; Use: "use lamp", "use key on door"
+(command: use-thing
+  :syntax [:verb/use ?item:thing]
+  :action use
+  :bindings {:item ?item})
+
+(command: use-on
+  :syntax [:verb/use ?item:thing :prep/on ?target:thing]
+  :action use-on
+  :bindings {:item ?item :target ?target})
+
+;; Give: "give sword to guard", "hand key to wizard"
+(command: give-to
+  :syntax [:verb/give ?item:thing :prep/to ?target:npc]
+  :action give
+  :bindings {:item ?item :target ?target})
+
+;; Show: "show sword to guard", "present crown to wizard"
+(command: show-to
+  :syntax [:verb/show ?item:thing :prep/to ?target:npc]
+  :action show
+  :bindings {:item ?item :target ?target})
+
+;; Throw: "throw rock at goblin", "toss coin into well"
+(command: throw-at
+  :syntax [:verb/throw ?item:thing :prep/at ?target:thing]
+  :action throw
+  :bindings {:item ?item :target ?target})
+
+(command: throw-in
+  :syntax [:verb/throw ?item:thing :prep/in ?target:container]
+  :action throw
+  :bindings {:item ?item :target ?target})
+
+;; =============================================================================
+;; PHYSICAL INTERACTION COMMANDS
+;; =============================================================================
+
+;; Push: "push button", "press lever"
+(command: push-thing
+  :syntax [:verb/push ?target:thing]
+  :action push
+  :bindings {:target ?target})
+
+;; Pull: "pull lever", "yank rope"
+(command: pull-thing
+  :syntax [:verb/pull ?target:thing]
+  :action pull
+  :bindings {:target ?target})
+
+;; Turn: "turn dial", "rotate wheel"
+(command: turn-thing
+  :syntax [:verb/turn ?target:thing]
+  :action turn
+  :bindings {:target ?target})
+
+;; Touch: "touch crystal", "feel wall"
+(command: touch-thing
+  :syntax [:verb/touch ?target:thing]
+  :action touch
+  :bindings {:target ?target})
+
+;; Climb: "climb rope", "scale wall"
+(command: climb-thing
+  :syntax [:verb/climb ?target:thing]
+  :action climb
+  :bindings {:target ?target})
+
+;; =============================================================================
+;; LIGHT COMMANDS
+;; =============================================================================
+
+;; Light: "light lamp", "ignite torch"
+(command: light-thing
+  :syntax [:verb/light ?target:light-source]
+  :action light
+  :bindings {:target ?target})
+
+;; Extinguish: "extinguish lamp", "put out torch", "douse fire"
+(command: extinguish-thing
+  :syntax [:verb/extinguish ?target:light-source]
+  :action extinguish
+  :bindings {:target ?target})
+
+;; =============================================================================
+;; CLOTHING COMMANDS
+;; =============================================================================
+
+;; Wear: "wear crown", "put on helmet"
+(command: wear-thing
+  :syntax [:verb/wear ?item:thing]
+  :action wear
+  :bindings {:item ?item})
+
+;; Remove: "remove crown", "take off helmet"
+(command: remove-thing
+  :syntax [:verb/remove ?item:thing]
+  :action remove-worn
+  :bindings {:item ?item})
+
+;; =============================================================================
+;; META COMMANDS
+;; =============================================================================
+
+;; Wait: "wait", "z"
+(command: wait-turn
+  :syntax [:verb/wait]
+  :action wait
+  :bindings {})
+
+;; Score: "score"
+(command: show-score
+  :syntax [:verb/score]
+  :action score
+  :bindings {})
+
+;; Help: "help", "?"
+(command: show-help
+  :syntax [:verb/help]
+  :action help
+  :bindings {})
+
+;; Save: "save"
+(command: save-game
+  :syntax [:verb/save]
+  :action save
+  :bindings {})
+
+;; Restore: "restore", "load"
+(command: restore-game
+  :syntax [:verb/restore]
+  :action restore
+  :bindings {})
+
+;; Quit: "quit", "q"
+(command: quit-game
+  :syntax [:verb/quit]
+  :action quit
+  :bindings {})
+
+;; Again: "again", "g"
+(command: repeat-command
+  :syntax [:verb/again]
+  :action again
+  :bindings {})
+
+;; Undo: "undo"
+(command: undo-command
+  :syntax [:verb/undo]
+  :action undo
+  :bindings {})

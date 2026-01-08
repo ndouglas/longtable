@@ -4,15 +4,23 @@
 ;; =============================================================================
 ;;
 ;; This example demonstrates Longtable's capabilities for building text
-;; adventure games.
+;; adventure games with natural language parsing.
 ;;
 ;; USAGE:
-;;   longtable examples/adventure/components.lt \
-;;            examples/adventure/relationships.lt \
-;;            examples/adventure/data/world.lt
+;;   longtable examples/adventure/_.lt
 ;;
-;; Then try these queries:
+;; EXAMPLE COMMANDS:
+;;   > look
+;;   > take lantern
+;;   > go north
+;;   > examine sword
+;;   > attack troll with sword
+;;   > unlock chest with silver key
+;;   > inventory
+;;   > put crown in chest
+;;   > ask troll about treasure
 ;;
+;; EXAMPLE QUERIES:
 ;;   ;; Find the player
 ;;   (query :where [[?p :tag/player true]] :return ?p)
 ;;
@@ -22,18 +30,63 @@
 ;;   ;; What items are in the player's room?
 ;;   (query :where [[?p :tag/player true] [?p :in-room ?r] [?i :tag/item true] [?i :in-room ?r] [?i :name ?n]] :return ?n)
 ;;
-;;   ;; Where can the player go south?
-;;   (query :where [[?p :tag/player true] [?p :in-room ?r] [?r :exit/south ?dest] [?dest :name ?n]] :return ?n)
+;;   ;; Where can the player go from here?
+;;   (query :where [[?p :tag/player true] [?p :in-room ?r] [?r :exits ?dir ?dest] [?dest :name ?n]] :return [?dir ?n])
+;;
+;;   ;; What is the player carrying?
+;;   (query :where [[?p :tag/player true] [?i :contained-in ?p] [?i :name ?n]] :return ?n)
+;;
+;;   ;; Is there anything hostile nearby?
+;;   (query :where [[?p :tag/player true] [?p :in-room ?r] [?npc :in-room ?r] [?npc :hostile/damage ?d]] :return ?npc)
 ;;
 ;; =============================================================================
 
-;; Load the world
+;; -----------------------------------------------------------------------------
+;; Component and Relationship Schemas
+;; -----------------------------------------------------------------------------
 (load "components.lt")
 (load "relationships.lt")
+
+;; -----------------------------------------------------------------------------
+;; Parser Vocabulary (verbs, directions, prepositions, types, scopes)
+;; -----------------------------------------------------------------------------
+(load "vocabulary.lt")
+
+;; -----------------------------------------------------------------------------
+;; Command Syntax Patterns
+;; -----------------------------------------------------------------------------
+(load "commands.lt")
+
+;; -----------------------------------------------------------------------------
+;; Action Definitions (preconditions and handlers)
+;; -----------------------------------------------------------------------------
+(load "actions.lt")
+
+;; -----------------------------------------------------------------------------
+;; Game Rules (reactive behaviors)
+;; -----------------------------------------------------------------------------
+(load "rules.lt")
+
+;; -----------------------------------------------------------------------------
+;; World Data (rooms, items, NPCs)
+;; -----------------------------------------------------------------------------
 (load "data/world.lt")
 
-;; Welcome message
-"Welcome to The Dark Cave!"
+;; =============================================================================
+;; GAME INITIALIZATION
+;; =============================================================================
 
-;; Show player's starting location
-(query :where [[?p :tag/player true] [?p :in-room ?r] [?r :name ?n]] :return ?n)
+;; Welcome message
+(say "")
+(say "===============================================")
+(say "             THE DARK CAVE")
+(say "        A Text Adventure Demo")
+(say "===============================================")
+(say "")
+(say "Type 'help' for a list of commands.")
+(say "")
+
+;; Describe starting location
+(let [?player (first [?p :tag/player true])]
+  (let [?room (first [?r] [?player :in-room ?r])]
+    (describe-room ?room)))

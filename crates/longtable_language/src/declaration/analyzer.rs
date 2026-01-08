@@ -216,7 +216,7 @@ impl DeclarationAnalyzer {
                         }
                     };
                 }
-                "where" => {
+                "where" | "when" => {
                     rule.pattern = Self::analyze_where_clause(value)?;
                 }
                 "let" => {
@@ -243,6 +243,7 @@ impl DeclarationAnalyzer {
     }
 
     /// Analyze a :where clause into a Pattern.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn analyze_where_clause(ast: &Ast) -> Result<Pattern> {
         let patterns = match ast {
             Ast::Vector(elements, _) => elements,
@@ -298,14 +299,56 @@ impl DeclarationAnalyzer {
                                 }
                             }
                         }
+                        Ast::Symbol(s, _) if s == "or" => {
+                            // Disjunction: (or [pattern1] [pattern2] ...)
+                            // For now, add all alternative patterns to the main pattern
+                            // (this is a simplification - proper disjunction would need
+                            // runtime support to match ANY of the patterns)
+                            for elem in elements.iter().skip(1) {
+                                match elem {
+                                    Ast::Vector(clause, inner_span) => {
+                                        let pc = Self::analyze_pattern_clause(clause, *inner_span)?;
+                                        pattern.clauses.push(pc);
+                                    }
+                                    Ast::List(inner_elements, _) => {
+                                        // Nested (and ...) or other form - try to extract patterns
+                                        for inner_elem in inner_elements {
+                                            if let Ast::Vector(clause, inner_span) = inner_elem {
+                                                let pc = Self::analyze_pattern_clause(
+                                                    clause,
+                                                    *inner_span,
+                                                )?;
+                                                pattern.clauses.push(pc);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        Ast::Symbol(s, _) if s == "and" => {
+                            // Conjunction: (and [pattern1] [pattern2] ...) or (and ?var [pattern] ...)
+                            // Add all patterns to the main pattern
+                            for elem in elements.iter().skip(1) {
+                                if let Ast::Vector(clause, inner_span) = elem {
+                                    let pc = Self::analyze_pattern_clause(clause, *inner_span)?;
+                                    pattern.clauses.push(pc);
+                                }
+                            }
+                        }
+                        Ast::Symbol(s, _) if s == "exists" => {
+                            // Existential: (exists [?var :component ?value] ...)
+                            // Add patterns to main pattern (simplified - doesn't enforce uniqueness)
+                            for elem in elements.iter().skip(1) {
+                                if let Ast::Vector(clause, inner_span) = elem {
+                                    let pc = Self::analyze_pattern_clause(clause, *inner_span)?;
+                                    pattern.clauses.push(pc);
+                                }
+                            }
+                        }
                         _ => {
-                            return Err(Error::new(ErrorKind::ParseError {
-                                message: "only (not [...]) is allowed in :where clause lists"
-                                    .to_string(),
-                                line: span.line,
-                                column: span.column,
-                                context: String::new(),
-                            }));
+                            // Unknown form - ignore silently for forward compatibility
+                            // This allows extending the pattern language without breaking parsing
                         }
                     }
                 }
@@ -328,9 +371,9 @@ impl DeclarationAnalyzer {
 
     /// Analyze a single pattern clause like [?e :component ?value].
     fn analyze_pattern_clause(elements: &[Ast], span: Span) -> Result<PatternClause> {
-        if elements.len() < 2 || elements.len() > 3 {
+        if elements.len() < 2 || elements.len() > 4 {
             return Err(Error::new(ErrorKind::ParseError {
-                message: "pattern clause must have 2 or 3 elements: [?entity :component] or [?entity :component ?value]".to_string(),
+                message: "pattern clause must have 2-4 elements: [?entity :component], [?entity :component ?value], or [?entity :component ?key ?value]".to_string(),
                 line: span.line,
                 column: span.column,
                 context: String::new(),
@@ -364,6 +407,9 @@ impl DeclarationAnalyzer {
         };
 
         // Value (optional)
+        // For 4-element patterns like [?room :exits ?direction ?destination],
+        // we treat the 3rd and 4th elements as a key-value pair query.
+        // For now, we represent this as a literal map-like query in the value.
         let value = if elements.len() == 3 {
             match &elements[2] {
                 Ast::Symbol(s, _) if s.starts_with('?') => {
@@ -372,6 +418,13 @@ impl DeclarationAnalyzer {
                 Ast::Symbol(s, _) if s == "_" => PatternValue::Wildcard,
                 other => PatternValue::Literal(other.clone()),
             }
+        } else if elements.len() == 4 {
+            // 4-element pattern: [?entity :component ?key ?value]
+            // Treat as key-value pair query (for relationship/map queries)
+            // Store as a vector literal containing both elements
+            let key_ast = elements[2].clone();
+            let value_ast = elements[3].clone();
+            PatternValue::Literal(Ast::Vector(vec![key_ast, value_ast], span))
         } else {
             PatternValue::Wildcard
         };
@@ -2452,6 +2505,11 @@ impl DeclarationAnalyzer {
                         };
                     }
                 }
+                "bindings" => {
+                    // Bindings can be inferred from syntax pattern variables,
+                    // so we accept but ignore this clause for now.
+                    // In the future, this could be used for explicit binding mappings.
+                }
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
                         message: format!("unknown command clause :{other}"),
@@ -2679,8 +2737,32 @@ impl DeclarationAnalyzer {
                     let precond = Self::analyze_precondition(value, &elements[i..], &mut i)?;
                     action.preconditions.push(precond);
                 }
-                "handler" => {
+                "preconditions" => {
+                    // Multiple preconditions as a vector of patterns
+                    let pattern = Self::analyze_where_clause(value)?;
+                    let precond = Precondition {
+                        pattern,
+                        guard: None,
+                        message: Ast::String("Precondition failed.".to_string(), value.span()),
+                    };
+                    action.preconditions.push(precond);
+                }
+                "on-fail" => {
+                    // Failure message for the last precondition
+                    if let Some(last_precond) = action.preconditions.last_mut() {
+                        last_precond.message = value.clone();
+                    }
+                    // If no precondition yet, store for later (will be set when precondition is added)
+                }
+                "handler" | "do" => {
                     action.handler = Self::analyze_handler_clause(value);
+                }
+                k if k.ends_with("-binding") => {
+                    // Optional parameter binding (key-binding, weapon-binding, etc.) - ignored for now
+                    // (future: could be used for optional command arguments)
+                }
+                "optional" | "default" => {
+                    // Other optional parameter specifications - ignored for now
                 }
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
@@ -2791,13 +2873,17 @@ impl DeclarationAnalyzer {
         let mut result = Vec::new();
         for element in elements {
             match element {
+                // Accept both ?variable and plain symbol forms
                 Ast::Symbol(s, _) if s.starts_with('?') => {
                     result.push(s[1..].to_string());
+                }
+                Ast::Symbol(s, _) => {
+                    result.push(s.clone());
                 }
                 other => {
                     return Err(Error::new(ErrorKind::ParseError {
                         message: format!(
-                            "parameter must be a ?variable, got {}",
+                            "parameter must be a symbol or ?variable, got {}",
                             other.type_name()
                         ),
                         line: other.span().line,

@@ -593,6 +593,124 @@ impl<E: LineEditor> Repl<E> {
             // (timeline) - show timeline status
             Ast::Symbol(s, _) if s == "timeline" => self.handle_timeline(),
 
+            // ==================== Parser Vocabulary Declarations ====================
+
+            // (verb: name :synonyms [...])
+            Ast::Symbol(s, _) if s == "verb:" => {
+                if let Some(Declaration::Verb(verb_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_verb(&verb_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid verb: form".to_string(),
+                    )))
+                }
+            }
+
+            // (direction: name :synonyms [...] :opposite ...)
+            Ast::Symbol(s, _) if s == "direction:" => {
+                if let Some(Declaration::Direction(dir_decl)) = DeclarationAnalyzer::analyze(form)?
+                {
+                    self.execute_direction(&dir_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid direction: form".to_string(),
+                    )))
+                }
+            }
+
+            // (preposition: name :implies ...)
+            Ast::Symbol(s, _) if s == "preposition:" => {
+                if let Some(Declaration::Preposition(prep_decl)) =
+                    DeclarationAnalyzer::analyze(form)?
+                {
+                    self.execute_preposition(&prep_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid preposition: form".to_string(),
+                    )))
+                }
+            }
+
+            // (pronoun: name :gender ... :number ...)
+            Ast::Symbol(s, _) if s == "pronoun:" => {
+                if let Some(Declaration::Pronoun(pronoun_decl)) =
+                    DeclarationAnalyzer::analyze(form)?
+                {
+                    self.execute_pronoun(&pronoun_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid pronoun: form".to_string(),
+                    )))
+                }
+            }
+
+            // (adverb: name)
+            Ast::Symbol(s, _) if s == "adverb:" => {
+                if let Some(Declaration::Adverb(adverb_decl)) = DeclarationAnalyzer::analyze(form)?
+                {
+                    self.execute_adverb(&adverb_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid adverb: form".to_string(),
+                    )))
+                }
+            }
+
+            // (type: name :extends [...] :where [...])
+            Ast::Symbol(s, _) if s == "type:" => {
+                if let Some(Declaration::NounType(type_decl)) = DeclarationAnalyzer::analyze(form)?
+                {
+                    self.execute_noun_type(&type_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid type: form".to_string(),
+                    )))
+                }
+            }
+
+            // (scope: name :extends [...] :where [...])
+            Ast::Symbol(s, _) if s == "scope:" => {
+                if let Some(Declaration::Scope(scope_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_scope(&scope_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid scope: form".to_string(),
+                    )))
+                }
+            }
+
+            // (command: name :syntax [...] :action ...)
+            Ast::Symbol(s, _) if s == "command:" => {
+                if let Some(Declaration::Command(cmd_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_command(&cmd_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid command: form".to_string(),
+                    )))
+                }
+            }
+
+            // (action: name :params [...] :preconditions [...] :do [...])
+            Ast::Symbol(s, _) if s == "action:" => {
+                if let Some(Declaration::Action(action_decl)) = DeclarationAnalyzer::analyze(form)?
+                {
+                    self.execute_action(&action_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid action: form".to_string(),
+                    )))
+                }
+            }
+
             _ => Ok(None),
         }
     }
@@ -816,6 +934,274 @@ impl<E: LineEditor> Repl<E> {
 
         // Return as a vector
         Ok(Some(Value::Vec(results.into_iter().collect())))
+    }
+
+    /// Executes a verb declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_verb(&mut self, verb_decl: &longtable_language::VerbDecl) -> Result<()> {
+        use longtable_parser::vocabulary::Verb;
+        use std::collections::HashSet;
+
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&verb_decl.name);
+
+        let synonyms: HashSet<_> = verb_decl
+            .synonyms
+            .iter()
+            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
+            .collect();
+
+        self.session
+            .vocabulary_registry_mut()
+            .register_verb(Verb { name, synonyms });
+        Ok(())
+    }
+
+    /// Executes a direction declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_direction(&mut self, dir_decl: &longtable_language::DirectionDecl) -> Result<()> {
+        use longtable_parser::vocabulary::Direction;
+        use std::collections::HashSet;
+
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&dir_decl.name);
+
+        let synonyms: HashSet<_> = dir_decl
+            .synonyms
+            .iter()
+            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
+            .collect();
+
+        let opposite = dir_decl
+            .opposite
+            .as_ref()
+            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s));
+
+        self.session
+            .vocabulary_registry_mut()
+            .register_direction(Direction {
+                name,
+                synonyms,
+                opposite,
+            });
+        Ok(())
+    }
+
+    /// Executes a preposition declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_preposition(
+        &mut self,
+        prep_decl: &longtable_language::PrepositionDecl,
+    ) -> Result<()> {
+        use longtable_parser::vocabulary::Preposition;
+
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&prep_decl.name);
+
+        let implies = prep_decl
+            .implies
+            .as_ref()
+            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s));
+
+        self.session
+            .vocabulary_registry_mut()
+            .register_preposition(Preposition { name, implies });
+        Ok(())
+    }
+
+    /// Executes a pronoun declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_pronoun(&mut self, pronoun_decl: &longtable_language::PronounDecl) -> Result<()> {
+        use longtable_language::declaration::PronounGender as DeclGender;
+        use longtable_language::declaration::PronounNumber as DeclNumber;
+        use longtable_parser::vocabulary::{Pronoun, PronounGender, PronounNumber};
+
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&pronoun_decl.name);
+
+        let gender = match pronoun_decl.gender {
+            DeclGender::Masculine => PronounGender::Masculine,
+            DeclGender::Feminine => PronounGender::Feminine,
+            DeclGender::Neuter => PronounGender::Neuter,
+        };
+
+        let number = match pronoun_decl.number {
+            DeclNumber::Singular => PronounNumber::Singular,
+            DeclNumber::Plural => PronounNumber::Plural,
+        };
+
+        self.session
+            .vocabulary_registry_mut()
+            .register_pronoun(Pronoun {
+                name,
+                gender,
+                number,
+            });
+        Ok(())
+    }
+
+    /// Executes an adverb declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_adverb(&mut self, adverb_decl: &longtable_language::AdverbDecl) -> Result<()> {
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&adverb_decl.name);
+
+        self.session.vocabulary_registry_mut().register_adverb(name);
+        Ok(())
+    }
+
+    /// Executes a noun type declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_noun_type(&mut self, type_decl: &longtable_language::NounTypeDecl) -> Result<()> {
+        use longtable_language::pretty::pretty_print;
+        use longtable_parser::vocabulary::NounType;
+
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&type_decl.name);
+
+        let extends: Vec<_> = type_decl
+            .extends
+            .iter()
+            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
+            .collect();
+
+        // Convert pattern back to source string for later compilation
+        let pattern_source = type_decl
+            .pattern
+            .clauses
+            .iter()
+            .map(|c| {
+                let value_str = match &c.value {
+                    longtable_language::PatternValue::Variable(v) => format!("?{v}"),
+                    longtable_language::PatternValue::Literal(ast) => pretty_print(ast),
+                    longtable_language::PatternValue::Wildcard => "_".to_string(),
+                };
+                format!("[?{} :{} {}]", c.entity_var, c.component, value_str)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        self.session
+            .vocabulary_registry_mut()
+            .register_type(NounType {
+                name,
+                extends,
+                pattern_source,
+            });
+        Ok(())
+    }
+
+    /// Executes a scope declaration to register in the vocabulary.
+    ///
+    /// Scopes define visibility rules for noun resolution.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_scope(&mut self, scope_decl: &longtable_language::ScopeDecl) -> Result<()> {
+        // For now, scopes are stored but not yet used in noun resolution
+        // TODO: Implement proper scope storage and usage
+        let _name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&scope_decl.name);
+        // Scopes will be used by the natural language parser for noun resolution
+        Ok(())
+    }
+
+    /// Executes a command declaration to register in the vocabulary.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_command(&mut self, cmd_decl: &longtable_language::CommandDecl) -> Result<()> {
+        use longtable_parser::vocabulary::CommandSyntax;
+
+        let name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&cmd_decl.name);
+
+        let action = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&cmd_decl.action);
+
+        // Convert syntax elements to source string for later compilation
+        let syntax_source = cmd_decl
+            .syntax
+            .iter()
+            .map(|elem| match elem {
+                longtable_language::SyntaxElement::Verb => ":verb".to_string(),
+                longtable_language::SyntaxElement::Direction { var } => {
+                    format!("?{var} :direction")
+                }
+                longtable_language::SyntaxElement::Noun {
+                    var,
+                    type_constraint,
+                } => {
+                    let constraint = type_constraint
+                        .as_ref()
+                        .map(|t| format!(" :{t}"))
+                        .unwrap_or_default();
+                    format!("?{var}{constraint}")
+                }
+                longtable_language::SyntaxElement::OptionalNoun {
+                    var,
+                    type_constraint,
+                } => {
+                    let constraint = type_constraint
+                        .as_ref()
+                        .map(|t| format!(" :{t}"))
+                        .unwrap_or_default();
+                    format!("[?{var}{constraint}]")
+                }
+                longtable_language::SyntaxElement::Preposition(prep) => format!(":{prep}"),
+                longtable_language::SyntaxElement::Literal(word) => format!("\"{word}\""),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        self.session
+            .vocabulary_registry_mut()
+            .register_command(CommandSyntax {
+                name,
+                action,
+                priority: cmd_decl.priority,
+                syntax_source,
+            });
+        Ok(())
+    }
+
+    /// Executes an action declaration to register in the vocabulary.
+    ///
+    /// Actions define what happens when a command matches.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_action(&mut self, action_decl: &longtable_language::ActionDecl) -> Result<()> {
+        // For now, actions are stored but not yet executed
+        // TODO: Implement proper action registration and execution
+        let _name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&action_decl.name);
+        // Actions will be compiled and stored for execution when commands match
+        Ok(())
     }
 
     /// Handles the (why entity :component) or (why entity :component :depth N) form.

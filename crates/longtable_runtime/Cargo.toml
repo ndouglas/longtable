@@ -14,6 +14,7 @@ longtable_foundation = { workspace = true, features = ["serde"] }
 longtable_storage = { workspace = true, features = ["serde"] }
 longtable_language.workspace = true
 longtable_engine.workspace = true
+longtable_parser.workspace = true
 longtable_stdlib.workspace = true
 longtable_debug.workspace = true
 thiserror.workspace = true

@@ -5,6 +5,7 @@
 use longtable_debug::{DebugSession, Timeline, Tracer};
 use longtable_foundation::{EntityId, Value};
 use longtable_language::{ModuleRegistry, NamespaceContext};
+use longtable_parser::VocabularyRegistry;
 use longtable_storage::World;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -42,6 +43,9 @@ pub struct Session {
 
     /// Timeline for time travel debugging.
     timeline: Timeline,
+
+    /// Vocabulary registry for natural language parsing.
+    vocabulary_registry: VocabularyRegistry,
 }
 
 impl Session {
@@ -59,6 +63,7 @@ impl Session {
             tracer: Tracer::disabled(),
             debug_session: DebugSession::new(),
             timeline: Timeline::new(),
+            vocabulary_registry: VocabularyRegistry::default(),
         }
     }
 
@@ -76,6 +81,7 @@ impl Session {
             tracer: Tracer::disabled(),
             debug_session: DebugSession::new(),
             timeline: Timeline::new(),
+            vocabulary_registry: VocabularyRegistry::default(),
         }
     }
 
@@ -220,6 +226,17 @@ impl Session {
     /// Returns a mutable reference to the timeline.
     pub fn timeline_mut(&mut self) -> &mut Timeline {
         &mut self.timeline
+    }
+
+    /// Returns a reference to the vocabulary registry.
+    #[must_use]
+    pub fn vocabulary_registry(&self) -> &VocabularyRegistry {
+        &self.vocabulary_registry
+    }
+
+    /// Returns a mutable reference to the vocabulary registry.
+    pub fn vocabulary_registry_mut(&mut self) -> &mut VocabularyRegistry {
+        &mut self.vocabulary_registry
     }
 }
 

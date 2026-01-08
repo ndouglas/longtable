@@ -1,0 +1,439 @@
+;; Adventure Game Rules
+;; Reactive rules that fire based on game state.
+
+;; =============================================================================
+;; ROOM ENTRY RULES
+;; =============================================================================
+
+;; Mark room as visited when player enters
+(rule: mark-visited
+  :salience 100
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    (not [?room :tag/visited true])
+  ]
+  :then [
+    (assert [?room :tag/visited true])
+  ])
+
+;; Increment move counter on room change
+(rule: count-moves
+  :salience 99
+  :when [
+    [?player :tag/player true]
+    [?player :moves/value ?moves]
+    [:event/room-changed true]
+  ]
+  :then [
+    (set [?player :moves/value] (+ ?moves 1))
+  ])
+
+;; =============================================================================
+;; DARKNESS RULES
+;; =============================================================================
+
+;; Check if player is in darkness
+(rule: check-darkness
+  :salience 50
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?room :tag/dark true]
+    (not (exists [?light :contained-in ?player]
+                 [?light :tag/lit true]))
+  ]
+  :then [
+    (assert [:player-in-dark true])
+  ])
+
+;; Clear darkness when player has light
+(rule: clear-darkness
+  :salience 51
+  :when [
+    [:player-in-dark true]
+    [?player :tag/player true]
+    [?light :contained-in ?player]
+    [?light :tag/lit true]
+  ]
+  :then [
+    (retract [:player-in-dark true])
+  ])
+
+;; Warn player in dark rooms
+(rule: darkness-warning
+  :salience 10
+  :when [
+    [:player-in-dark true]
+  ]
+  :then [
+    (say "It is pitch black. You are likely to be eaten by a grue.")
+  ])
+
+;; Grue attack in darkness (after multiple turns)
+(rule: grue-attack
+  :salience 5
+  :when [
+    [:player-in-dark true]
+    [:dark-turns ?turns]
+    (>= ?turns 3)
+    [?player :tag/player true]
+  ]
+  :then [
+    (say "You stumble in the darkness... something lunges at you!")
+    (let [?hp (get ?player :health/current)]
+      (set [?player :health/current] (- ?hp 20)))
+    (set [:dark-turns] 0)
+  ])
+
+;; Count turns in darkness
+(rule: count-dark-turns
+  :salience 6
+  :when [
+    [:player-in-dark true]
+    [:dark-turns ?turns]
+  ]
+  :then [
+    (set [:dark-turns] (+ ?turns 1))
+  ])
+
+;; Initialize dark turn counter
+(rule: init-dark-turns
+  :salience 7
+  :when [
+    [:player-in-dark true]
+    (not [:dark-turns _])
+  ]
+  :then [
+    (assert [:dark-turns 0])
+  ])
+
+;; =============================================================================
+;; HOSTILE NPC RULES
+;; =============================================================================
+
+;; Hostile NPC attacks player
+(rule: hostile-attack
+  :salience 20
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?npc :in-room ?room]
+    [?npc :hostile/damage ?damage]
+    [?npc :hostile/attack-message ?message]
+    [?player :health/current ?hp]
+    (not [?player :blocking true])
+  ]
+  :then [
+    (say ?message)
+    (set [?player :health/current] (- ?hp ?damage))
+    (say (concat "You take " ?damage " damage!"))
+  ])
+
+;; Blocked attack
+(rule: blocked-attack
+  :salience 21
+  :when [
+    [?player :tag/player true]
+    [?player :blocking true]
+    [?npc :in-room ?room]
+    [?player :in-room ?room]
+    [?npc :hostile/damage ?damage]
+  ]
+  :then [
+    (say "You block the attack!")
+    (retract [?player :blocking true])
+  ])
+
+;; Reset blocking at end of turn
+(rule: reset-blocking
+  :salience 1
+  :when [
+    [?player :tag/player true]
+    [?player :blocking true]
+    [:end-of-turn true]
+  ]
+  :then [
+    (retract [?player :blocking true])
+  ])
+
+;; =============================================================================
+;; DEATH/DEFEAT RULES
+;; =============================================================================
+
+;; Player death
+(rule: player-death
+  :salience 1000
+  :when [
+    [?player :tag/player true]
+    [?player :health/current ?hp]
+    (<= ?hp 0)
+  ]
+  :then [
+    (say "")
+    (say "*** You have died. ***")
+    (say "")
+    (say "Would you like to RESTART, RESTORE a saved game, or QUIT?")
+    (assert [:game-over true])
+  ])
+
+;; NPC defeat - remove hostility
+(rule: npc-defeat
+  :salience 100
+  :when [
+    [?npc :tag/npc true]
+    [?npc :health/current ?hp]
+    (<= ?hp 0)
+    [?npc :hostile/damage _]
+  ]
+  :then [
+    (retract [?npc :hostile/damage _])
+    (retract [?npc :hostile/attack-message _])
+    (say (concat (get ?npc :name) " collapses, defeated!"))
+  ])
+
+;; =============================================================================
+;; SCORE RULES
+;; =============================================================================
+
+;; Award points for first visit to special rooms
+(rule: treasure-chamber-discovery
+  :salience 50
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?room :name "Treasure Chamber"]
+    (not [:discovered-treasure-chamber true])
+  ]
+  :then [
+    (assert [:discovered-treasure-chamber true])
+    (let [?score (get ?player :score/value)]
+      (set [?player :score/value] (+ ?score 25)))
+    (say "[Your score has increased by 25 points.]")
+  ])
+
+;; Award points for taking valuable items
+(rule: take-crown-points
+  :salience 50
+  :when [
+    [?crown :name "golden crown"]
+    [?crown :contained-in ?player]
+    [?player :tag/player true]
+    (not [:got-crown-points true])
+  ]
+  :then [
+    (assert [:got-crown-points true])
+    (let [?score (get ?player :score/value)]
+      (set [?player :score/value] (+ ?score 50)))
+    (say "[Your score has increased by 50 points.]")
+  ])
+
+;; Award points for defeating the troll
+(rule: defeat-troll-points
+  :salience 50
+  :when [
+    [?troll :name "Cave Troll"]
+    [?troll :health/current ?hp]
+    (<= ?hp 0)
+    (not [:defeated-troll-points true])
+  ]
+  :then [
+    (assert [:defeated-troll-points true])
+    (let [?player (first [?p :tag/player true])]
+      (let [?score (get ?player :score/value)]
+        (set [?player :score/value] (+ ?score 30))))
+    (say "[Your score has increased by 30 points.]")
+  ])
+
+;; =============================================================================
+;; VICTORY CONDITION
+;; =============================================================================
+
+;; Victory when player has crown and returns to entrance
+(rule: victory
+  :salience 1000
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?room :name "Cave Entrance"]
+    [?crown :name "golden crown"]
+    [?crown :contained-in ?player]
+  ]
+  :then [
+    (say "")
+    (say "*** CONGRATULATIONS! ***")
+    (say "")
+    (say "You emerge from the cave with the legendary golden crown!")
+    (say "Your adventure is complete.")
+    (say "")
+    (let [?score (get ?player :score/value)]
+      (let [?moves (get ?player :moves/value)]
+        (say (concat "Final score: " ?score " in " ?moves " moves."))))
+    (assert [:game-won true])
+  ])
+
+;; =============================================================================
+;; ITEM-SPECIFIC RULES
+;; =============================================================================
+
+;; Light the lantern - illuminates dark rooms
+(rule: lantern-illuminate
+  :salience 40
+  :when [
+    [?lantern :name "brass lantern"]
+    [?lantern :tag/lit true]
+    [?lantern :contained-in ?player]
+    [?player :in-room ?room]
+    [?room :tag/dark true]
+  ]
+  :then [
+    (say "The brass lantern casts a warm glow, illuminating the area.")
+  ])
+
+;; Crystal shard glows near treasure
+(rule: crystal-glow
+  :salience 30
+  :when [
+    [?crystal :name "crystal shard"]
+    [?crystal :contained-in ?player]
+    [?player :in-room ?room]
+    (or [?room :name "Treasure Chamber"]
+        (exists [?item :in-room ?room] [?item :name "golden crown"]))
+  ]
+  :then [
+    (say "The crystal shard pulses with a soft, excited light!")
+  ])
+
+;; Rope can be used to climb
+(rule: rope-climb-chimney
+  :salience 40
+  :when [
+    [:command/action :climb]
+    [:command/target ?chimney]
+    [?chimney :name "chimney"]
+    [?rope :name "old rope"]
+    [?rope :contained-in ?player]
+    [?player :tag/player true]
+  ]
+  :then [
+    (say "You tie the rope and carefully climb up the chimney!")
+    (retract [?player :in-room _])
+    ;; Would lead to secret area if we had one
+    (say "Unfortunately, the chimney is too narrow to pass through.")
+  ])
+
+;; Silver key unlocks treasure chest
+(rule: key-fits-chest
+  :salience 40
+  :when [
+    [:command/action :unlock]
+    [:command/target ?chest]
+    [?chest :name "treasure chest"]
+    [?key :name "silver key"]
+    [?key :contained-in ?player]
+    [?player :tag/player true]
+  ]
+  :then [
+    (say "The silver key fits perfectly! You hear a satisfying click.")
+  ])
+
+;; =============================================================================
+;; NPC DIALOGUE RULES
+;; =============================================================================
+
+;; Troll becomes friendly after defeat
+(rule: troll-friendly
+  :salience 30
+  :when [
+    [?troll :name "Cave Troll"]
+    (not [?troll :hostile/damage _])
+    [?troll :in-room ?room]
+    [?player :tag/player true]
+    [?player :in-room ?room]
+  ]
+  :then [
+    (say "The defeated troll regards you warily but without hostility.")
+  ])
+
+;; Troll hints about treasure
+(rule: troll-treasure-hint
+  :salience 25
+  :when [
+    [:command/action :ask]
+    [:command/target ?troll]
+    [:command/topic :treasure]
+    [?troll :name "Cave Troll"]
+    (not [?troll :hostile/damage _])
+  ]
+  :then [
+    (say "The troll grunts: 'Shiny crown... past the lake... need key...'")
+  ])
+
+;; =============================================================================
+;; CONTAINER RULES
+;; =============================================================================
+
+;; Automatically list contents when opening
+(rule: open-shows-contents
+  :salience 30
+  :when [
+    [:command/action :open]
+    [:command/target ?container]
+    [?container :tag/container true]
+    [?container :tag/open true]
+  ]
+  :then [
+    (let [?contents (query [?item :contained-in ?container])]
+      (if (empty? ?contents)
+        (say "It's empty.")
+        (do
+          (say "Opening it reveals:")
+          (for-each ?item ?contents
+            (say (concat "  " (get ?item :name)))))))
+  ])
+
+;; =============================================================================
+;; AMBIENT RULES
+;; =============================================================================
+
+;; Water sounds near the lake
+(rule: lake-ambient
+  :salience 5
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?room :name "Underground Lake"]
+  ]
+  :then [
+    (random-chance 0.3
+      (say "You hear the gentle lapping of water against the shore."))
+  ])
+
+;; Crystal cavern sparkles
+(rule: crystal-ambient
+  :salience 5
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?room :name "Crystal Cavern"]
+    [?lantern :name "brass lantern"]
+    [?lantern :tag/lit true]
+    [?lantern :contained-in ?player]
+  ]
+  :then [
+    (random-chance 0.4
+      (say "The crystals sparkle beautifully in the lantern light."))
+  ])
+
+;; Wind in the main hall
+(rule: hall-ambient
+  :salience 5
+  :when [
+    [?player :tag/player true]
+    [?player :in-room ?room]
+    [?room :name "Main Hall"]
+  ]
+  :then [
+    (random-chance 0.2
+      (say "A cool draft stirs the stale air."))
+  ])

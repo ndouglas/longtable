@@ -1,0 +1,599 @@
+;; Adventure Game Actions
+;; Defines preconditions and handlers for each action.
+
+;; =============================================================================
+;; MOVEMENT ACTIONS
+;; =============================================================================
+
+(action: go
+  :params [actor direction]
+  :preconditions [
+    ;; Actor must be in a room
+    [?actor :in-room ?room]
+    ;; Room must have an exit in that direction
+    [?room :exits ?direction ?destination]
+  ]
+  :on-fail "You can't go that way."
+  :handler [
+    (retract [?actor :in-room ?room])
+    (assert [?actor :in-room ?destination])
+    (set-it! ?destination)
+    (say (describe-room ?destination))
+  ])
+
+(action: go-through
+  :params [actor target]
+  :preconditions [
+    [?target :tag/door true]
+    [?target :tag/open true]
+    [?target :door/destination ?destination]
+  ]
+  :on-fail "The door is closed."
+  :handler [
+    (retract [?actor :in-room _])
+    (assert [?actor :in-room ?destination])
+    (set-it! ?destination)
+    (say (describe-room ?destination))
+  ])
+
+(action: go-out
+  :params [actor]
+  :preconditions [
+    [?actor :in-room ?room]
+    [?room :exits :out ?destination]
+  ]
+  :on-fail "There's no obvious exit."
+  :handler [
+    (retract [?actor :in-room ?room])
+    (assert [?actor :in-room ?destination])
+    (say (describe-room ?destination))
+  ])
+
+;; =============================================================================
+;; LOOKING ACTIONS
+;; =============================================================================
+
+(action: look
+  :params [actor]
+  :preconditions [
+    [?actor :in-room ?room]
+  ]
+  :handler [
+    (say (describe-room ?room))
+  ])
+
+(action: examine
+  :params [actor target]
+  :preconditions [
+    ;; Target must be visible (in room or inventory)
+    (or [?target :in-room ?room]
+        [?target :contained-in ?actor]
+        [?target :contained-in ?container])
+  ]
+  :handler [
+    (say (get ?target :description))
+    (set-it! ?target)
+  ])
+
+(action: search
+  :params [actor target]
+  :preconditions [
+    [?target :tag/container true]
+    [?target :tag/open true]
+  ]
+  :on-fail "You can't search that, or it's closed."
+  :handler [
+    (say (list-contents ?target))
+    (set-it! ?target)
+  ])
+
+(action: read
+  :params [actor target]
+  :preconditions [
+    [?target :readable/text ?text]
+  ]
+  :on-fail "There's nothing to read on that."
+  :handler [
+    (say ?text)
+    (set-it! ?target)
+  ])
+
+;; =============================================================================
+;; INVENTORY ACTIONS
+;; =============================================================================
+
+(action: inventory
+  :params [actor]
+  :handler [
+    (say (list-inventory ?actor))
+  ])
+
+(action: take
+  :params [actor target]
+  :preconditions [
+    [?target :tag/takeable true]
+    [?target :in-room ?room]
+    [?actor :in-room ?room]
+  ]
+  :on-fail "You can't take that."
+  :handler [
+    (retract [?target :in-room ?room])
+    (assert [?target :contained-in ?actor])
+    (say "Taken.")
+    (set-it! ?target)
+  ])
+
+(action: take-all
+  :params [actor]
+  :preconditions [
+    [?actor :in-room ?room]
+  ]
+  :handler [
+    (for-each [?item :in-room ?room]
+      (when [?item :tag/takeable true]
+        (retract [?item :in-room ?room])
+        (assert [?item :contained-in ?actor])
+        (say (concat "Taken: " (get ?item :name) "."))))
+  ])
+
+(action: drop
+  :params [actor target]
+  :preconditions [
+    [?target :contained-in ?actor]
+    [?actor :in-room ?room]
+  ]
+  :on-fail "You're not carrying that."
+  :handler [
+    (retract [?target :contained-in ?actor])
+    (assert [?target :in-room ?room])
+    (say "Dropped.")
+    (set-it! ?target)
+  ])
+
+(action: drop-all
+  :params [actor]
+  :preconditions [
+    [?actor :in-room ?room]
+  ]
+  :handler [
+    (for-each [?item :contained-in ?actor]
+      (retract [?item :contained-in ?actor])
+      (assert [?item :in-room ?room])
+      (say (concat "Dropped: " (get ?item :name) ".")))
+  ])
+
+(action: take-from
+  :params [actor item container]
+  :preconditions [
+    [?item :contained-in ?container]
+    [?container :tag/open true]
+    [?item :tag/takeable true]
+  ]
+  :on-fail "You can't take that from there."
+  :handler [
+    (retract [?item :contained-in ?container])
+    (assert [?item :contained-in ?actor])
+    (say "Taken.")
+    (set-it! ?item)
+  ])
+
+;; =============================================================================
+;; CONTAINER ACTIONS
+;; =============================================================================
+
+(action: put-in
+  :params [actor item container]
+  :preconditions [
+    [?item :contained-in ?actor]
+    [?container :tag/container true]
+    [?container :tag/open true]
+  ]
+  :on-fail "You can't put that there."
+  :handler [
+    (retract [?item :contained-in ?actor])
+    (assert [?item :contained-in ?container])
+    (say "Done.")
+    (set-it! ?item)
+  ])
+
+(action: put-on
+  :params [actor item surface]
+  :preconditions [
+    [?item :contained-in ?actor]
+  ]
+  :on-fail "You're not carrying that."
+  :handler [
+    (retract [?item :contained-in ?actor])
+    (assert [?item :on-surface ?surface])
+    (say "Done.")
+    (set-it! ?item)
+  ])
+
+;; =============================================================================
+;; DOOR/OPENABLE ACTIONS
+;; =============================================================================
+
+(action: open
+  :params [actor target]
+  :preconditions [
+    [?target :tag/openable true]
+    (not [?target :tag/open true])
+    (not [?target :tag/locked true])
+  ]
+  :on-fail "You can't open that, or it's already open, or it's locked."
+  :handler [
+    (assert [?target :tag/open true])
+    (say "Opened.")
+    (set-it! ?target)
+  ])
+
+(action: close
+  :params [actor target]
+  :preconditions [
+    [?target :tag/openable true]
+    [?target :tag/open true]
+  ]
+  :on-fail "You can't close that, or it's already closed."
+  :handler [
+    (retract [?target :tag/open true])
+    (say "Closed.")
+    (set-it! ?target)
+  ])
+
+(action: unlock
+  :params [actor target]
+  :key-binding key  ;; optional key from "with" clause
+  :preconditions [
+    [?target :tag/locked true]
+    [?target :lock/key-id ?key-id]
+    ;; If key provided, it must match; otherwise search inventory
+    (or (and ?key [?key :key/key-id ?key-id] [?key :contained-in ?actor])
+        (exists [?k :contained-in ?actor] [?k :key/key-id ?key-id]))
+  ]
+  :on-fail "You don't have the right key."
+  :handler [
+    (retract [?target :tag/locked true])
+    (say "Unlocked.")
+    (set-it! ?target)
+  ])
+
+(action: lock
+  :params [actor target]
+  :key-binding key
+  :preconditions [
+    [?target :tag/openable true]
+    (not [?target :tag/open true])
+    (not [?target :tag/locked true])
+    [?target :lock/key-id ?key-id]
+    (or (and ?key [?key :key/key-id ?key-id] [?key :contained-in ?actor])
+        (exists [?k :contained-in ?actor] [?k :key/key-id ?key-id]))
+  ]
+  :on-fail "You can't lock that."
+  :handler [
+    (assert [?target :tag/locked true])
+    (say "Locked.")
+    (set-it! ?target)
+  ])
+
+;; =============================================================================
+;; COMBAT ACTIONS
+;; =============================================================================
+
+(action: attack
+  :params [actor target]
+  :weapon-binding weapon
+  :preconditions [
+    [?target :health/current ?hp]
+    ;; Find weapon if not specified
+    (or ?weapon
+        (exists [?w :contained-in ?actor] [?w :weapon/damage _]))
+  ]
+  :on-fail "You can't attack that."
+  :handler [
+    (let [?weapon-used (or ?weapon
+                           (first [?w :contained-in ?actor] [?w :weapon/damage _]))]
+      (let [?damage (get ?weapon-used :weapon/damage)]
+        (let [?new-hp (- ?hp ?damage)]
+          (set [?target :health/current] ?new-hp)
+          (say (concat "You strike " (get ?target :name) " for " ?damage " damage!"))
+          (when (<= ?new-hp 0)
+            (say (concat (get ?target :name) " is defeated!"))
+            (retract [?target :hostile/damage _])))))
+  ])
+
+(action: block
+  :params [actor]
+  :handler [
+    (assert [?actor :blocking true])
+    (say "You raise your guard, ready to block the next attack.")
+  ])
+
+;; =============================================================================
+;; COMMUNICATION ACTIONS
+;; =============================================================================
+
+(action: greet
+  :params [actor target]
+  :preconditions [
+    [?target :tag/npc true]
+    [?target :dialogue/greeting ?greeting]
+  ]
+  :on-fail "They don't respond."
+  :handler [
+    (say ?greeting)
+    (set-it! ?target)
+  ])
+
+(action: talk
+  :params [actor target]
+  :preconditions [
+    [?target :tag/npc true]
+    [?target :dialogue/greeting ?greeting]
+  ]
+  :on-fail "They don't seem talkative."
+  :handler [
+    (say ?greeting)
+    (say "What would you like to ask about?")
+    (set-it! ?target)
+  ])
+
+(action: ask
+  :params [actor target topic]
+  :preconditions [
+    [?target :tag/npc true]
+    [?target :dialogue/topics ?topics]
+  ]
+  :handler [
+    (let [?response (get-in ?topics [?topic])]
+      (if ?response
+        (say ?response)
+        (say "They don't know anything about that.")))
+    (set-it! ?target)
+  ])
+
+(action: tell
+  :params [actor target topic]
+  :preconditions [
+    [?target :tag/npc true]
+  ]
+  :handler [
+    (say "They listen politely.")
+    (set-it! ?target)
+  ])
+
+;; =============================================================================
+;; ITEM INTERACTION ACTIONS
+;; =============================================================================
+
+(action: use
+  :params [actor item]
+  :preconditions [
+    [?item :contained-in ?actor]
+  ]
+  :on-fail "You're not carrying that."
+  :handler [
+    ;; Default use behavior - specific items override via rules
+    (say "Nothing obvious happens.")
+    (set-it! ?item)
+  ])
+
+(action: use-on
+  :params [actor item target]
+  :preconditions [
+    [?item :contained-in ?actor]
+  ]
+  :on-fail "You're not carrying that."
+  :handler [
+    ;; Default use-on behavior - specific items override via rules
+    (say "That doesn't seem to work.")
+    (set-it! ?item)
+  ])
+
+(action: give
+  :params [actor item target]
+  :preconditions [
+    [?item :contained-in ?actor]
+    [?target :tag/npc true]
+  ]
+  :on-fail "You can't give that to them."
+  :handler [
+    (retract [?item :contained-in ?actor])
+    (assert [?item :contained-in ?target])
+    (say (concat "You give the " (get ?item :name) " to " (get ?target :name) "."))
+    (set-it! ?item)
+  ])
+
+(action: show
+  :params [actor item target]
+  :preconditions [
+    [?item :contained-in ?actor]
+    [?target :tag/npc true]
+  ]
+  :on-fail "You can't show that to them."
+  :handler [
+    (say (concat "You show the " (get ?item :name) " to " (get ?target :name) "."))
+    (say "They look at it with interest.")
+    (set-it! ?item)
+  ])
+
+(action: throw
+  :params [actor item target]
+  :preconditions [
+    [?item :contained-in ?actor]
+  ]
+  :on-fail "You're not carrying that."
+  :handler [
+    (retract [?item :contained-in ?actor])
+    [?actor :in-room ?room]
+    (assert [?item :in-room ?room])
+    (say (concat "You throw the " (get ?item :name) "."))
+    (set-it! ?item)
+  ])
+
+;; =============================================================================
+;; PHYSICAL INTERACTION ACTIONS
+;; =============================================================================
+
+(action: push
+  :params [actor target]
+  :handler [
+    (say "You push it, but nothing happens.")
+    (set-it! ?target)
+  ])
+
+(action: pull
+  :params [actor target]
+  :handler [
+    (say "You pull it, but nothing happens.")
+    (set-it! ?target)
+  ])
+
+(action: turn
+  :params [actor target]
+  :handler [
+    (say "You turn it, but nothing happens.")
+    (set-it! ?target)
+  ])
+
+(action: touch
+  :params [actor target]
+  :handler [
+    (say "You touch it. It feels ordinary.")
+    (set-it! ?target)
+  ])
+
+(action: climb
+  :params [actor target]
+  :handler [
+    (say "You can't climb that.")
+    (set-it! ?target)
+  ])
+
+;; =============================================================================
+;; LIGHT ACTIONS
+;; =============================================================================
+
+(action: light
+  :params [actor target]
+  :preconditions [
+    [?target :light-source/radius _]
+    [?target :contained-in ?actor]
+    (not [?target :tag/lit true])
+  ]
+  :on-fail "You can't light that, or it's already lit."
+  :handler [
+    (assert [?target :tag/lit true])
+    (say (concat "The " (get ?target :name) " is now lit."))
+    (set-it! ?target)
+  ])
+
+(action: extinguish
+  :params [actor target]
+  :preconditions [
+    [?target :light-source/radius _]
+    [?target :tag/lit true]
+  ]
+  :on-fail "That's not lit."
+  :handler [
+    (retract [?target :tag/lit true])
+    (say (concat "The " (get ?target :name) " is now dark."))
+    (set-it! ?target)
+  ])
+
+;; =============================================================================
+;; CLOTHING ACTIONS
+;; =============================================================================
+
+(action: wear
+  :params [actor item]
+  :preconditions [
+    [?item :contained-in ?actor]
+    [?item :tag/wearable true]
+    (not [?item :tag/worn true])
+  ]
+  :on-fail "You can't wear that."
+  :handler [
+    (assert [?item :tag/worn true])
+    (say (concat "You put on the " (get ?item :name) "."))
+    (set-it! ?item)
+  ])
+
+(action: remove-worn
+  :params [actor item]
+  :preconditions [
+    [?item :contained-in ?actor]
+    [?item :tag/worn true]
+  ]
+  :on-fail "You're not wearing that."
+  :handler [
+    (retract [?item :tag/worn true])
+    (say (concat "You take off the " (get ?item :name) "."))
+    (set-it! ?item)
+  ])
+
+;; =============================================================================
+;; META ACTIONS
+;; =============================================================================
+
+(action: wait
+  :params [actor]
+  :handler [
+    (say "Time passes...")
+  ])
+
+(action: score
+  :params [actor]
+  :preconditions [
+    [?actor :score/value ?score]
+    [?actor :moves/value ?moves]
+  ]
+  :handler [
+    (say (concat "Score: " ?score " in " ?moves " moves."))
+  ])
+
+(action: help
+  :params [actor]
+  :handler [
+    (say "Available commands:")
+    (say "  Movement: go, north, south, east, west, up, down")
+    (say "  Looking: look, examine, search, read")
+    (say "  Items: take, drop, inventory, put, give, throw")
+    (say "  Interaction: open, close, lock, unlock, use, push, pull")
+    (say "  Combat: attack, block")
+    (say "  Light: light, extinguish")
+    (say "  Meta: wait, score, save, restore, quit, undo")
+  ])
+
+(action: save
+  :params [actor]
+  :handler [
+    (save-game)
+    (say "Game saved.")
+  ])
+
+(action: restore
+  :params [actor]
+  :handler [
+    (restore-game)
+    (say "Game restored.")
+  ])
+
+(action: quit
+  :params [actor]
+  :handler [
+    (say "Thanks for playing!")
+    (quit-game)
+  ])
+
+(action: again
+  :params [actor]
+  :handler [
+    (repeat-last-command)
+  ])
+
+(action: undo
+  :params [actor]
+  :handler [
+    (undo-last-turn)
+    (say "Undone.")
+  ])
