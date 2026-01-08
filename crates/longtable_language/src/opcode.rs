@@ -118,6 +118,56 @@ pub enum Opcode {
     /// Remove relationship: `[source, rel_kw, target] -> []`
     Unlink,
 
+    // === Machine Configuration (RuntimeContext Operations) ===
+    /// Register a component schema: `[schema_map] -> []`
+    /// Schema map should contain `:name`, `:fields`, `:storage` keys.
+    /// Requires RuntimeContext.
+    RegisterComponent,
+    /// Register a relationship schema: `[schema_map] -> []`
+    /// Schema map should contain `:name`, `:cardinality`, `:on-delete` keys.
+    /// Requires RuntimeContext.
+    RegisterRelationship,
+    /// Register a verb: `[data_map] -> []`
+    /// Data map should contain `:name`, `:synonyms` keys.
+    /// Requires RuntimeContext.
+    RegisterVerb,
+    /// Register a direction: `[data_map] -> []`
+    /// Data map should contain `:name`, `:synonyms`, `:opposite` keys.
+    /// Requires RuntimeContext.
+    RegisterDirection,
+    /// Register a preposition: `[data_map] -> []`
+    /// Data map should contain `:name`, `:implies` keys.
+    /// Requires RuntimeContext.
+    RegisterPreposition,
+    /// Register a pronoun: `[data_map] -> []`
+    /// Data map should contain `:name`, `:gender`, `:number` keys.
+    /// Requires RuntimeContext.
+    RegisterPronoun,
+    /// Register an adverb: `[data_map] -> []`
+    /// Data map should contain `:name` key.
+    /// Requires RuntimeContext.
+    RegisterAdverb,
+    /// Register a noun type constraint: `[data_map] -> []`
+    /// Data map should contain `:name`, `:extends`, `:pattern` keys.
+    /// Requires RuntimeContext.
+    RegisterType,
+    /// Register a scope: `[data_map] -> []`
+    /// Data map should contain `:name`, `:resolver` keys.
+    /// Requires RuntimeContext.
+    RegisterScope,
+    /// Register a command syntax: `[data_map] -> []`
+    /// Data map should contain `:name`, `:syntax`, `:action`, `:priority` keys.
+    /// Requires RuntimeContext.
+    RegisterCommand,
+    /// Register an action handler: `[data_map] -> []`
+    /// Data map should contain `:name`, `:match`, `:preconditions`, `:handler` keys.
+    /// Requires RuntimeContext.
+    RegisterAction,
+    /// Register a rule as an entity: `[data_map] -> [entity_id]`
+    /// Data map should contain `:name`, `:when`, `:then`, `:salience`, `:once` keys.
+    /// Requires RuntimeContext.
+    RegisterRule,
+
     // === Collections ===
     /// Create empty vector: `[] -> [vec]`
     VecNew,

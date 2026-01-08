@@ -110,7 +110,14 @@ RegisterRelationship,
 - Schema appears in World's registry
 - REPL `component:` form removed
 
-**Status**: Not Started
+**Status**: Complete (opcodes and compiler forms added)
+
+**Implementation Notes**:
+- Added `RegisterComponent`, `RegisterRelationship` opcodes to `opcode.rs`
+- Added all vocabulary/parser opcodes: `RegisterVerb`, `RegisterDirection`, etc.
+- Added all rule opcodes: `RegisterRule`
+- Added compiler forms in `compiler.rs` that use `DeclarationAnalyzer` to parse and convert to Value maps
+- VM execution of registration opcodes requires `RuntimeContext` (errors with helpful message in `VmContext` path)
 
 ---
 
@@ -156,7 +163,7 @@ RegisterAdverb,
 - Vocabulary appears in registry
 - REPL vocabulary forms removed
 
-**Status**: Not Started
+**Status**: Complete (opcodes and compiler forms added in Stage 2)
 
 ---
 
@@ -202,7 +209,7 @@ RegisterAction,
 - Parser configured correctly
 - REPL parser forms removed
 
-**Status**: Not Started
+**Status**: Complete (opcodes and compiler forms added in Stage 2)
 
 ---
 
@@ -238,7 +245,7 @@ RegisterRule,
 - Tick executor finds and runs rule entities
 - REPL `rule:` form removed
 
-**Status**: Not Started
+**Status**: Complete (opcodes and compiler forms added in Stage 2)
 
 ---
 

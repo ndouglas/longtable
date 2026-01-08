@@ -10,12 +10,14 @@
 #![allow(clippy::manual_let_else)]
 #![allow(clippy::only_used_in_recursion)]
 #![allow(clippy::unused_self)]
+#![allow(clippy::unnecessary_wraps)]
 
 use std::collections::HashMap;
 
-use longtable_foundation::{Error, ErrorKind, Interner, Result, Value};
+use longtable_foundation::{Error, ErrorKind, Interner, KeywordId, LtMap, LtVec, Result, Value};
 
 use crate::ast::Ast;
+use crate::declaration::DeclarationAnalyzer;
 use crate::macro_expander::MacroExpander;
 use crate::macro_registry::MacroRegistry;
 use crate::namespace::NamespaceContext;
@@ -679,6 +681,19 @@ impl Compiler {
                 "set-field" => return self.compile_set_field(args, span, code),
                 "link" => return self.compile_link(args, span, code),
                 "unlink" => return self.compile_unlink(args, span, code),
+                // Declaration forms (compile to registration opcodes)
+                "component:" => return self.compile_component_decl(elements, span, code),
+                "relationship:" => return self.compile_relationship_decl(elements, span, code),
+                "verb:" => return self.compile_verb_decl(elements, span, code),
+                "direction:" => return self.compile_direction_decl(elements, span, code),
+                "preposition:" => return self.compile_preposition_decl(elements, span, code),
+                "pronoun:" => return self.compile_pronoun_decl(elements, span, code),
+                "adverb:" => return self.compile_adverb_decl(elements, span, code),
+                "type:" => return self.compile_type_decl(elements, span, code),
+                "scope:" => return self.compile_scope_decl(elements, span, code),
+                "command:" => return self.compile_command_decl(elements, span, code),
+                "action:" => return self.compile_action_decl(elements, span, code),
+                "rule:" => return self.compile_rule_decl(elements, span, code),
                 _ => {}
             }
 
@@ -2144,6 +2159,580 @@ impl Compiler {
         code.emit(Opcode::Const(idx));
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Declaration Compilation (to registration opcodes)
+    // =========================================================================
+
+    /// Compiles a `component:` declaration.
+    ///
+    /// Transforms `(component: name ...)` into a data map and emits `RegisterComponent`.
+    fn compile_component_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        // Reconstruct the AST for the analyzer
+        let ast = Ast::List(elements.to_vec(), span);
+
+        // Analyze to extract typed declaration
+        let decl = DeclarationAnalyzer::analyze_component(&ast)?
+            .ok_or_else(|| self.error(span, "invalid component: declaration"))?;
+
+        // Convert to Value map for the VM
+        let map = self.component_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterComponent);
+
+        // Declaration returns nil
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a relationship: declaration.
+    fn compile_relationship_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_relationship(&ast)?
+            .ok_or_else(|| self.error(span, "invalid relationship: declaration"))?;
+
+        let map = self.relationship_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterRelationship);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a verb: declaration.
+    fn compile_verb_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_verb(&ast)?
+            .ok_or_else(|| self.error(span, "invalid verb: declaration"))?;
+
+        let map = self.verb_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterVerb);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a direction: declaration.
+    fn compile_direction_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_direction(&ast)?
+            .ok_or_else(|| self.error(span, "invalid direction: declaration"))?;
+
+        let map = self.direction_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterDirection);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a preposition: declaration.
+    fn compile_preposition_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_preposition(&ast)?
+            .ok_or_else(|| self.error(span, "invalid preposition: declaration"))?;
+
+        let map = self.preposition_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterPreposition);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a pronoun: declaration.
+    fn compile_pronoun_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_pronoun(&ast)?
+            .ok_or_else(|| self.error(span, "invalid pronoun: declaration"))?;
+
+        let map = self.pronoun_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterPronoun);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles an adverb: declaration.
+    fn compile_adverb_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_adverb(&ast)?
+            .ok_or_else(|| self.error(span, "invalid adverb: declaration"))?;
+
+        let map = self.adverb_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterAdverb);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a type: declaration.
+    fn compile_type_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_noun_type(&ast)?
+            .ok_or_else(|| self.error(span, "invalid type: declaration"))?;
+
+        let map = self.noun_type_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterType);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a scope: declaration.
+    fn compile_scope_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_scope(&ast)?
+            .ok_or_else(|| self.error(span, "invalid scope: declaration"))?;
+
+        let map = self.scope_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterScope);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a command: declaration.
+    fn compile_command_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_command(&ast)?
+            .ok_or_else(|| self.error(span, "invalid command: declaration"))?;
+
+        let map = self.command_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterCommand);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles an action: declaration.
+    fn compile_action_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_action(&ast)?
+            .ok_or_else(|| self.error(span, "invalid action: declaration"))?;
+
+        let map = self.action_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterAction);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    /// Compiles a rule: declaration.
+    fn compile_rule_decl(
+        &mut self,
+        elements: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        let ast = Ast::List(elements.to_vec(), span);
+        let decl = DeclarationAnalyzer::analyze_rule(&ast)?
+            .ok_or_else(|| self.error(span, "invalid rule: declaration"))?;
+
+        let map = self.rule_decl_to_value(&decl)?;
+        let idx = self.add_constant(map);
+        code.emit(Opcode::Const(idx));
+        code.emit(Opcode::RegisterRule);
+        // RegisterRule pushes entity ID, but for now we discard it
+        code.emit(Opcode::Pop);
+
+        let nil_idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(nil_idx));
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Declaration to Value conversions
+    // =========================================================================
+
+    /// Converts a `ComponentDecl` to a Value map.
+    fn component_decl_to_value(
+        &mut self,
+        decl: &crate::declaration::ComponentDecl,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        // :name -> keyword
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        // :storage -> "tag" or "sparse"
+        let storage_key = self.intern_keyword("storage");
+        let storage_val = if decl.is_tag { "tag" } else { "sparse" };
+        map = map.insert(
+            Value::Keyword(storage_key),
+            Value::String(storage_val.into()),
+        );
+
+        // :fields -> vector of field maps
+        if !decl.fields.is_empty() {
+            let fields_key = self.intern_keyword("fields");
+            let mut fields_vec: LtVec<Value> = LtVec::new();
+            for field in &decl.fields {
+                let field_map = self.field_decl_to_value(field)?;
+                fields_vec = fields_vec.push_back(field_map);
+            }
+            map = map.insert(Value::Keyword(fields_key), Value::Vec(fields_vec));
+        }
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `FieldDecl` to a Value map.
+    fn field_decl_to_value(&mut self, decl: &crate::declaration::FieldDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        let type_key = self.intern_keyword("type");
+        map = map.insert(
+            Value::Keyword(type_key),
+            Value::String(decl.ty.clone().into()),
+        );
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `RelationshipDecl` to a Value map.
+    fn relationship_decl_to_value(
+        &mut self,
+        decl: &crate::declaration::RelationshipDecl,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        let card_key = self.intern_keyword("cardinality");
+        let card_str = match decl.cardinality {
+            crate::declaration::Cardinality::OneToOne => "one-to-one",
+            crate::declaration::Cardinality::OneToMany => "one-to-many",
+            crate::declaration::Cardinality::ManyToOne => "many-to-one",
+            crate::declaration::Cardinality::ManyToMany => "many-to-many",
+        };
+        map = map.insert(Value::Keyword(card_key), Value::String(card_str.into()));
+
+        let on_delete_key = self.intern_keyword("on-delete");
+        let on_delete_str = match decl.on_target_delete {
+            crate::declaration::OnTargetDelete::Remove => "remove",
+            crate::declaration::OnTargetDelete::Cascade => "cascade",
+            crate::declaration::OnTargetDelete::Nullify => "nullify",
+        };
+        map = map.insert(
+            Value::Keyword(on_delete_key),
+            Value::String(on_delete_str.into()),
+        );
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `VerbDecl` to a Value map.
+    fn verb_decl_to_value(&mut self, decl: &crate::declaration::VerbDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        if !decl.synonyms.is_empty() {
+            let synonyms_key = self.intern_keyword("synonyms");
+            let mut syn_vec: LtVec<Value> = LtVec::new();
+            for syn in &decl.synonyms {
+                let syn_kw = self.intern_keyword(syn);
+                syn_vec = syn_vec.push_back(Value::Keyword(syn_kw));
+            }
+            map = map.insert(Value::Keyword(synonyms_key), Value::Vec(syn_vec));
+        }
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `DirectionDecl` to a Value map.
+    fn direction_decl_to_value(
+        &mut self,
+        decl: &crate::declaration::DirectionDecl,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        if !decl.synonyms.is_empty() {
+            let synonyms_key = self.intern_keyword("synonyms");
+            let mut syn_vec: LtVec<Value> = LtVec::new();
+            for syn in &decl.synonyms {
+                let syn_kw = self.intern_keyword(syn);
+                syn_vec = syn_vec.push_back(Value::Keyword(syn_kw));
+            }
+            map = map.insert(Value::Keyword(synonyms_key), Value::Vec(syn_vec));
+        }
+
+        if let Some(ref opp) = decl.opposite {
+            let opposite_key = self.intern_keyword("opposite");
+            let opposite_val = self.intern_keyword(opp);
+            map = map.insert(Value::Keyword(opposite_key), Value::Keyword(opposite_val));
+        }
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `PrepositionDecl` to a Value map.
+    fn preposition_decl_to_value(
+        &mut self,
+        decl: &crate::declaration::PrepositionDecl,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        if let Some(ref implies) = decl.implies {
+            let implies_key = self.intern_keyword("implies");
+            let implies_val = self.intern_keyword(implies);
+            map = map.insert(Value::Keyword(implies_key), Value::Keyword(implies_val));
+        }
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `PronounDecl` to a Value map.
+    fn pronoun_decl_to_value(&mut self, decl: &crate::declaration::PronounDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        let gender_key = self.intern_keyword("gender");
+        let gender_str = match decl.gender {
+            crate::declaration::PronounGender::Masculine => "masculine",
+            crate::declaration::PronounGender::Feminine => "feminine",
+            crate::declaration::PronounGender::Neuter => "neuter",
+        };
+        map = map.insert(Value::Keyword(gender_key), Value::String(gender_str.into()));
+
+        let number_key = self.intern_keyword("number");
+        let number_str = match decl.number {
+            crate::declaration::PronounNumber::Singular => "singular",
+            crate::declaration::PronounNumber::Plural => "plural",
+        };
+        map = map.insert(Value::Keyword(number_key), Value::String(number_str.into()));
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts an `AdverbDecl` to a Value map.
+    fn adverb_decl_to_value(&mut self, decl: &crate::declaration::AdverbDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `NounTypeDecl` to a Value map.
+    fn noun_type_decl_to_value(
+        &mut self,
+        decl: &crate::declaration::NounTypeDecl,
+    ) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        if !decl.extends.is_empty() {
+            let extends_key = self.intern_keyword("extends");
+            let mut ext_vec: LtVec<Value> = LtVec::new();
+            for ext in &decl.extends {
+                let ext_kw = self.intern_keyword(ext);
+                ext_vec = ext_vec.push_back(Value::Keyword(ext_kw));
+            }
+            map = map.insert(Value::Keyword(extends_key), Value::Vec(ext_vec));
+        }
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `ScopeDecl` to a Value map.
+    fn scope_decl_to_value(&mut self, decl: &crate::declaration::ScopeDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `CommandDecl` to a Value map.
+    fn command_decl_to_value(&mut self, decl: &crate::declaration::CommandDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        let action_key = self.intern_keyword("action");
+        let action_val = self.intern_keyword(&decl.action);
+        map = map.insert(Value::Keyword(action_key), Value::Keyword(action_val));
+
+        let priority_key = self.intern_keyword("priority");
+        map = map.insert(
+            Value::Keyword(priority_key),
+            Value::Int(i64::from(decl.priority)),
+        );
+
+        Ok(Value::Map(map))
+    }
+
+    /// Converts an `ActionDecl` to a Value map.
+    fn action_decl_to_value(&mut self, decl: &crate::declaration::ActionDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        // For now, store minimal info. Full action compilation is more complex.
+        Ok(Value::Map(map))
+    }
+
+    /// Converts a `RuleDecl` to a Value map.
+    fn rule_decl_to_value(&mut self, decl: &crate::declaration::RuleDecl) -> Result<Value> {
+        let mut map: LtMap<Value, Value> = LtMap::new();
+
+        let name_key = self.intern_keyword("name");
+        let name_val = self.intern_keyword(&decl.name);
+        map = map.insert(Value::Keyword(name_key), Value::Keyword(name_val));
+
+        let salience_key = self.intern_keyword("salience");
+        map = map.insert(
+            Value::Keyword(salience_key),
+            Value::Int(i64::from(decl.salience)),
+        );
+
+        let once_key = self.intern_keyword("once");
+        map = map.insert(Value::Keyword(once_key), Value::Bool(decl.once));
+
+        // For now, store minimal info. Full rule compilation is more complex.
+        Ok(Value::Map(map))
+    }
+
+    /// Interns a keyword, using the interner if available.
+    ///
+    /// # Panics
+    /// Panics if no interner is set. Declaration compilation requires an interner.
+    fn intern_keyword(&mut self, name: &str) -> KeywordId {
+        self.interner
+            .as_mut()
+            .expect("intern_keyword requires an interner for declaration compilation")
+            .intern_keyword(name)
     }
 
     /// Compiles a quoted expression (as data, not evaluated).

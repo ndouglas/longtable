@@ -1680,6 +1680,26 @@ impl Vm {
 
                     self.push(Value::Vec(results));
                 }
+
+                // Machine Configuration opcodes - require RuntimeContext
+                // In the basic VmContext execution path, these will error.
+                // Use execute_with_runtime_context() for full support.
+                Opcode::RegisterComponent
+                | Opcode::RegisterRelationship
+                | Opcode::RegisterVerb
+                | Opcode::RegisterDirection
+                | Opcode::RegisterPreposition
+                | Opcode::RegisterPronoun
+                | Opcode::RegisterAdverb
+                | Opcode::RegisterType
+                | Opcode::RegisterScope
+                | Opcode::RegisterCommand
+                | Opcode::RegisterAction
+                | Opcode::RegisterRule => {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "registration opcodes require RuntimeContext; use execute_with_runtime_context()".to_string(),
+                    )));
+                }
             }
         }
 
