@@ -32,6 +32,11 @@ pub struct Compiler {
     locals: HashMap<String, u16>,
     /// Next available local slot.
     next_local: u16,
+    /// Global variable bindings (name -> slot index).
+    /// Persists across compilations for REPL use.
+    globals: HashMap<String, u16>,
+    /// Next available global slot.
+    next_global: u16,
     /// Native function name -> index mapping.
     natives: HashMap<String, u16>,
     /// Compiled functions.
@@ -123,6 +128,8 @@ impl Compiler {
             constant_map: HashMap::new(),
             locals: HashMap::new(),
             next_local: 0,
+            globals: HashMap::new(),
+            next_global: 0,
             natives: HashMap::new(),
             functions: Vec::new(),
             outer_locals: None,
@@ -145,6 +152,8 @@ impl Compiler {
             constant_map: HashMap::new(),
             locals: HashMap::new(),
             next_local: 0,
+            globals: HashMap::new(),
+            next_global: 0,
             natives: HashMap::new(),
             functions: Vec::new(),
             outer_locals: None,
@@ -167,6 +176,8 @@ impl Compiler {
             constant_map: HashMap::new(),
             locals: HashMap::new(),
             next_local: 0,
+            globals: HashMap::new(),
+            next_global: 0,
             natives: HashMap::new(),
             functions: Vec::new(),
             outer_locals: None,
@@ -195,6 +206,8 @@ impl Compiler {
             constant_map: HashMap::new(),
             locals: HashMap::new(),
             next_local: 0,
+            globals: HashMap::new(),
+            next_global: 0,
             natives: HashMap::new(),
             functions: Vec::new(),
             outer_locals: None,
@@ -207,6 +220,21 @@ impl Compiler {
         // Register built-in native functions
         compiler.register_natives();
         compiler
+    }
+
+    /// Prepares the compiler for a new compilation.
+    ///
+    /// This resets per-compilation state (constants, functions, locals)
+    /// while preserving persistent state (globals, macros, namespace context).
+    pub fn prepare_for_compilation(&mut self) {
+        self.constants.clear();
+        self.constant_map.clear();
+        self.locals.clear();
+        self.next_local = 0;
+        self.functions.clear();
+        self.outer_locals = None;
+        self.captures.clear();
+        // Note: globals, next_global, natives, macro_registry, namespace_context persist
     }
 
     /// Returns a mutable reference to the macro registry.
@@ -559,6 +587,12 @@ impl Compiler {
             }
         }
 
+        // Check for global variable (persists across compilations)
+        if let Some(&slot) = self.globals.get(name) {
+            code.emit(Opcode::LoadGlobal(slot));
+            return;
+        }
+
         // Check for qualified name (namespace/symbol or alias/symbol)
         if let Some((prefix, symbol)) = name.split_once('/') {
             // Try to resolve the prefix as an alias
@@ -608,6 +642,7 @@ impl Compiler {
                 "do" => return self.compile_do(args, code),
                 "fn" => return self.compile_fn(args, span, code),
                 "def" => return self.compile_def(args, span, code),
+                "fn:" => return self.compile_fn_decl(args, span, code),
                 "quote" => return self.compile_quote_form(args, span, code),
                 // Macro-support special forms
                 "and*" => return self.compile_and_star(args, span, code),
@@ -628,6 +663,15 @@ impl Compiler {
                 "group-by" => return self.compile_hof_group_by(args, span, code),
                 "zip-with" => return self.compile_hof_zip_with(args, span, code),
                 "repeatedly" => return self.compile_hof_repeatedly(args, span, code),
+                // World/entity operations (emit special opcodes with context access)
+                "get-component" => return self.compile_get_component(args, span, code),
+                "get-field" => return self.compile_get_field(args, span, code),
+                "with-component" => return self.compile_with_component(args, span, code),
+                "find-relationships" => return self.compile_find_relationships(args, span, code),
+                "targets" => return self.compile_targets(args, span, code),
+                "sources" => return self.compile_sources(args, span, code),
+                // Entity construction
+                "entity-ref" => return self.compile_entity_ref(args, span, code),
                 _ => {}
             }
 
@@ -1104,6 +1148,84 @@ impl Compiler {
 
         // def returns the value
         code.emit(Opcode::LoadLocal(slot));
+
+        Ok(())
+    }
+
+    /// Compiles a `fn:` declaration (global function/value definition).
+    ///
+    /// Syntax:
+    /// - `(fn: name value)` - Define a global value
+    /// - `(fn: name [params] body...)` - Define a global function
+    /// - `(fn: name "docstring" [params] body...)` - Define with docstring (ignored for now)
+    fn compile_fn_decl(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.is_empty() {
+            return Err(self.error(span, "fn: requires a name"));
+        }
+
+        // First argument is always the name
+        let name = match &args[0] {
+            Ast::Symbol(name, _) => name.clone(),
+            _ => return Err(self.error(span, "fn: name must be a symbol")),
+        };
+
+        let rest = &args[1..];
+
+        // Determine form based on remaining args
+        match rest.first() {
+            None => {
+                return Err(self.error(span, "fn: requires a value or function definition"));
+            }
+            // (fn: name [params] body...) - function definition
+            Some(Ast::Vector(_, _)) => {
+                // Compile as (fn [params] body...)
+                self.compile_fn(rest, span, code)?;
+            }
+            // (fn: name "docstring" [params] body...) - function with docstring
+            Some(Ast::String(_, _)) if rest.len() >= 2 => {
+                // Skip the docstring, compile the function part
+                let fn_args = &rest[1..];
+                if fn_args.is_empty() {
+                    return Err(self.error(span, "fn: missing function parameters after docstring"));
+                }
+                match &fn_args[0] {
+                    Ast::Vector(_, _) => {
+                        self.compile_fn(fn_args, span, code)?;
+                    }
+                    _ => {
+                        return Err(
+                            self.error(span, "fn: expected parameter vector after docstring")
+                        );
+                    }
+                }
+            }
+            // (fn: name value) - simple value definition
+            Some(_) if rest.len() == 1 => {
+                self.compile_node(&rest[0], code)?;
+            }
+            _ => {
+                return Err(self.error(
+                    span,
+                    "fn: expected value, [params] body..., or \"docstring\" [params] body...",
+                ));
+            }
+        }
+
+        // Get or allocate global slot for this name
+        let slot = if let Some(&existing) = self.globals.get(&name) {
+            existing
+        } else {
+            let slot = self.next_global;
+            self.next_global += 1;
+            self.globals.insert(name.clone(), slot);
+            slot
+        };
+
+        // Store in global slot
+        code.emit(Opcode::StoreGlobal(slot));
+
+        // fn: returns the defined value
+        code.emit(Opcode::LoadGlobal(slot));
 
         Ok(())
     }
@@ -1697,6 +1819,176 @@ impl Compiler {
         Ok(())
     }
 
+    // =========================================================================
+    // World/Entity Operations
+    // =========================================================================
+
+    /// Compiles (get-component entity component-keyword) -> value
+    fn compile_get_component(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(
+                span,
+                "get-component requires exactly 2 arguments (entity component)",
+            ));
+        }
+
+        // Compile entity
+        self.compile_node(&args[0], code)?;
+        // Compile component keyword
+        self.compile_node(&args[1], code)?;
+        // Emit GetComponent opcode
+        code.emit(Opcode::GetComponent);
+
+        Ok(())
+    }
+
+    /// Compiles (get-field entity component-keyword field-keyword) -> value
+    fn compile_get_field(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 3 {
+            return Err(self.error(
+                span,
+                "get-field requires exactly 3 arguments (entity component field)",
+            ));
+        }
+
+        // Compile entity
+        self.compile_node(&args[0], code)?;
+        // Compile component keyword
+        self.compile_node(&args[1], code)?;
+        // Compile field keyword
+        self.compile_node(&args[2], code)?;
+        // Emit GetField opcode
+        code.emit(Opcode::GetField);
+
+        Ok(())
+    }
+
+    /// Compiles (with-component component-keyword) -> [entities...]
+    fn compile_with_component(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 1 {
+            return Err(self.error(
+                span,
+                "with-component requires exactly 1 argument (component)",
+            ));
+        }
+
+        // Compile component keyword
+        self.compile_node(&args[0], code)?;
+        // Emit WithComponent opcode
+        code.emit(Opcode::WithComponent);
+
+        Ok(())
+    }
+
+    /// Compiles (find-relationships rel-type-or-nil source-or-nil target-or-nil) -> [relationship-entities...]
+    fn compile_find_relationships(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 3 {
+            return Err(self.error(
+                span,
+                "find-relationships requires exactly 3 arguments (rel-type source target)",
+            ));
+        }
+
+        // Compile rel-type (or nil)
+        self.compile_node(&args[0], code)?;
+        // Compile source (or nil)
+        self.compile_node(&args[1], code)?;
+        // Compile target (or nil)
+        self.compile_node(&args[2], code)?;
+        // Emit FindRelationships opcode
+        code.emit(Opcode::FindRelationships);
+
+        Ok(())
+    }
+
+    /// Compiles (targets source rel-type) -> [target-entities...]
+    fn compile_targets(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(
+                span,
+                "targets requires exactly 2 arguments (source rel-type)",
+            ));
+        }
+
+        // Compile source entity
+        self.compile_node(&args[0], code)?;
+        // Compile relationship type keyword
+        self.compile_node(&args[1], code)?;
+        // Emit Targets opcode
+        code.emit(Opcode::Targets);
+
+        Ok(())
+    }
+
+    /// Compiles (sources target rel-type) -> [source-entities...]
+    fn compile_sources(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(
+                span,
+                "sources requires exactly 2 arguments (target rel-type)",
+            ));
+        }
+
+        // Compile target entity
+        self.compile_node(&args[0], code)?;
+        // Compile relationship type keyword
+        self.compile_node(&args[1], code)?;
+        // Emit Sources opcode
+        code.emit(Opcode::Sources);
+
+        Ok(())
+    }
+
+    /// Compiles (entity-ref index generation) -> `EntityRef` value
+    ///
+    /// The index and generation must be integer literals.
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    fn compile_entity_ref(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(
+                span,
+                "entity-ref requires exactly 2 arguments (index generation)",
+            ));
+        }
+
+        // Extract index and generation as integer literals
+        let index = match &args[0] {
+            Ast::Int(n, _) => *n as u64,
+            _ => {
+                return Err(self.error(span, "entity-ref index must be an integer literal"));
+            }
+        };
+
+        let generation = match &args[1] {
+            Ast::Int(n, _) => *n as u32,
+            _ => {
+                return Err(self.error(span, "entity-ref generation must be an integer literal"));
+            }
+        };
+
+        // Create the EntityId and add as constant
+        let entity = longtable_foundation::EntityId::new(index, generation);
+        let idx = self.add_constant(Value::EntityRef(entity));
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
     /// Compiles a quoted expression (as data, not evaluated).
     fn compile_quoted(&mut self, ast: &Ast, code: &mut Bytecode) -> Result<()> {
         // Convert AST to runtime value
@@ -2233,5 +2525,115 @@ mod tests {
             !prog.code.ops.is_empty(),
             "Macro expansion and compilation should succeed"
         );
+    }
+
+    // =========================================================================
+    // fn: declaration tests
+    // =========================================================================
+
+    #[test]
+    fn compile_fn_decl_value() {
+        let mut compiler = Compiler::new();
+
+        // Define a global value
+        let ast = crate::parse("(fn: answer 42)").unwrap();
+        let prog = compiler.compile(&ast).unwrap();
+
+        // Should have StoreGlobal and LoadGlobal
+        let has_store = prog
+            .code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Opcode::StoreGlobal(_)));
+        let has_load = prog
+            .code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Opcode::LoadGlobal(_)));
+        assert!(has_store, "Should store to global");
+        assert!(has_load, "Should load from global (return value)");
+
+        // The global should be registered in the compiler
+        assert!(compiler.globals.contains_key("answer"));
+    }
+
+    #[test]
+    fn compile_fn_decl_function() {
+        let mut compiler = Compiler::new();
+
+        // Define a global function
+        let ast = crate::parse("(fn: double [x] (* x 2))").unwrap();
+        let prog = compiler.compile(&ast).unwrap();
+
+        // Should have compiled a function
+        assert_eq!(prog.functions.len(), 1, "Should compile one function");
+        assert_eq!(
+            prog.functions[0].arity, 1,
+            "Function should take 1 argument"
+        );
+
+        // The global should be registered
+        assert!(compiler.globals.contains_key("double"));
+    }
+
+    #[test]
+    fn compile_fn_decl_with_docstring() {
+        let mut compiler = Compiler::new();
+
+        // Define a function with docstring
+        let ast = crate::parse(r#"(fn: add "Adds two numbers" [a b] (+ a b))"#).unwrap();
+        let prog = compiler.compile(&ast).unwrap();
+
+        // Should have compiled a function
+        assert_eq!(prog.functions.len(), 1, "Should compile one function");
+        assert_eq!(
+            prog.functions[0].arity, 2,
+            "Function should take 2 arguments"
+        );
+
+        // The global should be registered
+        assert!(compiler.globals.contains_key("add"));
+    }
+
+    #[test]
+    fn compile_fn_decl_reference() {
+        let mut compiler = Compiler::new();
+
+        // Define a global and then reference it
+        let ast1 = crate::parse("(fn: x 10)").unwrap();
+        let _ = compiler.compile(&ast1).unwrap();
+
+        // Reference the global - need to prepare for new compilation
+        compiler.prepare_for_compilation();
+        let ast2 = crate::parse("x").unwrap();
+        let prog = compiler.compile(&ast2).unwrap();
+
+        // Should have LoadGlobal
+        let has_load = prog
+            .code
+            .ops
+            .iter()
+            .any(|op| matches!(op, Opcode::LoadGlobal(0)));
+        assert!(has_load, "Should load global x");
+    }
+
+    #[test]
+    fn compile_fn_decl_persists_across_compilations() {
+        let mut compiler = Compiler::new();
+
+        // Define multiple globals across compilations
+        let ast1 = crate::parse("(fn: a 1)").unwrap();
+        let _ = compiler.compile(&ast1).unwrap();
+
+        compiler.prepare_for_compilation();
+        let ast2 = crate::parse("(fn: b 2)").unwrap();
+        let _ = compiler.compile(&ast2).unwrap();
+
+        // Both globals should be registered
+        assert!(compiler.globals.contains_key("a"));
+        assert!(compiler.globals.contains_key("b"));
+
+        // They should have different slots
+        assert_ne!(compiler.globals.get("a"), compiler.globals.get("b"));
     }
 }

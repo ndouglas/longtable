@@ -33,6 +33,29 @@ pub trait VmContext {
 
     /// Resolves a keyword value to its `KeywordId` (for dynamic keyword access).
     fn resolve_keyword(&self, value: &Value) -> Option<KeywordId>;
+
+    /// Returns all entities that have the given component.
+    fn with_component(&self, component: KeywordId) -> Vec<EntityId>;
+
+    /// Finds relationship entities matching the given criteria.
+    ///
+    /// - `rel_type`: Optional relationship type (e.g., `:contained-in`)
+    /// - `source`: Optional source entity filter
+    /// - `target`: Optional target entity filter
+    ///
+    /// Returns the relationship entity IDs (not the source/target entities).
+    fn find_relationships(
+        &self,
+        rel_type: Option<KeywordId>,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId>;
+
+    /// Gets the target entities of relationships from a source.
+    fn targets(&self, source: EntityId, rel_type: KeywordId) -> Vec<EntityId>;
+
+    /// Gets the source entities of relationships to a target.
+    fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId>;
 }
 
 // =============================================================================
@@ -157,6 +180,27 @@ impl VmContext for WorldContext<'_> {
             None
         }
     }
+
+    fn with_component(&self, component: KeywordId) -> Vec<EntityId> {
+        self.world.with_component(component).collect()
+    }
+
+    fn find_relationships(
+        &self,
+        rel_type: Option<KeywordId>,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        self.world.find_relationships(rel_type, source, target)
+    }
+
+    fn targets(&self, source: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
+        self.world.targets(source, rel_type).collect()
+    }
+
+    fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
+        self.world.sources(target, rel_type).collect()
+    }
 }
 
 // =============================================================================
@@ -196,5 +240,26 @@ impl VmContext for NoContext {
 
     fn resolve_keyword(&self, _value: &Value) -> Option<KeywordId> {
         None
+    }
+
+    fn with_component(&self, _component: KeywordId) -> Vec<EntityId> {
+        Vec::new()
+    }
+
+    fn find_relationships(
+        &self,
+        _rel_type: Option<KeywordId>,
+        _source: Option<EntityId>,
+        _target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        Vec::new()
+    }
+
+    fn targets(&self, _source: EntityId, _rel_type: KeywordId) -> Vec<EntityId> {
+        Vec::new()
+    }
+
+    fn sources(&self, _target: EntityId, _rel_type: KeywordId) -> Vec<EntityId> {
+        Vec::new()
     }
 }

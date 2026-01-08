@@ -3,11 +3,17 @@
 use crate::editor::{LineEditor, ReadResult, RustylineEditor};
 use crate::serialize;
 use crate::session::Session;
-use longtable_engine::{InputEvent, QueryCompiler, QueryExecutor, RuleCompiler, TickExecutor};
+
+/// Embedded core stdlib functions.
+const STDLIB_CORE: &str = include_str!("../../longtable_stdlib/stdlib/core.lt");
+use longtable_engine::{
+    Bindings, InputEvent, PatternCompiler, PatternMatcher, QueryCompiler, QueryExecutor,
+    RuleCompiler, TickExecutor,
+};
 use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
 use longtable_foundation::{LtMap, Type};
 use longtable_language::{
-    Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
+    Ast, Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
     NamespaceInfo, OnTargetDelete, RelationshipDecl, RuleDecl, StorageKind, Vm, parse,
 };
 use longtable_parser::CompiledAction;
@@ -30,6 +36,9 @@ pub struct Repl<E: LineEditor = RustylineEditor> {
     /// The bytecode VM for evaluation.
     vm: Vm,
 
+    /// The compiler (persists globals across invocations).
+    compiler: Compiler,
+
     /// Tick executor for advancing simulation.
     tick_executor: TickExecutor,
 
@@ -41,6 +50,12 @@ pub struct Repl<E: LineEditor = RustylineEditor> {
 
     /// Continuation prompt (for multi-line input).
     continuation_prompt: String,
+
+    /// Whether we're in input/game mode (natural language input).
+    input_mode: bool,
+
+    /// Prompt to use in input mode.
+    input_mode_prompt: String,
 }
 
 impl Repl<RustylineEditor> {
@@ -62,10 +77,13 @@ impl<E: LineEditor> Repl<E> {
             editor,
             session: Session::new(),
             vm: Vm::new(),
+            compiler: Compiler::new(),
             tick_executor: TickExecutor::new(),
             show_banner: true,
             prompt: "λ> ".to_string(),
             continuation_prompt: ".. ".to_string(),
+            input_mode: false,
+            input_mode_prompt: "> ".to_string(),
         }
     }
 
@@ -101,12 +119,31 @@ impl<E: LineEditor> Repl<E> {
         &mut self.session
     }
 
+    /// Loads the standard library functions into the REPL session.
+    ///
+    /// This is called automatically by `run()`, but can be called manually
+    /// if you need stdlib functions before starting the REPL loop.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stdlib fails to parse or evaluate.
+    pub fn load_stdlib(&mut self) -> Result<()> {
+        // Parse and evaluate the core stdlib
+        self.eval(STDLIB_CORE)?;
+        Ok(())
+    }
+
     /// Runs the REPL loop.
     ///
     /// # Errors
     ///
     /// Returns an error if reading input or evaluation fails fatally.
     pub fn run(&mut self) -> Result<()> {
+        // Load standard library first
+        if let Err(e) = self.load_stdlib() {
+            eprintln!("Warning: Failed to load stdlib: {e}");
+        }
+
         if self.show_banner {
             self.print_banner();
         }
@@ -143,15 +180,46 @@ impl<E: LineEditor> Repl<E> {
         // Add to history
         self.editor.add_history(&input);
 
-        // Eval and print
-        match self.eval(&input) {
-            Ok(value) => {
-                if value != Value::Nil {
-                    println!("{}", self.format_value(&value));
+        // In input mode, dispatch to natural language handler unless it's an S-expression
+        if self.input_mode {
+            // S-expressions (starting with '(') are still evaluated normally
+            // This allows (quit), (save!), etc. to work in input mode
+            if trimmed.starts_with('(') {
+                match self.eval(&input) {
+                    Ok(value) => {
+                        if value != Value::Nil {
+                            println!("{}", self.format_value(&value));
+                        }
+                    }
+                    Err(e) => {
+                        self.print_error(&e);
+                    }
+                }
+            } else {
+                // Natural language input
+                match self.dispatch_input(&input) {
+                    Ok(Some(value)) => {
+                        if value != Value::Nil {
+                            // dispatch_input typically prints via (say), so don't print again
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        self.print_error(&e);
+                    }
                 }
             }
-            Err(e) => {
-                self.print_error(&e);
+        } else {
+            // Normal REPL mode - evaluate S-expressions
+            match self.eval(&input) {
+                Ok(value) => {
+                    if value != Value::Nil {
+                        println!("{}", self.format_value(&value));
+                    }
+                }
+                Err(e) => {
+                    self.print_error(&e);
+                }
             }
         }
 
@@ -165,7 +233,11 @@ impl<E: LineEditor> Repl<E> {
 
         loop {
             let prompt = if first_line {
-                &self.prompt
+                if self.input_mode {
+                    &self.input_mode_prompt
+                } else {
+                    &self.prompt
+                }
             } else {
                 &self.continuation_prompt
             };
@@ -231,21 +303,20 @@ impl<E: LineEditor> Repl<E> {
         depth <= 0 && !in_string
     }
 
-    /// Evaluates input and returns the result.
+    /// Evaluates input as an S-expression and returns the result.
     ///
     /// # Errors
     ///
     /// Returns an error if parsing, compilation, or execution fails.
     pub fn eval(&mut self, input: &str) -> Result<Value> {
-        // Parse
+        // Parse as S-expression
         let forms = parse(input)?;
 
-        // Evaluate each form
+        // Evaluate all forms
         let mut result = Value::Nil;
         for form in forms {
             result = self.eval_form(&form)?;
         }
-
         Ok(result)
     }
 
@@ -257,9 +328,10 @@ impl<E: LineEditor> Repl<E> {
         }
 
         // Compile and execute
-        // Use a fresh compiler for each expression to avoid state leakage
-        let mut compiler = Compiler::new();
-        let program = compiler.compile(&[form.clone()])?;
+        // Prepare the persistent compiler for a new compilation
+        // This preserves globals while clearing per-compilation state
+        self.compiler.prepare_for_compilation();
+        let program = self.compiler.compile(&[form.clone()])?;
 
         self.vm.execute(&program)
     }
@@ -302,94 +374,6 @@ impl<E: LineEditor> Repl<E> {
                 Ok(Some(value))
             }
 
-            // (describe-room entity) - get room description
-            Ast::Symbol(s, _) if s == "describe-room" => {
-                if list.len() != 2 {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "describe-room requires exactly 1 argument: (describe-room entity)"
-                            .to_string(),
-                    )));
-                }
-
-                let entity_val = self.eval_form(&list[1])?;
-                let entity_id = match entity_val {
-                    Value::EntityRef(id) => id,
-                    Value::Int(idx) if idx >= 0 =>
-                    {
-                        #[allow(clippy::cast_sign_loss)]
-                        EntityId::new(idx as u64, 0)
-                    }
-                    Value::Nil => {
-                        // No room to describe
-                        return Ok(Some(Value::String("".into())));
-                    }
-                    other => {
-                        return Err(Error::new(ErrorKind::Internal(format!(
-                            "describe-room argument must be an entity, got {:?}",
-                            other.value_type()
-                        ))));
-                    }
-                };
-
-                // Get room name and description
-                let name_kw = self
-                    .session
-                    .world_mut()
-                    .interner_mut()
-                    .intern_keyword("name");
-                let desc_kw = self
-                    .session
-                    .world_mut()
-                    .interner_mut()
-                    .intern_keyword("description");
-
-                let mut output = String::new();
-
-                // Get name
-                if let Ok(Some(name_val)) = self.session.world().get(entity_id, name_kw) {
-                    if let Value::Map(m) = name_val {
-                        if let Some(Value::String(s)) = m
-                            .get(&Value::Keyword(
-                                self.session
-                                    .world_mut()
-                                    .interner_mut()
-                                    .intern_keyword("value"),
-                            ))
-                            .cloned()
-                        {
-                            output.push('\n');
-                            output.push_str(&s);
-                            output.push('\n');
-                        }
-                    } else if let Value::String(s) = name_val {
-                        output.push('\n');
-                        output.push_str(&s);
-                        output.push('\n');
-                    }
-                }
-
-                // Get description
-                if let Ok(Some(desc_val)) = self.session.world().get(entity_id, desc_kw) {
-                    if let Value::Map(m) = desc_val {
-                        if let Some(Value::String(s)) = m
-                            .get(&Value::Keyword(
-                                self.session
-                                    .world_mut()
-                                    .interner_mut()
-                                    .intern_keyword("value"),
-                            ))
-                            .cloned()
-                        {
-                            output.push_str(&s);
-                        }
-                    } else if let Value::String(s) = desc_val {
-                        output.push_str(&s);
-                    }
-                }
-
-                Ok(Some(Value::String(output.into())))
-            }
-
             // (say value) - print value to console
             Ast::Symbol(s, _) if s == "say" => {
                 if list.len() != 2 {
@@ -403,6 +387,32 @@ impl<E: LineEditor> Repl<E> {
                     Value::String(s) => println!("{s}"),
                     other => println!("{other}"),
                 }
+                Ok(Some(Value::Nil))
+            }
+
+            // (run) - enter input/game mode for natural language commands
+            Ast::Symbol(s, _) if s == "run" => {
+                if list.len() != 1 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "run takes no arguments".to_string(),
+                    )));
+                }
+
+                self.input_mode = true;
+                println!("Entering input mode. S-expressions still work. Use (repl) to exit.");
+                Ok(Some(Value::Nil))
+            }
+
+            // (repl) - exit input mode and return to normal REPL
+            Ast::Symbol(s, _) if s == "repl" => {
+                if list.len() != 1 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "repl takes no arguments".to_string(),
+                    )));
+                }
+
+                self.input_mode = false;
+                println!("Returning to REPL mode.");
                 Ok(Some(Value::Nil))
             }
 
@@ -709,6 +719,33 @@ impl<E: LineEditor> Repl<E> {
 
             // (timeline) - show timeline status
             Ast::Symbol(s, _) if s == "timeline" => self.handle_timeline(),
+
+            // ==================== Natural Language Input ====================
+
+            // (input! "command text") - parse and execute natural language command
+            Ast::Symbol(s, _) if s == "input!" => self.handle_input(&list[1..]),
+
+            // (entity-ref index generation) - reconstruct an EntityId
+            Ast::Symbol(s, _) if s == "entity-ref" => {
+                if list.len() != 3 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "entity-ref requires 2 arguments: (entity-ref index generation)"
+                            .to_string(),
+                    )));
+                }
+                let index = self.eval_form(&list[1])?;
+                let generation = self.eval_form(&list[2])?;
+                match (index, generation) {
+                    (Value::Int(idx), Value::Int(gen_val)) => {
+                        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                        let entity = EntityId::new(idx as u64, gen_val as u32);
+                        Ok(Some(Value::EntityRef(entity)))
+                    }
+                    _ => Err(Error::new(ErrorKind::Internal(
+                        "entity-ref arguments must be integers".to_string(),
+                    ))),
+                }
+            }
 
             // ==================== Parser Vocabulary Declarations ====================
 
@@ -1387,17 +1424,21 @@ impl<E: LineEditor> Repl<E> {
             .intern_keyword(&action_decl.name);
 
         // Create a compiled action with name and params
-        // Note: Full handler compilation is not yet implemented - handlers use generic AST
-        // in ActionDecl, but CompiledAction expects specific handler types.
         let compiled = CompiledAction::new(name_kw).with_params(action_decl.params.clone());
 
-        // Register the action
+        // Register the action in the parser's registry
         self.session.action_registry_mut().register(compiled);
 
+        // Store the full action declaration for dispatch
+        self.session
+            .register_action_decl(name_kw, action_decl.clone());
+
+        let handler_count = action_decl.handler.len();
         println!(
-            "Registered action :{} with {} params (handlers pending)",
+            "Registered action :{} with {} params, {} handler expressions",
             action_decl.name,
-            action_decl.params.len()
+            action_decl.params.len(),
+            handler_count
         );
 
         Ok(())
@@ -2547,6 +2588,272 @@ impl<E: LineEditor> Repl<E> {
 
         #[allow(clippy::cast_possible_wrap)]
         Ok(Some(Value::Int(history.len() as i64)))
+    }
+
+    /// Handles the (input "command") form.
+    ///
+    /// Parses natural language input and executes the corresponding action.
+    fn handle_input(&mut self, args: &[Ast]) -> Result<Option<Value>> {
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "input requires a string argument".to_string(),
+            )));
+        }
+
+        // Get the input string
+        let input_str = match &args[0] {
+            Ast::String(s, _) => s.as_str(),
+            other => {
+                // Try to evaluate it
+                let value = self.eval_form(other)?;
+                match value {
+                    Value::String(ref s) => {
+                        return self.dispatch_input(s);
+                    }
+                    _ => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "input expects a string, got {}",
+                            value.value_type()
+                        ))));
+                    }
+                }
+            }
+        };
+
+        self.dispatch_input(input_str)
+    }
+
+    /// Dispatches natural language input to the appropriate action.
+    fn dispatch_input(&mut self, input: &str) -> Result<Option<Value>> {
+        // Simple tokenization: split on whitespace
+        let tokens: Vec<&str> = input.split_whitespace().collect();
+
+        if tokens.is_empty() {
+            println!("What?");
+            return Ok(Some(Value::Nil));
+        }
+
+        // First token is the verb/action
+        let verb = tokens[0].to_lowercase();
+
+        // Look up the action by name
+        let action_name_kw = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&verb);
+
+        // Check if we have an action registered with this name
+        if self.session.action_registry().get(action_name_kw).is_none() {
+            println!("I don't understand '{verb}'.");
+            return Ok(Some(Value::Nil));
+        }
+
+        // Get the full action declaration
+        let Some(action_decl) = self.session.get_action_decl(action_name_kw).cloned() else {
+            println!("Action '{verb}' has no declaration.");
+            return Ok(Some(Value::Nil));
+        };
+
+        // Get the player entity as the actor
+        let actor = self.session.get_entity("player");
+
+        // Build initial bindings from action params
+        let mut bindings = Bindings::new();
+
+        // Bind actor if we have a player and the action expects an actor param
+        if let Some(actor_id) = actor {
+            if action_decl.params.contains(&"actor".to_string()) {
+                bindings.set("actor".to_string(), Value::EntityRef(actor_id));
+            }
+        }
+
+        // If there are preconditions, evaluate them to get additional bindings
+        if !action_decl.preconditions.is_empty() {
+            match self.evaluate_preconditions(&action_decl, &bindings) {
+                Ok(Some(new_bindings)) => bindings = new_bindings,
+                Ok(None) => {
+                    // Preconditions failed - action_decl should have on_fail message
+                    // For now, just return
+                    return Ok(Some(Value::Nil));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Execute each handler expression with bindings
+        for handler in &action_decl.handler {
+            self.execute_action_handler(handler, &bindings)?;
+        }
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Evaluates action preconditions and returns bindings if they all pass.
+    fn evaluate_preconditions(
+        &mut self,
+        action_decl: &longtable_language::ActionDecl,
+        initial_bindings: &Bindings,
+    ) -> Result<Option<Bindings>> {
+        // Evaluate all preconditions and accumulate bindings
+        let mut result = initial_bindings.clone();
+
+        for precondition in &action_decl.preconditions {
+            // Compile the pattern
+            let compiled = PatternCompiler::compile(
+                &precondition.pattern,
+                self.session.world_mut().interner_mut(),
+            )?;
+
+            // Try to match against the world
+            let all_matches = PatternMatcher::match_pattern(&compiled, self.session.world());
+
+            // Filter matches to those compatible with our initial bindings
+            let compatible_matches: Vec<_> = all_matches
+                .into_iter()
+                .filter(|m| {
+                    // Check that all variables in initial_bindings match this result
+                    for (var, expected_val) in result.iter() {
+                        if let Some(actual_val) = m.get(var) {
+                            if actual_val != expected_val {
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                })
+                .collect();
+
+            if compatible_matches.is_empty() {
+                // No match - precondition failed
+                // TODO: Print the failure message from precondition.message
+                println!("You can't do that.");
+                return Ok(None);
+            }
+
+            // Use the first compatible match and merge with accumulated bindings
+            for (var, value) in compatible_matches[0].iter() {
+                result.set(var.clone(), value.clone());
+            }
+        }
+
+        Ok(Some(result))
+    }
+
+    /// Executes a single action handler expression with variable bindings.
+    fn execute_action_handler(&mut self, handler: &Ast, bindings: &Bindings) -> Result<Value> {
+        // Check for special forms like (say "...")
+        if let Ast::List(elements, _) = handler {
+            if let Some(Ast::Symbol(name, _)) = elements.first() {
+                if name == "say" {
+                    // Handle (say expr) specially
+                    if let Some(msg_ast) = elements.get(1) {
+                        let msg = self.eval_with_bindings(msg_ast, bindings)?;
+                        if let Value::String(s) = msg {
+                            println!("{s}");
+                        } else {
+                            println!("{msg}");
+                        }
+                        return Ok(Value::Nil);
+                    }
+                }
+            }
+        }
+
+        // Fall back to general evaluation with bindings
+        self.eval_with_bindings(handler, bindings)
+    }
+
+    /// Evaluates an AST with variable bindings.
+    fn eval_with_bindings(&mut self, ast: &Ast, bindings: &Bindings) -> Result<Value> {
+        // If it's a variable reference (symbol starting with ?), look it up
+        if let Ast::Symbol(name, _) = ast {
+            if let Some(stripped) = name.strip_prefix('?') {
+                if let Some(value) = bindings.get(stripped) {
+                    return Ok(value.clone());
+                }
+                // Variable not bound - return as error or nil
+                return Err(Error::new(ErrorKind::Internal(format!(
+                    "unbound variable: {name}"
+                ))));
+            }
+        }
+
+        // For function calls, substitute variables in arguments
+        if let Ast::List(elements, span) = ast {
+            if !elements.is_empty() {
+                // Substitute variables in each element
+                let substituted: Vec<Ast> = elements
+                    .iter()
+                    .map(|elem| self.substitute_variables(elem, bindings))
+                    .collect();
+
+                // Evaluate the substituted form
+                let new_ast = Ast::List(substituted, *span);
+                return self.eval_form(&new_ast);
+            }
+        }
+
+        // Fall back to normal evaluation
+        self.eval_form(ast)
+    }
+
+    /// Substitutes bound variables in an AST.
+    fn substitute_variables(&self, ast: &Ast, bindings: &Bindings) -> Ast {
+        match ast {
+            Ast::Symbol(name, span) => {
+                if let Some(stripped) = name.strip_prefix('?') {
+                    if let Some(value) = bindings.get(stripped) {
+                        // Convert Value back to AST
+                        return self.value_to_ast(value, *span);
+                    }
+                }
+                ast.clone()
+            }
+            Ast::List(elements, span) => {
+                let substituted: Vec<Ast> = elements
+                    .iter()
+                    .map(|elem| self.substitute_variables(elem, bindings))
+                    .collect();
+                Ast::List(substituted, *span)
+            }
+            // Other AST types pass through unchanged
+            _ => ast.clone(),
+        }
+    }
+
+    /// Converts a Value back to an AST for substitution.
+    #[allow(clippy::cast_possible_wrap)]
+    fn value_to_ast(&self, value: &Value, span: longtable_language::Span) -> Ast {
+        match value {
+            Value::Bool(b) => Ast::Bool(*b, span),
+            Value::Int(n) => Ast::Int(*n, span),
+            Value::Float(f) => Ast::Float(*f, span),
+            Value::String(s) => Ast::String(s.to_string(), span),
+            Value::Keyword(kw) => {
+                // Look up the keyword name
+                let name = self
+                    .session
+                    .world()
+                    .interner()
+                    .get_keyword(*kw)
+                    .unwrap_or("unknown");
+                Ast::Keyword(name.to_string(), span)
+            }
+            Value::EntityRef(id) => {
+                // Represent as a special form the evaluator can understand
+                Ast::List(
+                    vec![
+                        Ast::Symbol("entity-ref".to_string(), span),
+                        Ast::Int(id.index as i64, span),
+                        Ast::Int(i64::from(id.generation), span),
+                    ],
+                    span,
+                )
+            }
+            // Nil and collections fall through to Nil
+            _ => Ast::Nil(span),
+        }
     }
 
     /// Handles the (timeline) form.

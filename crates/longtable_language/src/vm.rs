@@ -69,6 +69,8 @@ pub struct Vm {
     stack: Vec<Value>,
     /// Local variable slots.
     locals: Vec<Value>,
+    /// Global variable slots (persists across executions).
+    globals: Vec<Value>,
     /// Pattern bindings (for rule execution).
     bindings: Vec<Value>,
     /// Captured values for current closure execution.
@@ -96,6 +98,7 @@ impl Vm {
         Self {
             stack: Vec::with_capacity(256),
             locals: vec![Value::Nil; 256],
+            globals: vec![Value::Nil; 1024], // More globals than locals
             bindings: Vec::new(),
             captures: Vec::new(),
             ip: 0,
@@ -365,6 +368,22 @@ impl Vm {
                     }
                     self.locals[slot] = value;
                 }
+                Opcode::LoadGlobal(slot) => {
+                    let value = self
+                        .globals
+                        .get(*slot as usize)
+                        .cloned()
+                        .unwrap_or(Value::Nil);
+                    self.push(value);
+                }
+                Opcode::StoreGlobal(slot) => {
+                    let value = self.pop()?;
+                    let slot = *slot as usize;
+                    if slot >= self.globals.len() {
+                        self.globals.resize(slot + 1, Value::Nil);
+                    }
+                    self.globals[slot] = value;
+                }
                 Opcode::LoadBinding(idx) => {
                     let value = self
                         .bindings
@@ -442,6 +461,87 @@ impl Vm {
                         None
                     };
                     self.push(result.unwrap_or(Value::Nil));
+                }
+
+                // Entity Search
+                Opcode::WithComponent => {
+                    let component_val = self.pop()?;
+                    let component = extract_keyword(&component_val, ctx)?;
+
+                    let entities: LtVec<Value> = if let Some(c) = ctx {
+                        c.with_component(component)
+                            .into_iter()
+                            .map(Value::EntityRef)
+                            .collect()
+                    } else {
+                        LtVec::new()
+                    };
+                    self.push(Value::Vec(entities));
+                }
+
+                Opcode::FindRelationships => {
+                    let target_val = self.pop()?;
+                    let source_val = self.pop()?;
+                    let rel_type_val = self.pop()?;
+
+                    let rel_type = match &rel_type_val {
+                        Value::Nil => None,
+                        _ => Some(extract_keyword(&rel_type_val, ctx)?),
+                    };
+                    let source = match &source_val {
+                        Value::Nil => None,
+                        _ => Some(extract_entity(&source_val)?),
+                    };
+                    let target = match &target_val {
+                        Value::Nil => None,
+                        _ => Some(extract_entity(&target_val)?),
+                    };
+
+                    let entities: LtVec<Value> = if let Some(c) = ctx {
+                        c.find_relationships(rel_type, source, target)
+                            .into_iter()
+                            .map(Value::EntityRef)
+                            .collect()
+                    } else {
+                        LtVec::new()
+                    };
+                    self.push(Value::Vec(entities));
+                }
+
+                Opcode::Targets => {
+                    let rel_type_val = self.pop()?;
+                    let source_val = self.pop()?;
+
+                    let source = extract_entity(&source_val)?;
+                    let rel_type = extract_keyword(&rel_type_val, ctx)?;
+
+                    let entities: LtVec<Value> = if let Some(c) = ctx {
+                        c.targets(source, rel_type)
+                            .into_iter()
+                            .map(Value::EntityRef)
+                            .collect()
+                    } else {
+                        LtVec::new()
+                    };
+                    self.push(Value::Vec(entities));
+                }
+
+                Opcode::Sources => {
+                    let rel_type_val = self.pop()?;
+                    let target_val = self.pop()?;
+
+                    let target = extract_entity(&target_val)?;
+                    let rel_type = extract_keyword(&rel_type_val, ctx)?;
+
+                    let entities: LtVec<Value> = if let Some(c) = ctx {
+                        c.sources(target, rel_type)
+                            .into_iter()
+                            .map(Value::EntityRef)
+                            .collect()
+                    } else {
+                        LtVec::new()
+                    };
+                    self.push(Value::Vec(entities));
                 }
 
                 // Effects

@@ -1,0 +1,57 @@
+;; Core Standard Library Functions
+;; Provides commonly used functions for world interaction.
+
+;; =============================================================================
+;; Room Description Functions
+;; =============================================================================
+
+;; Describes a room, returning its name and description as a formatted string.
+;; Returns an empty string if room is nil.
+(fn: describe-room [room]
+  (if (nil? room)
+    ""
+    (let [name (get-field room :name :value)
+          desc (get-field room :description :value)]
+      (if name
+        (str "\n" name "\n" (if desc desc ""))
+        ""))))
+
+;; =============================================================================
+;; Inventory Functions
+;; =============================================================================
+
+;; Lists items carried by an entity.
+;; Returns a formatted string showing carried items.
+(fn: list-inventory [entity]
+  (if (nil? entity)
+    "You aren't carrying anything."
+    (let [rel-entities (find-relationships :contained-in nil entity)]
+      (if (empty? rel-entities)
+        "You aren't carrying anything."
+        (str "You are carrying:\n"
+             (str/join "\n"
+               (map (fn [rel-entity]
+                      (let [item-id (get-field rel-entity :rel/source :value)]
+                        (str "  " (if item-id
+                                    (let [name (get-field item-id :name :value)]
+                                      (if name name "something"))
+                                    "something"))))
+                    rel-entities)))))))
+
+;; Lists contents of a container.
+;; Returns a formatted string showing contained items.
+(fn: list-contents [container]
+  (if (nil? container)
+    "It's empty."
+    (let [rel-entities (find-relationships :contained-in nil container)]
+      (if (empty? rel-entities)
+        "It's empty."
+        (str "It contains:\n"
+             (str/join "\n"
+               (map (fn [rel-entity]
+                      (let [item-id (get-field rel-entity :rel/source :value)]
+                        (str "  " (if item-id
+                                    (let [name (get-field item-id :name :value)]
+                                      (if name name "something"))
+                                    "something"))))
+                    rel-entities)))))))

@@ -73,6 +73,10 @@ pub enum Opcode {
     LoadLocal(u16),
     /// Store top of stack to local variable slot.
     StoreLocal(u16),
+    /// Load a global variable by slot index.
+    LoadGlobal(u16),
+    /// Store top of stack to global variable slot.
+    StoreGlobal(u16),
     /// Load a value from pattern bindings (during rule execution).
     LoadBinding(u16),
     /// Load a captured variable by index (for closures).
@@ -89,6 +93,16 @@ pub enum Opcode {
     GetComponent,
     /// Get field from component: `[entity, component_kw, field_kw] -> [value]`
     GetField,
+
+    // === Entity Search (World Operations) ===
+    /// Get all entities with a component: `[component_kw] -> [vec<entity>]`
+    WithComponent,
+    /// Find relationship entities: `[rel_type_or_nil, source_or_nil, target_or_nil] -> [vec<entity>]`
+    FindRelationships,
+    /// Get targets of relationships from source: `[source, rel_type] -> [vec<entity>]`
+    Targets,
+    /// Get sources of relationships to target: `[target, rel_type] -> [vec<entity>]`
+    Sources,
 
     // === Effects (Mutation Operations) ===
     /// Spawn entity with components map: `[components_map] -> [entity_id]`

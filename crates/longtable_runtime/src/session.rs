@@ -3,8 +3,8 @@
 //! The session holds the current world state and session-local variables.
 
 use longtable_debug::{DebugSession, Timeline, Tracer};
-use longtable_foundation::{EntityId, Value};
-use longtable_language::{ModuleRegistry, NamespaceContext};
+use longtable_foundation::{EntityId, KeywordId, Value};
+use longtable_language::{ActionDecl, ModuleRegistry, NamespaceContext};
 use longtable_parser::scope::CompiledScope;
 use longtable_parser::{ActionRegistry, VocabularyRegistry};
 use longtable_storage::World;
@@ -53,6 +53,10 @@ pub struct Session {
 
     /// Compiled scopes for noun resolution.
     scopes: Vec<CompiledScope>,
+
+    /// Full action declarations keyed by action name.
+    /// Includes params, preconditions, and handlers.
+    action_decls: HashMap<KeywordId, ActionDecl>,
 }
 
 impl Session {
@@ -73,6 +77,7 @@ impl Session {
             vocabulary_registry: VocabularyRegistry::default(),
             action_registry: ActionRegistry::new(),
             scopes: Vec::new(),
+            action_decls: HashMap::new(),
         }
     }
 
@@ -93,6 +98,7 @@ impl Session {
             vocabulary_registry: VocabularyRegistry::default(),
             action_registry: ActionRegistry::new(),
             scopes: Vec::new(),
+            action_decls: HashMap::new(),
         }
     }
 
@@ -270,6 +276,17 @@ impl Session {
     /// Adds a compiled scope.
     pub fn add_scope(&mut self, scope: CompiledScope) {
         self.scopes.push(scope);
+    }
+
+    /// Registers a full action declaration.
+    pub fn register_action_decl(&mut self, action_name: KeywordId, decl: ActionDecl) {
+        self.action_decls.insert(action_name, decl);
+    }
+
+    /// Gets the full action declaration.
+    #[must_use]
+    pub fn get_action_decl(&self, action_name: KeywordId) -> Option<&ActionDecl> {
+        self.action_decls.get(&action_name)
     }
 }
 
