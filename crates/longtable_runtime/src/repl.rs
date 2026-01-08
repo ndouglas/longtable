@@ -94,6 +94,13 @@ impl<E: LineEditor> Repl<E> {
         self
     }
 
+    /// Starts the REPL in input mode (natural language commands).
+    #[must_use]
+    pub const fn with_input_mode(mut self) -> Self {
+        self.input_mode = true;
+        self
+    }
+
     /// Sets the primary prompt.
     #[must_use]
     pub fn with_prompt(mut self, prompt: impl Into<String>) -> Self {

@@ -10,6 +10,7 @@ use std::process::ExitCode;
 struct CliConfig {
     files: Vec<PathBuf>,
     batch_mode: bool,
+    run_mode: bool,
     show_help: bool,
     show_version: bool,
     // Debug flags
@@ -32,6 +33,23 @@ fn main() -> ExitCode {
     }
 }
 
+/// Resolve a path argument to a file path.
+/// If the path is a directory, look for `_.lt` inside it.
+fn resolve_path(path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let path_buf = PathBuf::from(path);
+
+    if path_buf.is_dir() {
+        let entry_point = path_buf.join("_.lt");
+        if entry_point.is_file() {
+            Ok(entry_point)
+        } else {
+            Err(format!("directory '{}' has no _.lt entry point", path_buf.display()).into())
+        }
+    } else {
+        Ok(path_buf)
+    }
+}
+
 fn parse_args(args: Vec<String>) -> Result<CliConfig, Box<dyn std::error::Error>> {
     let mut config = CliConfig::default();
 
@@ -41,6 +59,7 @@ fn parse_args(args: Vec<String>) -> Result<CliConfig, Box<dyn std::error::Error>
             "-h" | "--help" => config.show_help = true,
             "-V" | "--version" => config.show_version = true,
             "-b" | "--batch" => config.batch_mode = true,
+            "-r" | "--run" => config.run_mode = true,
             "--trace" => config.trace_rules = true,
             "--trace-vm" => config.trace_vm = true,
             "--trace-match" => config.trace_match = true,
@@ -59,7 +78,7 @@ fn parse_args(args: Vec<String>) -> Result<CliConfig, Box<dyn std::error::Error>
             arg if arg.starts_with('-') => {
                 return Err(format!("unknown option: {arg}").into());
             }
-            path => config.files.push(PathBuf::from(path)),
+            path => config.files.push(resolve_path(path)?),
         }
         i += 1;
     }
@@ -122,6 +141,11 @@ fn run(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
         repl = repl.without_banner();
     }
 
+    // If --run flag was passed, start in input mode
+    if config.run_mode {
+        repl = repl.with_input_mode();
+    }
+
     repl.run()?;
     Ok(())
 }
@@ -148,12 +172,14 @@ fn print_help() {
     longtable [OPTIONS] [FILES...]
 
 \x1b[1mARGUMENTS:\x1b[0m
-    [FILES...]    Files to load before starting REPL
+    [FILES...]    Files or directories to load before starting REPL
+                  (directories must contain a _.lt entry point)
 
 \x1b[1mOPTIONS:\x1b[0m
     -h, --help         Print help information
     -V, --version      Print version information
     -b, --batch        Load files and exit (no REPL)
+    -r, --run          Start in input mode (natural language commands)
 
 \x1b[1mDEBUG OPTIONS:\x1b[0m
     --trace            Enable rule tracing output
@@ -165,6 +191,7 @@ fn print_help() {
 \x1b[1mEXAMPLES:\x1b[0m
     longtable                        Start interactive REPL
     longtable world.lt               Load world.lt, then start REPL
+    longtable -r examples/adventure  Load and run in input mode
     longtable -b test.lt             Load test.lt and exit
     longtable components.lt rules.lt Load multiple files
     longtable --trace -b sim.lt      Run with rule tracing
@@ -262,6 +289,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_run_short() {
+        let config = parse_args(args("longtable -r")).unwrap();
+        assert!(config.run_mode);
+    }
+
+    #[test]
+    fn parse_run_long() {
+        let config = parse_args(args("longtable --run")).unwrap();
+        assert!(config.run_mode);
+    }
+
+    #[test]
+    fn parse_run_with_file() {
+        let config = parse_args(args("longtable -r test.lt")).unwrap();
+        assert!(config.run_mode);
+        assert_eq!(config.files.len(), 1);
+    }
+
+    #[test]
     fn parse_trace_flags() {
         let config = parse_args(args("longtable --trace --trace-vm --trace-match")).unwrap();
         assert!(config.trace_rules);
@@ -323,6 +369,14 @@ mod tests {
         assert_eq!(config.files.len(), 1);
     }
 
+    #[test]
+    fn parse_run_with_trace() {
+        let config = parse_args(args("longtable -r --trace test.lt")).unwrap();
+        assert!(config.run_mode);
+        assert!(config.trace_rules);
+        assert_eq!(config.files.len(), 1);
+    }
+
     // ==================== File Execution Tests ====================
     // Note: These tests verify the run function behavior
 
@@ -352,5 +406,46 @@ mod tests {
         // Batch mode with no files should succeed (just starts and exits)
         let result = run(args("longtable -b"));
         assert!(result.is_ok());
+    }
+
+    // ==================== Directory Resolution Tests ====================
+
+    #[test]
+    fn resolve_path_file_passes_through() {
+        // A file path should pass through unchanged
+        let result = resolve_path("test.lt").unwrap();
+        assert_eq!(result, PathBuf::from("test.lt"));
+    }
+
+    #[test]
+    fn resolve_path_directory_without_entry_point_fails() {
+        // A directory without _.lt should fail
+        let temp_dir = std::env::temp_dir().join("longtable_test_no_entry");
+        std::fs::create_dir_all(&temp_dir).ok();
+
+        let result = resolve_path(temp_dir.to_str().unwrap());
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no _.lt entry point")
+        );
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn resolve_path_directory_with_entry_point_succeeds() {
+        // A directory with _.lt should resolve to that file
+        let temp_dir = std::env::temp_dir().join("longtable_test_with_entry");
+        std::fs::create_dir_all(&temp_dir).ok();
+        let entry_file = temp_dir.join("_.lt");
+        std::fs::write(&entry_file, ";; entry point").ok();
+
+        let result = resolve_path(temp_dir.to_str().unwrap()).unwrap();
+        assert_eq!(result, entry_file);
+
+        std::fs::remove_dir_all(&temp_dir).ok();
     }
 }

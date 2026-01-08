@@ -242,17 +242,18 @@ impl Compiler {
 
     /// Prepares the compiler for a new compilation.
     ///
-    /// This resets per-compilation state (constants, functions, locals)
-    /// while preserving persistent state (globals, macros, namespace context).
+    /// This resets per-compilation state (locals, captures)
+    /// while preserving persistent state (globals, macros, namespace context, functions, constants).
     pub fn prepare_for_compilation(&mut self) {
-        self.constants.clear();
-        self.constant_map.clear();
+        // Note: constants and constant_map must NOT be cleared - function bytecode references
+        // constants by index, so clearing them would break function calls across compilations.
+        // Note: functions must NOT be cleared - globals hold FunctionRefs with indexes
+        // into this table, so clearing it would break function calls.
         self.locals.clear();
         self.next_local = 0;
-        self.functions.clear();
         self.outer_locals = None;
         self.captures.clear();
-        // Note: globals, next_global, natives, macro_registry, namespace_context persist
+        // Persistent: globals, next_global, natives, macro_registry, namespace_context, functions, constants
     }
 
     /// Returns a mutable reference to the macro registry.
