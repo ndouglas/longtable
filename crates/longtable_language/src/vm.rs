@@ -29,9 +29,9 @@ mod native;
 #[cfg(test)]
 mod tests;
 
-pub use context::{RuntimeContext, VmContext, VmEffect, WorldContext};
+pub use context::{ReadOnlyContext, RuntimeContext, VmContext, VmEffect, WorldContext};
 
-use context::NoContext;
+use context::NoRuntimeContext;
 use native::{
     add_values, compare_values, div_values, format_value, is_truthy, mod_values, mul_values,
     native_abs, native_acos, native_and, native_asin, native_assoc, native_atan, native_atan2,
@@ -62,6 +62,31 @@ use longtable_foundation::{
 
 use crate::compiler::CompiledProgram;
 use crate::opcode::{Bytecode, Opcode};
+
+// =============================================================================
+// Macros for reducing VM code duplication
+// =============================================================================
+
+/// Dispatches native function calls by index.
+///
+/// Usage:
+/// ```ignore
+/// native_dispatch!(idx, args;
+///     12 => native_and,
+///     13 => native_or,
+///     // ...
+/// )
+/// ```
+macro_rules! native_dispatch {
+    ($idx:expr, $args:expr; $($num:literal => $func:ident),* $(,)?) => {
+        match $idx {
+            $($num => $func($args),)*
+            _ => Err(Error::new(ErrorKind::Internal(format!(
+                "unknown native function index: {}", $idx
+            )))),
+        }
+    };
+}
 
 /// Stack-based virtual machine.
 pub struct Vm {
@@ -153,41 +178,65 @@ impl Vm {
     }
 
     /// Executes a compiled program and returns the result.
+    ///
+    /// This does not support registration opcodes. Use `execute_with_runtime_context`
+    /// for full support including schema/vocabulary registration.
     pub fn execute(&mut self, program: &CompiledProgram) -> Result<Value> {
-        self.execute_internal::<NoContext>(
+        let mut ctx = NoRuntimeContext;
+        self.execute_internal(
             &program.code,
             &program.constants,
             &program.functions,
-            None,
+            &mut ctx,
         )
     }
 
     /// Executes a compiled program with World context.
+    ///
+    /// This supports read operations on the World but not registration opcodes.
+    /// Use `execute_with_runtime_context` for full support.
     pub fn execute_with_context<C: VmContext>(
         &mut self,
         program: &CompiledProgram,
         ctx: &C,
     ) -> Result<Value> {
+        let mut wrapper = ReadOnlyContext::new(ctx);
         self.execute_internal(
             &program.code,
             &program.constants,
             &program.functions,
-            Some(ctx),
+            &mut wrapper,
         )
+    }
+
+    /// Executes a compiled program with full runtime context.
+    ///
+    /// This method supports all opcodes including registration opcodes
+    /// (`RegisterComponent`, `RegisterVerb`, etc.) that require mutable access
+    /// to the runtime environment.
+    pub fn execute_with_runtime_context<C: RuntimeContext>(
+        &mut self,
+        program: &CompiledProgram,
+        ctx: &mut C,
+    ) -> Result<Value> {
+        self.execute_internal(&program.code, &program.constants, &program.functions, ctx)
     }
 
     /// Executes bytecode with a constants pool (no functions available).
     pub fn execute_bytecode(&mut self, code: &Bytecode, constants: &[Value]) -> Result<Value> {
-        self.execute_internal::<NoContext>(code, constants, &[], None)
+        let mut ctx = NoRuntimeContext;
+        self.execute_internal(code, constants, &[], &mut ctx)
     }
 
-    /// Executes bytecode with optional World context.
-    fn execute_internal<C: VmContext>(
+    /// Executes bytecode with a `RuntimeContext`.
+    ///
+    /// This is the unified internal execution method that handles all opcodes.
+    fn execute_internal<C: RuntimeContext>(
         &mut self,
         code: &Bytecode,
         constants: &[Value],
         functions: &[crate::compiler::CompiledFunction],
-        ctx: Option<&C>,
+        ctx: &mut C,
     ) -> Result<Value> {
         self.ip = 0;
 
@@ -332,8 +381,7 @@ impl Vm {
                     }
 
                     // Execute the function body
-                    let result =
-                        self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                    let result = self.execute_internal(&func.code, constants, functions, ctx)?;
 
                     // Restore VM state
                     self.ip = saved_ip;
@@ -438,11 +486,7 @@ impl Vm {
                     let entity = extract_entity(&entity_val)?;
                     let component = extract_keyword(&component_val, ctx)?;
 
-                    let result = if let Some(c) = ctx {
-                        c.get_component(entity, component)?
-                    } else {
-                        None
-                    };
+                    let result = ctx.get_component(entity, component)?;
                     self.push(result.unwrap_or(Value::Nil));
                 }
 
@@ -455,11 +499,7 @@ impl Vm {
                     let component = extract_keyword(&component_val, ctx)?;
                     let field = extract_keyword(&field_val, ctx)?;
 
-                    let result = if let Some(c) = ctx {
-                        c.get_field(entity, component, field)?
-                    } else {
-                        None
-                    };
+                    let result = ctx.get_field(entity, component, field)?;
                     self.push(result.unwrap_or(Value::Nil));
                 }
 
@@ -468,14 +508,11 @@ impl Vm {
                     let component_val = self.pop()?;
                     let component = extract_keyword(&component_val, ctx)?;
 
-                    let entities: LtVec<Value> = if let Some(c) = ctx {
-                        c.with_component(component)
-                            .into_iter()
-                            .map(Value::EntityRef)
-                            .collect()
-                    } else {
-                        LtVec::new()
-                    };
+                    let entities: LtVec<Value> = ctx
+                        .with_component(component)
+                        .into_iter()
+                        .map(Value::EntityRef)
+                        .collect();
                     self.push(Value::Vec(entities));
                 }
 
@@ -497,14 +534,11 @@ impl Vm {
                         _ => Some(extract_entity(&target_val)?),
                     };
 
-                    let entities: LtVec<Value> = if let Some(c) = ctx {
-                        c.find_relationships(rel_type, source, target)
-                            .into_iter()
-                            .map(Value::EntityRef)
-                            .collect()
-                    } else {
-                        LtVec::new()
-                    };
+                    let entities: LtVec<Value> = ctx
+                        .find_relationships(rel_type, source, target)
+                        .into_iter()
+                        .map(Value::EntityRef)
+                        .collect();
                     self.push(Value::Vec(entities));
                 }
 
@@ -515,14 +549,11 @@ impl Vm {
                     let source = extract_entity(&source_val)?;
                     let rel_type = extract_keyword(&rel_type_val, ctx)?;
 
-                    let entities: LtVec<Value> = if let Some(c) = ctx {
-                        c.targets(source, rel_type)
-                            .into_iter()
-                            .map(Value::EntityRef)
-                            .collect()
-                    } else {
-                        LtVec::new()
-                    };
+                    let entities: LtVec<Value> = ctx
+                        .targets(source, rel_type)
+                        .into_iter()
+                        .map(Value::EntityRef)
+                        .collect();
                     self.push(Value::Vec(entities));
                 }
 
@@ -533,14 +564,11 @@ impl Vm {
                     let target = extract_entity(&target_val)?;
                     let rel_type = extract_keyword(&rel_type_val, ctx)?;
 
-                    let entities: LtVec<Value> = if let Some(c) = ctx {
-                        c.sources(target, rel_type)
-                            .into_iter()
-                            .map(Value::EntityRef)
-                            .collect()
-                    } else {
-                        LtVec::new()
-                    };
+                    let entities: LtVec<Value> = ctx
+                        .sources(target, rel_type)
+                        .into_iter()
+                        .map(Value::EntityRef)
+                        .collect();
                     self.push(Value::Vec(entities));
                 }
 
@@ -822,7 +850,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -893,7 +921,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -969,7 +997,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1047,7 +1075,7 @@ impl Vm {
 
                             // Execute function
                             let result =
-                                self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                                self.execute_internal(&func.code, constants, functions, ctx)?;
 
                             // Restore state
                             self.ip = saved_ip;
@@ -1119,7 +1147,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1193,7 +1221,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1268,7 +1296,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1345,7 +1373,7 @@ impl Vm {
 
                             // Execute function
                             let result =
-                                self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                                self.execute_internal(&func.code, constants, functions, ctx)?;
 
                             // Restore state
                             self.ip = saved_ip;
@@ -1422,7 +1450,7 @@ impl Vm {
 
                         // Execute function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1495,8 +1523,7 @@ impl Vm {
                         }
 
                         // Execute function to get key
-                        let key =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                        let key = self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1598,7 +1625,7 @@ impl Vm {
 
                             // Execute function
                             let result =
-                                self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                                self.execute_internal(&func.code, constants, functions, ctx)?;
 
                             // Restore state
                             self.ip = saved_ip;
@@ -1668,7 +1695,7 @@ impl Vm {
 
                         // Execute zero-arg function
                         let result =
-                            self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+                            self.execute_internal(&func.code, constants, functions, ctx)?;
 
                         // Restore state
                         self.ip = saved_ip;
@@ -1681,24 +1708,68 @@ impl Vm {
                     self.push(Value::Vec(results));
                 }
 
-                // Machine Configuration opcodes - require RuntimeContext
-                // In the basic VmContext execution path, these will error.
-                // Use execute_with_runtime_context() for full support.
-                Opcode::RegisterComponent
-                | Opcode::RegisterRelationship
-                | Opcode::RegisterVerb
-                | Opcode::RegisterDirection
-                | Opcode::RegisterPreposition
-                | Opcode::RegisterPronoun
-                | Opcode::RegisterAdverb
-                | Opcode::RegisterType
-                | Opcode::RegisterScope
-                | Opcode::RegisterCommand
-                | Opcode::RegisterAction
-                | Opcode::RegisterRule => {
-                    return Err(Error::new(ErrorKind::Internal(
-                        "registration opcodes require RuntimeContext; use execute_with_runtime_context()".to_string(),
-                    )));
+                // Machine Configuration opcodes
+                // These call RuntimeContext methods to register schemas, vocabulary, etc.
+                // When using ReadOnlyContext or NoRuntimeContext, these will error.
+                Opcode::RegisterComponent => {
+                    let schema = self.pop()?;
+                    ctx.register_component_schema(&schema)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterRelationship => {
+                    let schema = self.pop()?;
+                    ctx.register_relationship_schema(&schema)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterVerb => {
+                    let data = self.pop()?;
+                    ctx.register_verb(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterDirection => {
+                    let data = self.pop()?;
+                    ctx.register_direction(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterPreposition => {
+                    let data = self.pop()?;
+                    ctx.register_preposition(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterPronoun => {
+                    let data = self.pop()?;
+                    ctx.register_pronoun(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterAdverb => {
+                    let data = self.pop()?;
+                    ctx.register_adverb(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterType => {
+                    let data = self.pop()?;
+                    ctx.register_type(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterScope => {
+                    let data = self.pop()?;
+                    ctx.register_scope(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterCommand => {
+                    let data = self.pop()?;
+                    ctx.register_command(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterAction => {
+                    let data = self.pop()?;
+                    ctx.register_action(&data)?;
+                    self.push(Value::Nil);
+                }
+                Opcode::RegisterRule => {
+                    let data = self.pop()?;
+                    let entity_id = ctx.register_rule(&data)?;
+                    self.push(Value::EntityRef(entity_id));
                 }
             }
         }
@@ -1749,57 +1820,10 @@ impl Vm {
         }
         args.reverse();
 
-        // Dispatch to native function implementation
-        // Index matches order in compiler's register_natives()
+        // Handle special cases that need VM access (print/println)
         let result = match idx {
-            // 0-4: Arithmetic (+, -, *, /, mod) - handled by opcodes
-            // 5-10: Comparison (=, !=, <, <=, >, >=) - handled by opcodes
-            // 11: not - handled by opcode
-            // 12-13: and, or - handled by opcodes/short-circuit
-            12 => native_and(&args),
-            13 => native_or(&args),
-            // 14-24: Predicates
-            14 => native_nil_p(&args),
-            15 => native_some_p(&args),
-            16 => native_int_p(&args),
-            17 => native_float_p(&args),
-            18 => native_string_p(&args),
-            19 => native_keyword_p(&args),
-            20 => native_symbol_p(&args),
-            21 => native_list_p(&args),
-            22 => native_vector_p(&args),
-            23 => native_map_p(&args),
-            24 => native_set_p(&args),
-            // 25-37: Collections
-            25 => native_count(&args),
-            26 => native_empty_p(&args),
-            27 => native_first(&args),
-            28 => native_rest(&args),
-            29 => native_nth(&args),
-            30 => native_conj(&args),
-            31 => native_cons(&args),
-            32 => native_get(&args),
-            33 => native_assoc(&args),
-            34 => native_dissoc(&args),
-            35 => native_contains_p(&args),
-            36 => native_keys(&args),
-            37 => native_vals(&args),
-            // 38-41: String
-            38 => native_str(&args),
-            39 => native_str_len(&args),
-            40 => native_str_upper(&args),
-            41 => native_str_lower(&args),
-            // 42-47: Math
-            42 => native_abs(&args),
-            43 => native_min(&args),
-            44 => native_max(&args),
-            45 => native_floor(&args),
-            46 => native_ceil(&args),
-            47 => native_round(&args),
-            48 => native_sqrt(&args),
-            // 49-51: Misc
             49 => {
-                // print - already handled specially, but in case it comes through
+                // print
                 if let Some(v) = args.first() {
                     self.output.push(format_value(v));
                 }
@@ -1812,90 +1836,134 @@ impl Vm {
                 }
                 Ok(Value::Nil)
             }
-            51 => native_type(&args),
-            // Stage S1: Critical functions
-            52 => native_inc(&args),
-            53 => native_dec(&args),
-            54 => native_last(&args),
-            55 => native_range(&args),
-            // Stage S2: String functions
-            56 => native_str_split(&args),
-            57 => native_str_join(&args),
-            58 => native_str_trim(&args),
-            59 => native_str_trim_left(&args),
-            60 => native_str_trim_right(&args),
-            61 => native_str_starts_with(&args),
-            62 => native_str_ends_with(&args),
-            63 => native_str_contains(&args),
-            64 => native_str_replace(&args),
-            65 => native_str_replace_all(&args),
-            66 => native_str_blank(&args),
-            67 => native_str_substring(&args),
-            68 => native_format(&args),
-            // Stage S3: Collection functions
-            69 => native_take(&args),
-            70 => native_drop(&args),
-            71 => native_concat(&args),
-            72 => native_reverse(&args),
-            73 => native_vec(&args),
-            74 => native_set(&args),
-            75 => native_into(&args),
-            76 => native_sort(&args),
-            77 => native_merge(&args),
-            // Stage S4: Math functions
-            78 => native_rem(&args),
-            79 => native_clamp(&args),
-            80 => native_trunc(&args),
-            81 => native_pow(&args),
-            82 => native_cbrt(&args),
-            83 => native_exp(&args),
-            84 => native_log(&args),
-            85 => native_log10(&args),
-            86 => native_log2(&args),
-            87 => native_sin(&args),
-            88 => native_cos(&args),
-            89 => native_tan(&args),
-            90 => native_asin(&args),
-            91 => native_acos(&args),
-            92 => native_atan(&args),
-            93 => native_atan2(&args),
-            94 => native_pi(&args),
-            95 => native_e(&args),
-            // Stage S5: Extended collection functions
-            96 => native_flatten(&args),
-            97 => native_distinct(&args),
-            98 => native_dedupe(&args),
-            99 => native_partition(&args),
-            100 => native_partition_all(&args),
-            // Stage S6: Vector math functions
-            101 => native_vec_add(&args),
-            102 => native_vec_sub(&args),
-            103 => native_vec_mul(&args),
-            104 => native_vec_scale(&args),
-            105 => native_vec_dot(&args),
-            106 => native_vec_cross(&args),
-            107 => native_vec_length(&args),
-            108 => native_vec_length_sq(&args),
-            109 => native_vec_normalize(&args),
-            110 => native_vec_distance(&args),
-            111 => native_vec_lerp(&args),
-            112 => native_vec_angle(&args),
-            // Stage S7: Remaining functions (113-124)
-            113 => native_bool_p(&args),
-            114 => native_number_p(&args),
-            115 => native_coll_p(&args),
-            116 => native_fn_p(&args),
-            117 => native_entity_p(&args),
-            118 => native_sinh(&args),
-            119 => native_cosh(&args),
-            120 => native_tanh(&args),
-            121 => native_interleave(&args),
-            122 => native_interpose(&args),
-            123 => native_zip(&args),
-            124 => native_repeat(&args),
-            _ => Err(Error::new(ErrorKind::Internal(format!(
-                "unknown native function index: {idx}"
-            )))),
+            // All other natives use the dispatch macro
+            // Index matches order in compiler's register_natives()
+            _ => native_dispatch!(idx, &args;
+                // 12-13: Logic (and, or)
+                12 => native_and,
+                13 => native_or,
+                // 14-24: Type predicates
+                14 => native_nil_p,
+                15 => native_some_p,
+                16 => native_int_p,
+                17 => native_float_p,
+                18 => native_string_p,
+                19 => native_keyword_p,
+                20 => native_symbol_p,
+                21 => native_list_p,
+                22 => native_vector_p,
+                23 => native_map_p,
+                24 => native_set_p,
+                // 25-37: Collections
+                25 => native_count,
+                26 => native_empty_p,
+                27 => native_first,
+                28 => native_rest,
+                29 => native_nth,
+                30 => native_conj,
+                31 => native_cons,
+                32 => native_get,
+                33 => native_assoc,
+                34 => native_dissoc,
+                35 => native_contains_p,
+                36 => native_keys,
+                37 => native_vals,
+                // 38-41: String basics
+                38 => native_str,
+                39 => native_str_len,
+                40 => native_str_upper,
+                41 => native_str_lower,
+                // 42-48: Math basics
+                42 => native_abs,
+                43 => native_min,
+                44 => native_max,
+                45 => native_floor,
+                46 => native_ceil,
+                47 => native_round,
+                48 => native_sqrt,
+                // 51: type
+                51 => native_type,
+                // 52-55: Critical functions
+                52 => native_inc,
+                53 => native_dec,
+                54 => native_last,
+                55 => native_range,
+                // 56-68: String functions
+                56 => native_str_split,
+                57 => native_str_join,
+                58 => native_str_trim,
+                59 => native_str_trim_left,
+                60 => native_str_trim_right,
+                61 => native_str_starts_with,
+                62 => native_str_ends_with,
+                63 => native_str_contains,
+                64 => native_str_replace,
+                65 => native_str_replace_all,
+                66 => native_str_blank,
+                67 => native_str_substring,
+                68 => native_format,
+                // 69-77: Collection functions
+                69 => native_take,
+                70 => native_drop,
+                71 => native_concat,
+                72 => native_reverse,
+                73 => native_vec,
+                74 => native_set,
+                75 => native_into,
+                76 => native_sort,
+                77 => native_merge,
+                // 78-95: Math functions
+                78 => native_rem,
+                79 => native_clamp,
+                80 => native_trunc,
+                81 => native_pow,
+                82 => native_cbrt,
+                83 => native_exp,
+                84 => native_log,
+                85 => native_log10,
+                86 => native_log2,
+                87 => native_sin,
+                88 => native_cos,
+                89 => native_tan,
+                90 => native_asin,
+                91 => native_acos,
+                92 => native_atan,
+                93 => native_atan2,
+                94 => native_pi,
+                95 => native_e,
+                // 96-100: Extended collection functions
+                96 => native_flatten,
+                97 => native_distinct,
+                98 => native_dedupe,
+                99 => native_partition,
+                100 => native_partition_all,
+                // 101-112: Vector math functions
+                101 => native_vec_add,
+                102 => native_vec_sub,
+                103 => native_vec_mul,
+                104 => native_vec_scale,
+                105 => native_vec_dot,
+                106 => native_vec_cross,
+                107 => native_vec_length,
+                108 => native_vec_length_sq,
+                109 => native_vec_normalize,
+                110 => native_vec_distance,
+                111 => native_vec_lerp,
+                112 => native_vec_angle,
+                // 113-124: Remaining functions
+                113 => native_bool_p,
+                114 => native_number_p,
+                115 => native_coll_p,
+                116 => native_fn_p,
+                117 => native_entity_p,
+                118 => native_sinh,
+                119 => native_cosh,
+                120 => native_tanh,
+                121 => native_interleave,
+                122 => native_interpose,
+                123 => native_zip,
+                124 => native_repeat,
+            ),
         }?;
 
         self.push(result);
@@ -1915,11 +1983,11 @@ fn extract_entity(val: &Value) -> Result<EntityId> {
     }
 }
 
-fn extract_keyword<C: VmContext>(val: &Value, ctx: Option<&C>) -> Result<KeywordId> {
+fn extract_keyword<C: VmContext>(val: &Value, ctx: &C) -> Result<KeywordId> {
     match val {
         Value::Keyword(k) => Ok(*k),
         _ => {
-            if let Some(k) = ctx.and_then(|c| c.resolve_keyword(val)) {
+            if let Some(k) = ctx.resolve_keyword(val) {
                 Ok(k)
             } else {
                 Err(Error::new(ErrorKind::TypeMismatch {

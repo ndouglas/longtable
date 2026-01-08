@@ -200,6 +200,22 @@ impl Compiler {
         Self::with_macro_registry(MacroRegistry::new_with_stdlib())
     }
 
+    /// Sets the interner for declaration compilation.
+    ///
+    /// This is needed when compiling declarations that require keyword interning.
+    /// The interner should be taken back after compilation using [`take_interner`].
+    pub fn set_interner(&mut self, interner: Interner) {
+        self.interner = Some(interner);
+    }
+
+    /// Takes the interner from the compiler.
+    ///
+    /// Returns the interner if one was set, allowing the caller to reclaim it
+    /// after compilation is complete.
+    pub fn take_interner(&mut self) -> Option<Interner> {
+        self.interner.take()
+    }
+
     /// Creates a new compiler with a macro registry.
     #[must_use]
     pub fn with_macro_registry(macro_registry: MacroRegistry) -> Self {

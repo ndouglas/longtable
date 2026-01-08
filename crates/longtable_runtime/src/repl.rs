@@ -2,23 +2,17 @@
 
 use crate::editor::{LineEditor, ReadResult, RustylineEditor};
 use crate::serialize;
-use crate::session::Session;
+use crate::session::{Session, SessionContext};
 
 /// Embedded core stdlib functions.
 const STDLIB_CORE: &str = include_str!("../../longtable_stdlib/stdlib/core.lt");
 use longtable_engine::{
     Bindings, InputEvent, PatternCompiler, PatternMatcher, QueryCompiler, QueryExecutor,
-    RuleCompiler, TickExecutor,
+    TickExecutor,
 };
-use longtable_foundation::{EntityId, Error, ErrorKind, Result, Type, Value};
+use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
 use longtable_language::{
-    Ast, Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
-    NamespaceInfo, OnTargetDelete, RelationshipDecl, RuleDecl, StorageKind, Vm, parse,
-};
-use longtable_parser::CompiledAction;
-use longtable_storage::schema::{
-    Cardinality as StorageCardinality, ComponentSchema, FieldSchema, OnDelete, RelationshipSchema,
-    Storage,
+    Ast, Compiler, Declaration, DeclarationAnalyzer, NamespaceContext, NamespaceInfo, Vm, parse,
 };
 use std::fs;
 use std::io::{self, Write};
@@ -330,9 +324,21 @@ impl<E: LineEditor> Repl<E> {
         // Prepare the persistent compiler for a new compilation
         // This preserves globals while clearing per-compilation state
         self.compiler.prepare_for_compilation();
+
+        // Sync interner to compiler for declaration compilation (keyword resolution)
+        let interner = self.session.world().interner().clone();
+        self.compiler.set_interner(interner);
+
         let program = self.compiler.compile(&[form.clone()])?;
 
-        self.vm.execute(&program)
+        // Sync interner back to session (compiler may have added keywords)
+        if let Some(interner) = self.compiler.take_interner() {
+            self.session.world_mut().set_interner(interner);
+        }
+
+        // Execute with full RuntimeContext for registration opcode support
+        let mut ctx = SessionContext::new(&mut self.session);
+        self.vm.execute_with_runtime_context(&program, &mut ctx)
     }
 
     /// Tries to handle special REPL forms (def, load, save!, load-world!, tick!, inspect).
@@ -346,8 +352,33 @@ impl<E: LineEditor> Repl<E> {
         };
 
         match &list[0] {
-            // NOTE: (def) is replaced by (fn:) in the compiler
             // NOTE: (say) is replaced by (println) native function
+
+            // (def name value) - define a variable in the session
+            Ast::Symbol(s, _) if s == "def" => {
+                if list.len() != 3 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "def requires exactly 2 arguments: (def name value)".to_string(),
+                    )));
+                }
+
+                let name = match &list[1] {
+                    Ast::Symbol(n, _) => n.clone(),
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "def name must be a symbol, got {}",
+                            other.type_name()
+                        ))));
+                    }
+                };
+
+                // Evaluate the value expression
+                let value = self.eval_form(&list[2])?;
+
+                // Store in session variables
+                self.session.set_variable(name.clone(), value.clone());
+                Ok(Some(value))
+            }
 
             // (run) - enter input/game mode for natural language commands
             Ast::Symbol(s, _) if s == "run" => {
@@ -532,41 +563,26 @@ impl<E: LineEditor> Repl<E> {
                 Ok(Some(Value::Nil))
             }
 
-            // (component: name ...) - define component schema
-            Ast::Symbol(s, _) if s == "component:" => {
-                if let Some(Declaration::Component(comp)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_component(&comp)?;
-                    Ok(Some(Value::Nil))
+            // NOTE: component:, relationship:, rule: are now handled by compiler opcodes
+
+            // (spawn: name :component value ...) - spawn an entity with components
+            Ast::Symbol(s, _) if s == "spawn:" => {
+                if let Some(Declaration::Spawn(spawn_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_spawn(&spawn_decl)
                 } else {
                     Err(Error::new(ErrorKind::Internal(
-                        "invalid component: form".to_string(),
+                        "invalid spawn: form".to_string(),
                     )))
                 }
             }
 
-            // (relationship: name ...) - define relationship schema
-            Ast::Symbol(s, _) if s == "relationship:" => {
-                if let Some(Declaration::Relationship(rel)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_relationship(&rel)?;
-                    Ok(Some(Value::Nil))
+            // (link: source :relationship target) - create a relationship between entities
+            Ast::Symbol(s, _) if s == "link:" => {
+                if let Some(Declaration::Link(link_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_link(&link_decl)
                 } else {
                     Err(Error::new(ErrorKind::Internal(
-                        "invalid relationship: form".to_string(),
-                    )))
-                }
-            }
-
-            // NOTE: (spawn:) is replaced by (spawn ...) compiler form
-            // NOTE: (link:) is replaced by (link ...) compiler form
-
-            // (rule: name :when [...] :then [...]) - define rule
-            Ast::Symbol(s, _) if s == "rule:" => {
-                if let Some(Declaration::Rule(rule_decl)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_rule(&rule_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid rule: form".to_string(),
+                        "invalid link: form".to_string(),
                     )))
                 }
             }
@@ -662,225 +678,14 @@ impl<E: LineEditor> Repl<E> {
             Ast::Symbol(s, _) if s == "input!" => self.handle_input(&list[1..]),
 
             // NOTE: (entity-ref) is now a compiler form
-
-            // ==================== Parser Vocabulary Declarations ====================
-
-            // (verb: name :synonyms [...])
-            Ast::Symbol(s, _) if s == "verb:" => {
-                if let Some(Declaration::Verb(verb_decl)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_verb(&verb_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid verb: form".to_string(),
-                    )))
-                }
-            }
-
-            // (direction: name :synonyms [...] :opposite ...)
-            Ast::Symbol(s, _) if s == "direction:" => {
-                if let Some(Declaration::Direction(dir_decl)) = DeclarationAnalyzer::analyze(form)?
-                {
-                    self.execute_direction(&dir_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid direction: form".to_string(),
-                    )))
-                }
-            }
-
-            // (preposition: name :implies ...)
-            Ast::Symbol(s, _) if s == "preposition:" => {
-                if let Some(Declaration::Preposition(prep_decl)) =
-                    DeclarationAnalyzer::analyze(form)?
-                {
-                    self.execute_preposition(&prep_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid preposition: form".to_string(),
-                    )))
-                }
-            }
-
-            // (pronoun: name :gender ... :number ...)
-            Ast::Symbol(s, _) if s == "pronoun:" => {
-                if let Some(Declaration::Pronoun(pronoun_decl)) =
-                    DeclarationAnalyzer::analyze(form)?
-                {
-                    self.execute_pronoun(&pronoun_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid pronoun: form".to_string(),
-                    )))
-                }
-            }
-
-            // (adverb: name)
-            Ast::Symbol(s, _) if s == "adverb:" => {
-                if let Some(Declaration::Adverb(adverb_decl)) = DeclarationAnalyzer::analyze(form)?
-                {
-                    self.execute_adverb(&adverb_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid adverb: form".to_string(),
-                    )))
-                }
-            }
-
-            // (type: name :extends [...] :where [...])
-            Ast::Symbol(s, _) if s == "type:" => {
-                if let Some(Declaration::NounType(type_decl)) = DeclarationAnalyzer::analyze(form)?
-                {
-                    self.execute_noun_type(&type_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid type: form".to_string(),
-                    )))
-                }
-            }
-
-            // (scope: name :extends [...] :where [...])
-            Ast::Symbol(s, _) if s == "scope:" => {
-                if let Some(Declaration::Scope(scope_decl)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_scope(&scope_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid scope: form".to_string(),
-                    )))
-                }
-            }
-
-            // (command: name :syntax [...] :action ...)
-            Ast::Symbol(s, _) if s == "command:" => {
-                if let Some(Declaration::Command(cmd_decl)) = DeclarationAnalyzer::analyze(form)? {
-                    self.execute_command(&cmd_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid command: form".to_string(),
-                    )))
-                }
-            }
-
-            // (action: name :params [...] :preconditions [...] :do [...])
-            Ast::Symbol(s, _) if s == "action:" => {
-                if let Some(Declaration::Action(action_decl)) = DeclarationAnalyzer::analyze(form)?
-                {
-                    self.execute_action(&action_decl)?;
-                    Ok(Some(Value::Nil))
-                } else {
-                    Err(Error::new(ErrorKind::Internal(
-                        "invalid action: form".to_string(),
-                    )))
-                }
-            }
-
+            // NOTE: Parser vocabulary declarations (verb:, direction:, preposition:, etc.)
+            //       are now handled by compiler opcodes
             _ => Ok(None),
         }
     }
 
-    /// Executes a component declaration to register a schema.
-    fn execute_component(&mut self, comp: &ComponentDecl) -> Result<()> {
-        // Intern the component name as a keyword
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&comp.name);
-
-        // Build the schema
-        let schema = if comp.is_tag {
-            ComponentSchema::tag(name)
-        } else {
-            let mut schema = ComponentSchema::new(name);
-            for field in &comp.fields {
-                let field_name = self
-                    .session
-                    .world_mut()
-                    .interner_mut()
-                    .intern_keyword(&field.name);
-                let field_type = Self::parse_type(&field.ty);
-
-                // Create field schema
-                let field_schema = if let Some(ref default_ast) = field.default {
-                    let default_value = self.eval_form(default_ast)?;
-                    FieldSchema::optional(field_name, field_type, default_value)
-                } else {
-                    FieldSchema::required(field_name, field_type)
-                };
-                schema = schema.with_field(field_schema);
-            }
-            schema
-        };
-
-        // Register in world (returns new world with immutable pattern)
-        let world = self.session.world().clone();
-        let new_world = world.register_component(schema)?;
-        self.session.set_world(new_world);
-        Ok(())
-    }
-
-    /// Executes a relationship declaration to register a schema.
-    fn execute_relationship(&mut self, rel: &RelationshipDecl) -> Result<()> {
-        // Intern the relationship name as a keyword
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&rel.name);
-
-        // Build the schema
-        let storage = match rel.storage {
-            StorageKind::Field => Storage::Field,
-            StorageKind::Entity => Storage::Entity,
-        };
-
-        let cardinality = match rel.cardinality {
-            Cardinality::OneToOne => StorageCardinality::OneToOne,
-            Cardinality::OneToMany => StorageCardinality::OneToMany,
-            Cardinality::ManyToOne => StorageCardinality::ManyToOne,
-            Cardinality::ManyToMany => StorageCardinality::ManyToMany,
-        };
-
-        let on_delete = match rel.on_target_delete {
-            OnTargetDelete::Remove => OnDelete::Remove,
-            OnTargetDelete::Cascade => OnDelete::Cascade,
-            OnTargetDelete::Nullify => OnDelete::Nullify,
-        };
-
-        let schema = RelationshipSchema::new(name)
-            .with_storage(storage)
-            .with_cardinality(cardinality)
-            .with_on_delete(on_delete);
-
-        // Register in world (returns new world with immutable pattern)
-        let world = self.session.world().clone();
-        let new_world = world.register_relationship(schema)?;
-        self.session.set_world(new_world);
-        Ok(())
-    }
-
-    /// Parses a type string into a Type.
-    fn parse_type(ty: &str) -> Type {
-        match ty {
-            "int" => Type::Int,
-            "float" => Type::Float,
-            "string" => Type::String,
-            "bool" => Type::Bool,
-            "keyword" => Type::Keyword,
-            "entity-ref" => Type::EntityRef,
-            "nil" => Type::Nil,
-            _ => Type::Any,
-        }
-    }
-
-    // NOTE: execute_spawn() and execute_link() removed - now handled by compiler forms
+    // NOTE: execute_component(), execute_relationship(), execute_spawn(), execute_link()
+    //       removed - now handled by compiler forms/opcodes
 
     /// Executes a query and returns results.
     fn execute_query(
@@ -902,359 +707,86 @@ impl<E: LineEditor> Repl<E> {
         Ok(Some(Value::Vec(results.into_iter().collect())))
     }
 
-    /// Executes a verb declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_verb(&mut self, verb_decl: &longtable_language::VerbDecl) -> Result<()> {
-        use longtable_parser::vocabulary::Verb;
-        use std::collections::HashSet;
-
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&verb_decl.name);
-
-        let synonyms: HashSet<_> = verb_decl
-            .synonyms
-            .iter()
-            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
-            .collect();
-
-        self.session
-            .vocabulary_registry_mut()
-            .register_verb(Verb { name, synonyms });
-        Ok(())
-    }
-
-    /// Executes a direction declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_direction(&mut self, dir_decl: &longtable_language::DirectionDecl) -> Result<()> {
-        use longtable_parser::vocabulary::Direction;
-        use std::collections::HashSet;
-
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&dir_decl.name);
-
-        let synonyms: HashSet<_> = dir_decl
-            .synonyms
-            .iter()
-            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
-            .collect();
-
-        let opposite = dir_decl
-            .opposite
-            .as_ref()
-            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s));
-
-        self.session
-            .vocabulary_registry_mut()
-            .register_direction(Direction {
-                name,
-                synonyms,
-                opposite,
-            });
-        Ok(())
-    }
-
-    /// Executes a preposition declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_preposition(
+    /// Executes a spawn: declaration.
+    ///
+    /// Creates an entity with the specified components and registers it by name.
+    fn execute_spawn(
         &mut self,
-        prep_decl: &longtable_language::PrepositionDecl,
-    ) -> Result<()> {
-        use longtable_parser::vocabulary::Preposition;
+        spawn_decl: &longtable_language::declaration::SpawnDecl,
+    ) -> Result<Option<Value>> {
+        use longtable_foundation::LtMap;
 
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&prep_decl.name);
+        // Build a components map from the declaration
+        let mut components: LtMap<Value, Value> = LtMap::new();
 
-        let implies = prep_decl
-            .implies
-            .as_ref()
-            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s));
+        for (comp_name, comp_value_ast) in &spawn_decl.components {
+            // Intern the component keyword
+            let comp_kw = self
+                .session
+                .world_mut()
+                .interner_mut()
+                .intern_keyword(comp_name);
 
+            // Evaluate the component value AST
+            let comp_value = self.eval_form(comp_value_ast)?;
+
+            components = components.insert(Value::Keyword(comp_kw), comp_value);
+        }
+
+        // Spawn the entity
+        let (new_world, entity_id) = self.session.world().spawn(&components)?;
+        self.session.set_world(new_world);
+
+        // Register the entity by name
         self.session
-            .vocabulary_registry_mut()
-            .register_preposition(Preposition { name, implies });
-        Ok(())
+            .register_entity(spawn_decl.name.clone(), entity_id);
+
+        Ok(Some(Value::EntityRef(entity_id)))
     }
 
-    /// Executes a pronoun declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_pronoun(&mut self, pronoun_decl: &longtable_language::PronounDecl) -> Result<()> {
-        use longtable_language::declaration::PronounGender as DeclGender;
-        use longtable_language::declaration::PronounNumber as DeclNumber;
-        use longtable_parser::vocabulary::{Pronoun, PronounGender, PronounNumber};
-
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&pronoun_decl.name);
-
-        let gender = match pronoun_decl.gender {
-            DeclGender::Masculine => PronounGender::Masculine,
-            DeclGender::Feminine => PronounGender::Feminine,
-            DeclGender::Neuter => PronounGender::Neuter,
-        };
-
-        let number = match pronoun_decl.number {
-            DeclNumber::Singular => PronounNumber::Singular,
-            DeclNumber::Plural => PronounNumber::Plural,
-        };
-
-        self.session
-            .vocabulary_registry_mut()
-            .register_pronoun(Pronoun {
-                name,
-                gender,
-                number,
-            });
-        Ok(())
-    }
-
-    /// Executes an adverb declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_adverb(&mut self, adverb_decl: &longtable_language::AdverbDecl) -> Result<()> {
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&adverb_decl.name);
-
-        self.session.vocabulary_registry_mut().register_adverb(name);
-        Ok(())
-    }
-
-    /// Executes a noun type declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_noun_type(&mut self, type_decl: &longtable_language::NounTypeDecl) -> Result<()> {
-        use longtable_language::pretty::pretty_print;
-        use longtable_parser::vocabulary::NounType;
-
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&type_decl.name);
-
-        let extends: Vec<_> = type_decl
-            .extends
-            .iter()
-            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
-            .collect();
-
-        // Convert pattern back to source string for later compilation
-        let pattern_source = type_decl
-            .pattern
-            .clauses
-            .iter()
-            .map(|c| {
-                let value_str = match &c.value {
-                    longtable_language::PatternValue::Variable(v) => format!("?{v}"),
-                    longtable_language::PatternValue::Literal(ast) => pretty_print(ast),
-                    longtable_language::PatternValue::Wildcard => "_".to_string(),
-                };
-                format!("[?{} :{} {}]", c.entity_var, c.component, value_str)
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        self.session
-            .vocabulary_registry_mut()
-            .register_type(NounType {
-                name,
-                extends,
-                pattern_source,
-            });
-        Ok(())
-    }
-
-    /// Executes a scope declaration to register for noun resolution.
+    /// Executes a link: declaration.
     ///
-    /// Scopes define visibility rules for noun resolution.
-    #[allow(clippy::unnecessary_wraps)] // Will return errors when pattern compilation is added
-    fn execute_scope(&mut self, scope_decl: &longtable_language::ScopeDecl) -> Result<()> {
-        use longtable_parser::scope::{CompiledScope, ScopeKind};
+    /// Creates a relationship between two entities by name.
+    fn execute_link(
+        &mut self,
+        link_decl: &longtable_language::declaration::LinkDecl,
+    ) -> Result<Option<Value>> {
+        // Lookup source entity by name
+        let source_id = self.session.get_entity(&link_decl.source).ok_or_else(|| {
+            Error::new(ErrorKind::Internal(format!(
+                "unknown entity: {}",
+                link_decl.source
+            )))
+        })?;
 
-        // Intern the scope name
-        let name = self
+        // Lookup target entity by name
+        let target_id = self.session.get_entity(&link_decl.target).ok_or_else(|| {
+            Error::new(ErrorKind::Internal(format!(
+                "unknown entity: {}",
+                link_decl.target
+            )))
+        })?;
+
+        // Intern the relationship keyword
+        let rel_kw = self
             .session
             .world_mut()
             .interner_mut()
-            .intern_keyword(&scope_decl.name);
+            .intern_keyword(&link_decl.relationship);
 
-        // Intern the first parent scope if any (CompiledScope only supports single parent)
-        let parent = scope_decl
-            .extends
-            .first()
-            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s));
-
-        // Determine scope kind based on the declaration
-        // For now, custom patterns use ScopeKind::Custom
-        // More specific kinds (SameLocation, Inventory, etc.) would need pattern analysis
-        let kind = if scope_decl.pattern.clauses.is_empty() && parent.is_some() {
-            // No pattern, just extending parent - use Union if multiple extends
-            if scope_decl.extends.len() > 1 {
-                let parents: Vec<_> = scope_decl
-                    .extends
-                    .iter()
-                    .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
-                    .collect();
-                ScopeKind::Union(parents)
-            } else {
-                // Just extending single parent, use Custom as placeholder
-                ScopeKind::Custom
-            }
-        } else {
-            // Has a pattern - custom scope
-            ScopeKind::Custom
-        };
-
-        let compiled = CompiledScope { name, parent, kind };
-
-        self.session.add_scope(compiled);
-
-        println!(
-            "Registered scope :{} (extends: {:?}, total scopes: {})",
-            scope_decl.name,
-            scope_decl.extends,
-            self.session.scopes().len()
-        );
-
-        Ok(())
-    }
-
-    /// Executes a command declaration to register in the vocabulary.
-    #[allow(clippy::unnecessary_wraps)]
-    fn execute_command(&mut self, cmd_decl: &longtable_language::CommandDecl) -> Result<()> {
-        use longtable_parser::vocabulary::CommandSyntax;
-
-        let name = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&cmd_decl.name);
-
-        let action = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&cmd_decl.action);
-
-        // Convert syntax elements to source string for later compilation
-        let syntax_source = cmd_decl
-            .syntax
-            .iter()
-            .map(|elem| match elem {
-                longtable_language::SyntaxElement::Verb => ":verb".to_string(),
-                longtable_language::SyntaxElement::Direction { var } => {
-                    format!("?{var} :direction")
-                }
-                longtable_language::SyntaxElement::Noun {
-                    var,
-                    type_constraint,
-                } => {
-                    let constraint = type_constraint
-                        .as_ref()
-                        .map(|t| format!(" :{t}"))
-                        .unwrap_or_default();
-                    format!("?{var}{constraint}")
-                }
-                longtable_language::SyntaxElement::OptionalNoun {
-                    var,
-                    type_constraint,
-                } => {
-                    let constraint = type_constraint
-                        .as_ref()
-                        .map(|t| format!(" :{t}"))
-                        .unwrap_or_default();
-                    format!("[?{var}{constraint}]")
-                }
-                longtable_language::SyntaxElement::Preposition(prep) => format!(":{prep}"),
-                longtable_language::SyntaxElement::Literal(word) => format!("\"{word}\""),
-            })
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        self.session
-            .vocabulary_registry_mut()
-            .register_command(CommandSyntax {
-                name,
-                action,
-                priority: cmd_decl.priority,
-                syntax_source,
-            });
-        Ok(())
-    }
-
-    /// Executes a rule declaration to register for later tick execution.
-    ///
-    /// Rules define reactive behaviors that fire when conditions match.
-    fn execute_rule(&mut self, rule_decl: &RuleDecl) -> Result<()> {
-        // Compile the rule declaration into a full compiled rule
-        let full_rule = RuleCompiler::compile(rule_decl, self.session.world_mut().interner_mut())?;
-
-        // Get the rule name for output
-        let name = self
+        // Create the relationship
+        let (new_world, _rel_entity) = self
             .session
             .world()
-            .interner()
-            .get_keyword(full_rule.name)
-            .unwrap_or(&rule_decl.name)
-            .to_string();
+            .create_relationship(rel_kw, source_id, target_id)?;
+        self.session.set_world(new_world);
 
-        // Convert to simpler CompiledRule and register with tick executor
-        // Note: The full rule body (effects/guards) is not yet executed during tick;
-        // this requires integration with the VM which is outside current scope.
-        self.tick_executor.add_rule(full_rule.into());
-
-        println!(
-            "Registered rule :{} (total rules: {})",
-            name,
-            self.tick_executor.rule_count()
-        );
-
-        Ok(())
+        Ok(Some(Value::Nil))
     }
 
-    /// Executes an action declaration to register in the action registry.
-    ///
-    /// Actions define what happens when a command matches.
-    #[allow(clippy::unnecessary_wraps)] // Will return errors when handler compilation is added
-    fn execute_action(&mut self, action_decl: &longtable_language::ActionDecl) -> Result<()> {
-        // Intern the action name
-        let name_kw = self
-            .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&action_decl.name);
-
-        // Create a compiled action with name and params
-        let compiled = CompiledAction::new(name_kw).with_params(action_decl.params.clone());
-
-        // Register the action in the parser's registry
-        self.session.action_registry_mut().register(compiled);
-
-        // Store the full action declaration for dispatch
-        self.session
-            .register_action_decl(name_kw, action_decl.clone());
-
-        let handler_count = action_decl.handler.len();
-        println!(
-            "Registered action :{} with {} params, {} handler expressions",
-            action_decl.name,
-            action_decl.params.len(),
-            handler_count
-        );
-
-        Ok(())
-    }
+    // NOTE: execute_verb(), execute_direction(), execute_preposition(), execute_pronoun(),
+    //       execute_adverb(), execute_noun_type(), execute_scope(), execute_command(),
+    //       execute_rule(), execute_action() removed - now handled by compiler opcodes
 
     /// Handles the (why entity :component) or (why entity :component :depth N) form.
     ///

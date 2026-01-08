@@ -344,67 +344,6 @@ impl VmContext for WorldContext<'_> {
 }
 
 // =============================================================================
-// NoContext (for pure evaluation without World)
-// =============================================================================
-
-/// A no-op context that returns errors for World operations.
-///
-/// Used internally when executing without a World context.
-pub(crate) struct NoContext;
-
-impl VmContext for NoContext {
-    fn get_component(&self, _entity: EntityId, _component: KeywordId) -> Result<Option<Value>> {
-        Err(Error::new(ErrorKind::Internal(
-            "world operations not available in this context".to_string(),
-        )))
-    }
-
-    fn get_field(
-        &self,
-        _entity: EntityId,
-        _component: KeywordId,
-        _field: KeywordId,
-    ) -> Result<Option<Value>> {
-        Err(Error::new(ErrorKind::Internal(
-            "world operations not available in this context".to_string(),
-        )))
-    }
-
-    fn exists(&self, _entity: EntityId) -> bool {
-        false
-    }
-
-    fn has_component(&self, _entity: EntityId, _component: KeywordId) -> bool {
-        false
-    }
-
-    fn resolve_keyword(&self, _value: &Value) -> Option<KeywordId> {
-        None
-    }
-
-    fn with_component(&self, _component: KeywordId) -> Vec<EntityId> {
-        Vec::new()
-    }
-
-    fn find_relationships(
-        &self,
-        _rel_type: Option<KeywordId>,
-        _source: Option<EntityId>,
-        _target: Option<EntityId>,
-    ) -> Vec<EntityId> {
-        Vec::new()
-    }
-
-    fn targets(&self, _source: EntityId, _rel_type: KeywordId) -> Vec<EntityId> {
-        Vec::new()
-    }
-
-    fn sources(&self, _target: EntityId, _rel_type: KeywordId) -> Vec<EntityId> {
-        Vec::new()
-    }
-}
-
-// =============================================================================
 // NoRuntimeContext (for execution without full runtime)
 // =============================================================================
 
@@ -544,5 +483,165 @@ impl RuntimeContext for NoRuntimeContext {
     fn intern_keyword(&mut self, _name: &str) -> KeywordId {
         // This should never be called in NoRuntimeContext
         panic!("intern_keyword not available in NoRuntimeContext")
+    }
+}
+
+// =============================================================================
+// ReadOnlyContext (wraps VmContext as RuntimeContext with errors on registration)
+// =============================================================================
+
+/// Wraps a read-only `VmContext` to provide a `RuntimeContext` interface.
+///
+/// All `VmContext` operations delegate to the wrapped context.
+/// All registration operations return errors.
+///
+/// This enables a unified execution path in the VM that takes `&mut dyn RuntimeContext`,
+/// while still supporting read-only contexts that error on registration attempts.
+pub struct ReadOnlyContext<'a, C: VmContext> {
+    inner: &'a C,
+}
+
+impl<'a, C: VmContext> ReadOnlyContext<'a, C> {
+    /// Creates a new read-only context wrapper.
+    pub fn new(inner: &'a C) -> Self {
+        Self { inner }
+    }
+}
+
+impl<C: VmContext> VmContext for ReadOnlyContext<'_, C> {
+    fn get_component(&self, entity: EntityId, component: KeywordId) -> Result<Option<Value>> {
+        self.inner.get_component(entity, component)
+    }
+
+    fn get_field(
+        &self,
+        entity: EntityId,
+        component: KeywordId,
+        field: KeywordId,
+    ) -> Result<Option<Value>> {
+        self.inner.get_field(entity, component, field)
+    }
+
+    fn exists(&self, entity: EntityId) -> bool {
+        self.inner.exists(entity)
+    }
+
+    fn has_component(&self, entity: EntityId, component: KeywordId) -> bool {
+        self.inner.has_component(entity, component)
+    }
+
+    fn resolve_keyword(&self, value: &Value) -> Option<KeywordId> {
+        self.inner.resolve_keyword(value)
+    }
+
+    fn with_component(&self, component: KeywordId) -> Vec<EntityId> {
+        self.inner.with_component(component)
+    }
+
+    fn find_relationships(
+        &self,
+        rel_type: Option<KeywordId>,
+        source: Option<EntityId>,
+        target: Option<EntityId>,
+    ) -> Vec<EntityId> {
+        self.inner.find_relationships(rel_type, source, target)
+    }
+
+    fn targets(&self, source: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
+        self.inner.targets(source, rel_type)
+    }
+
+    fn sources(&self, target: EntityId, rel_type: KeywordId) -> Vec<EntityId> {
+        self.inner.sources(target, rel_type)
+    }
+}
+
+impl<C: VmContext> RuntimeContext for ReadOnlyContext<'_, C> {
+    fn register_component_schema(&mut self, _schema: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_relationship_schema(&mut self, _schema: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_verb(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_direction(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_preposition(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_pronoun(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_adverb(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_type(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_scope(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_command(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_action(&mut self, _data: &Value) -> Result<()> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn register_rule(&mut self, _data: &Value) -> Result<EntityId> {
+        Err(Error::new(ErrorKind::Internal(
+            "registration opcodes require RuntimeContext; use execute_with_runtime_context()"
+                .to_string(),
+        )))
+    }
+
+    fn intern_keyword(&mut self, _name: &str) -> KeywordId {
+        panic!("intern_keyword not available in ReadOnlyContext")
     }
 }

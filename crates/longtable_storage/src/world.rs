@@ -258,6 +258,13 @@ impl World {
         Arc::make_mut(&mut self.interner)
     }
 
+    /// Replaces the interner with a new one.
+    ///
+    /// Used when the compiler's interner needs to be synchronized back.
+    pub fn set_interner(&mut self, interner: Interner) {
+        self.interner = Arc::new(interner);
+    }
+
     // --- Schema Registration ---
 
     /// Registers a component schema.

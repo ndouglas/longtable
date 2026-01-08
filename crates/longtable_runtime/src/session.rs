@@ -320,21 +320,19 @@ impl Default for Session {
 ///
 /// ```ignore
 /// let mut session = Session::new();
-/// let mut ctx = SessionContext::new(&mut session, &mut interner);
+/// let mut ctx = SessionContext::new(&mut session);
 /// // VM can now execute with full runtime access
 /// ```
 pub struct SessionContext<'a> {
     /// Mutable reference to the session.
     session: &'a mut Session,
-    /// Mutable reference to the string interner.
-    interner: &'a mut Interner,
 }
 
 impl<'a> SessionContext<'a> {
-    /// Creates a new `SessionContext` wrapping a session and interner.
+    /// Creates a new `SessionContext` wrapping a session.
     #[must_use]
-    pub fn new(session: &'a mut Session, interner: &'a mut Interner) -> Self {
-        Self { session, interner }
+    pub fn new(session: &'a mut Session) -> Self {
+        Self { session }
     }
 
     /// Returns a reference to the underlying session.
@@ -346,6 +344,16 @@ impl<'a> SessionContext<'a> {
     /// Returns a mutable reference to the underlying session.
     pub fn session_mut(&mut self) -> &mut Session {
         self.session
+    }
+
+    /// Returns a reference to the interner.
+    fn interner(&self) -> &Interner {
+        self.session.world().interner()
+    }
+
+    /// Returns a mutable reference to the interner.
+    fn interner_mut(&mut self) -> &mut Interner {
+        self.session.world_mut().interner_mut()
     }
 }
 
@@ -413,27 +421,27 @@ impl VmContext for SessionContext<'_> {
 
 impl RuntimeContext for SessionContext<'_> {
     fn register_component_schema(&mut self, schema: &Value) -> Result<()> {
-        let component_schema = parse_component_schema(schema, self.interner)?;
+        let component_schema = parse_component_schema(schema, self.interner())?;
         let new_world = self.session.world.register_component(component_schema)?;
         self.session.set_world(new_world);
         Ok(())
     }
 
     fn register_relationship_schema(&mut self, schema: &Value) -> Result<()> {
-        let rel_schema = parse_relationship_schema(schema, self.interner)?;
+        let rel_schema = parse_relationship_schema(schema, self.interner())?;
         let new_world = self.session.world.register_relationship(rel_schema)?;
         self.session.set_world(new_world);
         Ok(())
     }
 
     fn register_verb(&mut self, data: &Value) -> Result<()> {
-        let verb = parse_verb(data, self.interner)?;
+        let verb = parse_verb(data, self.interner())?;
         self.session.vocabulary_registry_mut().register_verb(verb);
         Ok(())
     }
 
     fn register_direction(&mut self, data: &Value) -> Result<()> {
-        let direction = parse_direction(data, self.interner)?;
+        let direction = parse_direction(data, self.interner())?;
         self.session
             .vocabulary_registry_mut()
             .register_direction(direction);
@@ -441,7 +449,7 @@ impl RuntimeContext for SessionContext<'_> {
     }
 
     fn register_preposition(&mut self, data: &Value) -> Result<()> {
-        let prep = parse_preposition(data)?;
+        let prep = parse_preposition(data, self.interner())?;
         self.session
             .vocabulary_registry_mut()
             .register_preposition(prep);
@@ -449,7 +457,7 @@ impl RuntimeContext for SessionContext<'_> {
     }
 
     fn register_pronoun(&mut self, data: &Value) -> Result<()> {
-        let pronoun = parse_pronoun(data, self.interner)?;
+        let pronoun = parse_pronoun(data, self.interner())?;
         self.session
             .vocabulary_registry_mut()
             .register_pronoun(pronoun);
@@ -457,7 +465,7 @@ impl RuntimeContext for SessionContext<'_> {
     }
 
     fn register_adverb(&mut self, data: &Value) -> Result<()> {
-        let adverb = extract_keyword_field(data, "name")?;
+        let adverb = extract_keyword_field(data, "name", self.interner())?;
         self.session
             .vocabulary_registry_mut()
             .register_adverb(adverb);
@@ -465,7 +473,7 @@ impl RuntimeContext for SessionContext<'_> {
     }
 
     fn register_type(&mut self, data: &Value) -> Result<()> {
-        let noun_type = parse_noun_type(data)?;
+        let noun_type = parse_noun_type(data, self.interner())?;
         self.session
             .vocabulary_registry_mut()
             .register_type(noun_type);
@@ -475,20 +483,20 @@ impl RuntimeContext for SessionContext<'_> {
     fn register_scope(&mut self, data: &Value) -> Result<()> {
         // Scopes require compilation - for now, store the raw data
         // Full implementation will compile the scope resolver
-        let _name = extract_keyword_field(data, "name")?;
+        let _name = extract_keyword_field(data, "name", self.interner())?;
         // TODO: Compile scope and add to session.scopes
         Ok(())
     }
 
     fn register_command(&mut self, data: &Value) -> Result<()> {
-        let cmd = parse_command_syntax(data)?;
+        let cmd = parse_command_syntax(data, self.interner())?;
         self.session.vocabulary_registry_mut().register_command(cmd);
         Ok(())
     }
 
     fn register_action(&mut self, data: &Value) -> Result<()> {
         // Actions have complex structure - extract name and store
-        let _name = extract_keyword_field(data, "name")?;
+        let _name = extract_keyword_field(data, "name", self.interner())?;
         // TODO: Compile action and register in action_registry
         // For now, this is a placeholder
         Ok(())
@@ -497,7 +505,7 @@ impl RuntimeContext for SessionContext<'_> {
     fn register_rule(&mut self, data: &Value) -> Result<EntityId> {
         // Rules are entities with :meta/rule component
         // This will spawn an entity and compile the rule
-        let _name = extract_keyword_field(data, "name")?;
+        let _name = extract_keyword_field(data, "name", self.interner())?;
         // TODO: Spawn rule entity, compile pattern/action, store in World
         // For now, return a placeholder entity ID
         Err(Error::new(ErrorKind::Internal(
@@ -506,7 +514,7 @@ impl RuntimeContext for SessionContext<'_> {
     }
 
     fn intern_keyword(&mut self, name: &str) -> KeywordId {
-        self.interner.intern_keyword(name)
+        self.interner_mut().intern_keyword(name)
     }
 }
 
@@ -515,20 +523,22 @@ impl RuntimeContext for SessionContext<'_> {
 // =============================================================================
 
 /// Extracts a keyword field from a Value map.
-fn extract_keyword_field(value: &Value, field_name: &str) -> Result<KeywordId> {
+fn extract_keyword_field(
+    value: &Value,
+    field_name: &str,
+    interner: &Interner,
+) -> Result<KeywordId> {
     let map = value
         .as_map()
         .ok_or_else(|| Error::new(ErrorKind::Internal(format!("expected map, got {value:?}"))))?;
 
-    // Look for the field by iterating and checking keyword names
     for (k, v) in map.iter() {
         if let Value::Keyword(kw) = k {
-            // We need to check if this keyword matches the field name
-            // Since we don't have the interner here, we check by the raw keyword
-            // This is a limitation - the field name must match exactly
-            if format!("{kw:?}").contains(field_name) {
-                if let Value::Keyword(kw_val) = v {
-                    return Ok(*kw_val);
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    if let Value::Keyword(kw_val) = v {
+                        return Ok(*kw_val);
+                    }
                 }
             }
         }
@@ -540,30 +550,36 @@ fn extract_keyword_field(value: &Value, field_name: &str) -> Result<KeywordId> {
 }
 
 /// Extracts a keyword field from a Value map, returning None if not found.
-fn extract_optional_keyword_field(value: &Value, field_name: &str) -> Option<KeywordId> {
-    extract_keyword_field(value, field_name).ok()
+fn extract_optional_keyword_field(
+    value: &Value,
+    field_name: &str,
+    interner: &Interner,
+) -> Option<KeywordId> {
+    extract_keyword_field(value, field_name, interner).ok()
 }
 
 /// Extracts a vector of keywords from a field.
-fn extract_keyword_vec(value: &Value, field_name: &str) -> Vec<KeywordId> {
+fn extract_keyword_vec(value: &Value, field_name: &str, interner: &Interner) -> Vec<KeywordId> {
     let Some(map) = value.as_map() else {
         return Vec::new();
     };
 
     for (k, v) in map.iter() {
         if let Value::Keyword(kw) = k {
-            if format!("{kw:?}").contains(field_name) {
-                if let Value::Vec(vec) = v {
-                    return vec
-                        .iter()
-                        .filter_map(|v| {
-                            if let Value::Keyword(k) = v {
-                                Some(*k)
-                            } else {
-                                None
-                            }
-                        })
-                        .collect();
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    if let Value::Vec(vec) = v {
+                        return vec
+                            .iter()
+                            .filter_map(|v| {
+                                if let Value::Keyword(k) = v {
+                                    Some(*k)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                    }
                 }
             }
         }
@@ -573,14 +589,16 @@ fn extract_keyword_vec(value: &Value, field_name: &str) -> Vec<KeywordId> {
 }
 
 /// Extracts an optional string field.
-fn extract_string_field(value: &Value, field_name: &str) -> Option<String> {
+fn extract_string_field(value: &Value, field_name: &str, interner: &Interner) -> Option<String> {
     let map = value.as_map()?;
 
     for (k, v) in map.iter() {
         if let Value::Keyword(kw) = k {
-            if format!("{kw:?}").contains(field_name) {
-                if let Value::String(s) = v {
-                    return Some(s.to_string());
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    if let Value::String(s) = v {
+                        return Some(s.to_string());
+                    }
                 }
             }
         }
@@ -590,14 +608,16 @@ fn extract_string_field(value: &Value, field_name: &str) -> Option<String> {
 }
 
 /// Extracts an optional integer field.
-fn extract_int_field(value: &Value, field_name: &str) -> Option<i64> {
+fn extract_int_field(value: &Value, field_name: &str, interner: &Interner) -> Option<i64> {
     let map = value.as_map()?;
 
     for (k, v) in map.iter() {
         if let Value::Keyword(kw) = k {
-            if format!("{kw:?}").contains(field_name) {
-                if let Value::Int(i) = v {
-                    return Some(*i);
+            if let Some(name) = interner.get_keyword(*kw) {
+                if name == field_name {
+                    if let Value::Int(i) = v {
+                        return Some(*i);
+                    }
                 }
             }
         }
@@ -607,11 +627,11 @@ fn extract_int_field(value: &Value, field_name: &str) -> Option<i64> {
 }
 
 /// Parses a component schema from a Value map.
-fn parse_component_schema(value: &Value, interner: &mut Interner) -> Result<ComponentSchema> {
-    let name = extract_keyword_field(value, "name")?;
+fn parse_component_schema(value: &Value, interner: &Interner) -> Result<ComponentSchema> {
+    let name = extract_keyword_field(value, "name", interner)?;
 
     // Check if it's a tag component
-    let storage = extract_string_field(value, "storage");
+    let storage = extract_string_field(value, "storage", interner);
     if storage.as_deref() == Some("tag") {
         return Ok(ComponentSchema::tag(name));
     }
@@ -622,11 +642,13 @@ fn parse_component_schema(value: &Value, interner: &mut Interner) -> Result<Comp
     if let Some(map) = value.as_map() {
         for (k, v) in map.iter() {
             if let Value::Keyword(kw) = k {
-                if format!("{kw:?}").contains("fields") {
-                    if let Value::Vec(fields) = v {
-                        for field_val in fields.iter() {
-                            let field = parse_field_schema(field_val, interner)?;
-                            schema = schema.with_field(field);
+                if let Some(name_str) = interner.get_keyword(*kw) {
+                    if name_str == "fields" {
+                        if let Value::Vec(fields) = v {
+                            for field_val in fields.iter() {
+                                let field = parse_field_schema(field_val, interner)?;
+                                schema = schema.with_field(field);
+                            }
                         }
                     }
                 }
@@ -638,9 +660,10 @@ fn parse_component_schema(value: &Value, interner: &mut Interner) -> Result<Comp
 }
 
 /// Parses a field schema from a Value map.
-fn parse_field_schema(value: &Value, _interner: &mut Interner) -> Result<FieldSchema> {
-    let name = extract_keyword_field(value, "name")?;
-    let type_str = extract_string_field(value, "type").unwrap_or_else(|| "any".to_string());
+fn parse_field_schema(value: &Value, interner: &Interner) -> Result<FieldSchema> {
+    let name = extract_keyword_field(value, "name", interner)?;
+    let type_str =
+        extract_string_field(value, "type", interner).unwrap_or_else(|| "any".to_string());
 
     let ty = match type_str.as_str() {
         "int" => Type::Int,
@@ -656,7 +679,7 @@ fn parse_field_schema(value: &Value, _interner: &mut Interner) -> Result<FieldSc
     };
 
     // Check if required (default true)
-    let required = extract_string_field(value, "required").is_none_or(|s| s != "false");
+    let required = extract_string_field(value, "required", interner).is_none_or(|s| s != "false");
 
     if required {
         Ok(FieldSchema::required(name, ty))
@@ -666,15 +689,12 @@ fn parse_field_schema(value: &Value, _interner: &mut Interner) -> Result<FieldSc
 }
 
 /// Parses a relationship schema from a Value map.
-fn parse_relationship_schema(
-    value: &Value,
-    _interner: &mut Interner,
-) -> Result<RelationshipSchema> {
-    let name = extract_keyword_field(value, "name")?;
+fn parse_relationship_schema(value: &Value, interner: &Interner) -> Result<RelationshipSchema> {
+    let name = extract_keyword_field(value, "name", interner)?;
     let mut schema = RelationshipSchema::new(name);
 
     // Parse cardinality
-    if let Some(card_str) = extract_string_field(value, "cardinality") {
+    if let Some(card_str) = extract_string_field(value, "cardinality", interner) {
         let cardinality = match card_str.as_str() {
             "one-to-one" | "1:1" => Cardinality::OneToOne,
             "one-to-many" | "1:n" | "1:N" => Cardinality::OneToMany,
@@ -685,7 +705,7 @@ fn parse_relationship_schema(
     }
 
     // Parse on-delete
-    if let Some(on_delete_str) = extract_string_field(value, "on-delete") {
+    if let Some(on_delete_str) = extract_string_field(value, "on-delete", interner) {
         let on_delete = match on_delete_str.as_str() {
             "cascade" => OnDelete::Cascade,
             "nullify" => OnDelete::Nullify,
@@ -698,18 +718,22 @@ fn parse_relationship_schema(
 }
 
 /// Parses a verb from a Value map.
-fn parse_verb(value: &Value, _interner: &mut Interner) -> Result<Verb> {
-    let name = extract_keyword_field(value, "name")?;
-    let synonyms: HashSet<KeywordId> = extract_keyword_vec(value, "synonyms").into_iter().collect();
+fn parse_verb(value: &Value, interner: &Interner) -> Result<Verb> {
+    let name = extract_keyword_field(value, "name", interner)?;
+    let synonyms: HashSet<KeywordId> = extract_keyword_vec(value, "synonyms", interner)
+        .into_iter()
+        .collect();
 
     Ok(Verb { name, synonyms })
 }
 
 /// Parses a direction from a Value map.
-fn parse_direction(value: &Value, _interner: &mut Interner) -> Result<Direction> {
-    let name = extract_keyword_field(value, "name")?;
-    let synonyms: HashSet<KeywordId> = extract_keyword_vec(value, "synonyms").into_iter().collect();
-    let opposite = extract_optional_keyword_field(value, "opposite");
+fn parse_direction(value: &Value, interner: &Interner) -> Result<Direction> {
+    let name = extract_keyword_field(value, "name", interner)?;
+    let synonyms: HashSet<KeywordId> = extract_keyword_vec(value, "synonyms", interner)
+        .into_iter()
+        .collect();
+    let opposite = extract_optional_keyword_field(value, "opposite", interner);
 
     Ok(Direction {
         name,
@@ -719,19 +743,20 @@ fn parse_direction(value: &Value, _interner: &mut Interner) -> Result<Direction>
 }
 
 /// Parses a preposition from a Value map.
-fn parse_preposition(value: &Value) -> Result<Preposition> {
-    let name = extract_keyword_field(value, "name")?;
-    let implies = extract_optional_keyword_field(value, "implies");
+fn parse_preposition(value: &Value, interner: &Interner) -> Result<Preposition> {
+    let name = extract_keyword_field(value, "name", interner)?;
+    let implies = extract_optional_keyword_field(value, "implies", interner);
 
     Ok(Preposition { name, implies })
 }
 
 /// Parses a pronoun from a Value map.
-fn parse_pronoun(value: &Value, _interner: &mut Interner) -> Result<Pronoun> {
-    let name = extract_keyword_field(value, "name")?;
+fn parse_pronoun(value: &Value, interner: &Interner) -> Result<Pronoun> {
+    let name = extract_keyword_field(value, "name", interner)?;
 
     // Parse gender
-    let gender_str = extract_string_field(value, "gender").unwrap_or_else(|| "neuter".to_string());
+    let gender_str =
+        extract_string_field(value, "gender", interner).unwrap_or_else(|| "neuter".to_string());
     let gender = match gender_str.as_str() {
         "masculine" | "male" => PronounGender::Masculine,
         "feminine" | "female" => PronounGender::Feminine,
@@ -740,7 +765,7 @@ fn parse_pronoun(value: &Value, _interner: &mut Interner) -> Result<Pronoun> {
 
     // Parse number
     let number_str =
-        extract_string_field(value, "number").unwrap_or_else(|| "singular".to_string());
+        extract_string_field(value, "number", interner).unwrap_or_else(|| "singular".to_string());
     let number = match number_str.as_str() {
         "plural" => PronounNumber::Plural,
         _ => PronounNumber::Singular,
@@ -754,10 +779,10 @@ fn parse_pronoun(value: &Value, _interner: &mut Interner) -> Result<Pronoun> {
 }
 
 /// Parses a noun type from a Value map.
-fn parse_noun_type(value: &Value) -> Result<NounType> {
-    let name = extract_keyword_field(value, "name")?;
-    let extends = extract_keyword_vec(value, "extends");
-    let pattern_source = extract_string_field(value, "pattern").unwrap_or_default();
+fn parse_noun_type(value: &Value, interner: &Interner) -> Result<NounType> {
+    let name = extract_keyword_field(value, "name", interner)?;
+    let extends = extract_keyword_vec(value, "extends", interner);
+    let pattern_source = extract_string_field(value, "pattern", interner).unwrap_or_default();
 
     Ok(NounType {
         name,
@@ -767,12 +792,12 @@ fn parse_noun_type(value: &Value) -> Result<NounType> {
 }
 
 /// Parses a command syntax from a Value map.
-fn parse_command_syntax(value: &Value) -> Result<CommandSyntax> {
-    let name = extract_keyword_field(value, "name")?;
-    let action = extract_keyword_field(value, "action")?;
+fn parse_command_syntax(value: &Value, interner: &Interner) -> Result<CommandSyntax> {
+    let name = extract_keyword_field(value, "name", interner)?;
+    let action = extract_keyword_field(value, "action", interner)?;
     #[allow(clippy::cast_possible_truncation)]
-    let priority = extract_int_field(value, "priority").unwrap_or(0) as i32;
-    let syntax_source = extract_string_field(value, "syntax").unwrap_or_default();
+    let priority = extract_int_field(value, "priority", interner).unwrap_or(0) as i32;
+    let syntax_source = extract_string_field(value, "syntax", interner).unwrap_or_default();
 
     Ok(CommandSyntax {
         name,
