@@ -147,6 +147,14 @@ impl EntityStore {
     pub fn generation(&self, index: u64) -> Option<u32> {
         self.generations.get(index as usize).copied()
     }
+
+    /// Returns the generations slice for content hashing.
+    ///
+    /// The generations array is deterministically ordered by entity index.
+    #[must_use]
+    pub fn generations(&self) -> &[u32] {
+        &self.generations
+    }
 }
 
 #[cfg(test)]

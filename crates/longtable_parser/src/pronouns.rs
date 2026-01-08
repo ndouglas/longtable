@@ -15,6 +15,21 @@ pub struct PronounState {
     her: Option<EntityId>,
     /// "them" referent (plural)
     them: Vec<EntityId>,
+    /// Known pronoun keywords for resolution
+    pronoun_keywords: Option<PronounKeywords>,
+}
+
+/// Known pronoun keywords for mapping to slots.
+#[derive(Clone, Copy, Debug)]
+pub struct PronounKeywords {
+    /// KeywordId for "it"
+    pub it: KeywordId,
+    /// KeywordId for "him"
+    pub him: KeywordId,
+    /// KeywordId for "her"
+    pub her: KeywordId,
+    /// KeywordId for "them"
+    pub them: KeywordId,
 }
 
 impl PronounState {
@@ -22,6 +37,20 @@ impl PronounState {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a new pronoun state with known pronoun keywords.
+    #[must_use]
+    pub fn with_keywords(keywords: PronounKeywords) -> Self {
+        Self {
+            pronoun_keywords: Some(keywords),
+            ..Self::default()
+        }
+    }
+
+    /// Sets the known pronoun keywords for resolution.
+    pub fn set_keywords(&mut self, keywords: PronounKeywords) {
+        self.pronoun_keywords = Some(keywords);
     }
 
     /// Sets the "it" referent.
@@ -45,11 +74,27 @@ impl PronounState {
     }
 
     /// Resolves a pronoun keyword to its referent(s).
+    ///
+    /// Returns `None` if the pronoun is not recognized or has no referent set.
     #[must_use]
-    pub fn resolve(&self, _pronoun: KeywordId) -> Option<Vec<EntityId>> {
-        // TODO: Map pronoun keyword to the appropriate slot
-        // For now, just return None
-        None
+    pub fn resolve(&self, pronoun: KeywordId) -> Option<Vec<EntityId>> {
+        let keywords = self.pronoun_keywords.as_ref()?;
+
+        if pronoun == keywords.it {
+            self.it.map(|e| vec![e])
+        } else if pronoun == keywords.him {
+            self.him.map(|e| vec![e])
+        } else if pronoun == keywords.her {
+            self.her.map(|e| vec![e])
+        } else if pronoun == keywords.them {
+            if self.them.is_empty() {
+                None
+            } else {
+                Some(self.them.clone())
+            }
+        } else {
+            None
+        }
     }
 
     /// Gets the "it" referent.
@@ -104,5 +149,50 @@ mod tests {
         let entity = EntityId::new(1, 0);
         state.set_it(entity);
         assert_eq!(state.get_it(), Some(entity));
+    }
+
+    #[test]
+    fn test_resolve_without_keywords_returns_none() {
+        let mut state = PronounState::new();
+        let entity = EntityId::new(1, 0);
+        state.set_it(entity);
+
+        // Without keywords set, resolve should return None
+        let fake_keyword = KeywordId::REL_TYPE; // Any keyword
+        assert!(state.resolve(fake_keyword).is_none());
+    }
+
+    #[test]
+    fn test_resolve_with_keywords() {
+        use longtable_foundation::Interner;
+
+        let mut interner = Interner::new();
+        let it_kw = interner.intern_keyword("it");
+        let him_kw = interner.intern_keyword("him");
+        let her_kw = interner.intern_keyword("her");
+        let them_kw = interner.intern_keyword("them");
+
+        let keywords = PronounKeywords {
+            it: it_kw,
+            him: him_kw,
+            her: her_kw,
+            them: them_kw,
+        };
+
+        let mut state = PronounState::with_keywords(keywords);
+        let entity1 = EntityId::new(1, 0);
+        let entity2 = EntityId::new(2, 0);
+
+        // Set referents
+        state.set_it(entity1);
+        state.set_them(vec![entity1, entity2]);
+
+        // Resolve should return correct referents
+        assert_eq!(state.resolve(it_kw), Some(vec![entity1]));
+        assert_eq!(state.resolve(them_kw), Some(vec![entity1, entity2]));
+
+        // Unset pronouns should return None
+        assert!(state.resolve(him_kw).is_none());
+        assert!(state.resolve(her_kw).is_none());
     }
 }

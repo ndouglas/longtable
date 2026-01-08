@@ -189,8 +189,8 @@ impl NaturalLanguageParser {
                 }
             }
 
-            // TODO: Get type constraint from syntax element
-            let type_constraint = None;
+            // Get type constraint from syntax match
+            let type_constraint = syntax_match.type_constraints.get(var_name).copied();
 
             let resolution =
                 resolver.resolve(noun_phrase, type_constraint, scope, world, &self.vocabulary);
@@ -245,18 +245,13 @@ impl NaturalLanguageParser {
                                 action: syntax_match.action,
                                 actor,
                                 noun_bindings: bindings,
+                                direction: syntax_match.direction.clone(),
                                 adverb: None,
                             });
                         }
                     }
                 }
             }
-        }
-
-        // Handle direction binding
-        if let Some((_var_name, _direction)) = &syntax_match.direction {
-            // Direction is stored as-is (not an entity)
-            // TODO: Store direction in CommandEntity when we add direction field
         }
 
         // Return result
@@ -269,6 +264,7 @@ impl NaturalLanguageParser {
             action: syntax_match.action,
             actor,
             noun_bindings: resolved_bindings,
+            direction: syntax_match.direction,
             adverb: None,
         })
     }
@@ -284,6 +280,7 @@ impl NaturalLanguageParser {
             action: syntax_match.action,
             actor,
             noun_bindings: HashMap::new(),
+            direction: syntax_match.direction,
             adverb: None,
         })
     }
@@ -341,6 +338,7 @@ impl NaturalLanguageParser {
                             action: pending.syntax_match.action,
                             actor: pending.actor,
                             noun_bindings: bindings,
+                            direction: pending.syntax_match.direction.clone(),
                             adverb: None,
                         });
                     }
@@ -365,6 +363,7 @@ impl NaturalLanguageParser {
                     action: pending.syntax_match.action,
                     actor: pending.actor,
                     noun_bindings: bindings,
+                    direction: pending.syntax_match.direction.clone(),
                     adverb: None,
                 })
             }

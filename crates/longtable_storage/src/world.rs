@@ -937,16 +937,29 @@ impl World {
     /// Creates a content hash for memoization.
     ///
     /// Two worlds with identical content will have the same hash.
+    /// This includes tick, seed, entity generations, and all component data
+    /// in a deterministic order.
     #[must_use]
     pub fn content_hash(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
 
         let mut hasher = DefaultHasher::new();
+
+        // Hash basic fields
         self.tick.hash(&mut hasher);
         self.seed.hash(&mut hasher);
-        self.entity_count().hash(&mut hasher);
-        // TODO: Add more thorough content hashing
+
+        // Hash entity generations (deterministically ordered by index)
+        self.entities.generations().hash(&mut hasher);
+
+        // Hash all component data in sorted order
+        for (component, entity, value) in self.components.sorted_data() {
+            component.hash(&mut hasher);
+            entity.hash(&mut hasher);
+            value.hash(&mut hasher);
+        }
+
         hasher.finish()
     }
 }

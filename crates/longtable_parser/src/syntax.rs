@@ -85,6 +85,8 @@ pub struct SyntaxMatch {
     pub action: KeywordId,
     /// Noun bindings (variable name -> noun phrase)
     pub noun_bindings: HashMap<String, NounPhrase>,
+    /// Type constraints for noun bindings (variable name -> type)
+    pub type_constraints: HashMap<String, KeywordId>,
     /// Direction binding, if any
     pub direction: Option<(String, KeywordId)>,
     /// Prepositions that appeared
@@ -155,6 +157,7 @@ impl SyntaxMatcher {
     ) -> Option<SyntaxMatch> {
         let mut token_idx = 0;
         let mut noun_bindings = HashMap::new();
+        let mut type_constraints = HashMap::new();
         let mut direction = None;
         let mut prepositions = Vec::new();
 
@@ -194,23 +197,29 @@ impl SyntaxMatcher {
                 }
                 CompiledSyntaxElement::Noun {
                     var,
-                    type_constraint: _,
+                    type_constraint,
                 } => {
                     // Collect noun phrase
                     let (np, consumed) =
                         Self::collect_noun_phrase(tokens, token_idx, vocab, interner)?;
                     noun_bindings.insert(var.clone(), np);
+                    if let Some(tc) = type_constraint {
+                        type_constraints.insert(var.clone(), *tc);
+                    }
                     token_idx += consumed;
                 }
                 CompiledSyntaxElement::OptionalNoun {
                     var,
-                    type_constraint: _,
+                    type_constraint,
                 } => {
                     // Try to collect noun phrase, but don't fail if absent
                     if let Some((np, consumed)) =
                         Self::collect_noun_phrase(tokens, token_idx, vocab, interner)
                     {
                         noun_bindings.insert(var.clone(), np);
+                        if let Some(tc) = type_constraint {
+                            type_constraints.insert(var.clone(), *tc);
+                        }
                         token_idx += consumed;
                     }
                 }
@@ -247,6 +256,7 @@ impl SyntaxMatcher {
             command: syntax.command,
             action: syntax.action,
             noun_bindings,
+            type_constraints,
             direction,
             prepositions,
             specificity: syntax.specificity(),

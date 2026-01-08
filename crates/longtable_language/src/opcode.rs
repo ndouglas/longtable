@@ -144,6 +144,10 @@ pub enum Opcode {
     /// Reduce collection with function: `[fn, init, coll] -> [result]`
     /// Folds left: (fn (fn (fn init e1) e2) e3) ...
     Reduce,
+    /// Reduce collection without initial value: `[fn, coll] -> [result]`
+    /// Uses first element as initial value, folds rest of collection.
+    /// Returns nil for empty collection.
+    ReduceNoInit,
     /// Check if predicate returns truthy for all elements: `[fn, coll] -> [bool]`
     Every,
     /// Check if predicate returns truthy for any element: `[fn, coll] -> [bool | value]`

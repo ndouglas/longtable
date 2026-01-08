@@ -19,6 +19,8 @@ pub struct CommandEntity {
     pub actor: EntityId,
     /// Noun bindings (slot name -> entity)
     pub noun_bindings: HashMap<String, EntityId>,
+    /// Direction binding (variable name -> direction keyword), if any
+    pub direction: Option<(String, KeywordId)>,
     /// Adverb modifier, if any
     pub adverb: Option<KeywordId>,
 }
@@ -243,6 +245,7 @@ mod tests {
             action: keywords.action,
             actor,
             noun_bindings: HashMap::new(),
+            direction: None,
             adverb: None,
         };
 
@@ -278,6 +281,7 @@ mod tests {
             action: keywords.action,
             actor,
             noun_bindings: bindings,
+            direction: None,
             adverb: None,
         };
 
@@ -305,6 +309,7 @@ mod tests {
                 action: keywords.action,
                 actor,
                 noun_bindings: HashMap::new(),
+                direction: None,
                 adverb: None,
             },
             CommandEntity {
@@ -312,6 +317,7 @@ mod tests {
                 action: keywords.action,
                 actor,
                 noun_bindings: HashMap::new(),
+                direction: None,
                 adverb: None,
             },
         ];

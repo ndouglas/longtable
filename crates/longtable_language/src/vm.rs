@@ -882,6 +882,85 @@ impl Vm {
                     self.push(acc);
                 }
 
+                Opcode::ReduceNoInit => {
+                    let coll = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collection elements
+                    let elements: Vec<Value> = match coll {
+                        Value::Vec(v) => v.iter().cloned().collect(),
+                        Value::Set(s) => s.iter().cloned().collect(),
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: coll.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Handle empty collection
+                    if elements.is_empty() {
+                        self.push(Value::Nil);
+                    } else {
+                        // Use first element as initial value, fold rest
+                        let mut iter = elements.into_iter();
+                        let mut acc = iter.next().unwrap();
+
+                        for elem in iter {
+                            // Save current VM state
+                            let saved_ip = self.ip;
+                            let saved_locals = self.locals.clone();
+                            let saved_captures = std::mem::take(&mut self.captures);
+
+                            // Set up arguments (acc, elem)
+                            self.locals[0] = acc;
+                            self.locals[1] = elem;
+
+                            // Set up captures from function's closure
+                            if let Some(caps) = &func_ref.captures {
+                                self.captures.clone_from(&caps.lock().unwrap());
+                            }
+
+                            // Execute function
+                            let result =
+                                self.execute_internal::<C>(&func.code, constants, functions, ctx)?;
+
+                            // Restore state
+                            self.ip = saved_ip;
+                            self.locals = saved_locals;
+                            self.captures = saved_captures;
+
+                            acc = result;
+                        }
+
+                        self.push(acc);
+                    }
+                }
+
                 Opcode::Every => {
                     let coll = self.pop()?;
                     let func_val = self.pop()?;

@@ -87,8 +87,13 @@
 (say "")
 
 ;; Describe starting location
-;; TODO: Enable once query functions are implemented
-;; (let [?player (first [?p :tag/player true])]
-;;   (let [?room (first [?r] [?player :in-room ?r])]
-;;     (describe-room ?room)))
+;; NOTE: Full query functions (query-one, etc.) callable from expressions
+;; are not yet implemented. The query system works in the REPL but can't
+;; be used in let bindings yet. Once implemented, the syntax would be:
+;;
+;; (let [player (query-one :where [[?p :tag/player true]] :return ?p)]
+;;   (let [room (query-one :where [[player :in-room ?r]] :return ?r)]
+;;     (describe-room room)))
+;;
+;; For now, use the hardcoded welcome message:
 (say "Welcome to the cave entrance!")

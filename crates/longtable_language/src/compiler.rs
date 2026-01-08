@@ -1489,16 +1489,17 @@ impl Compiler {
     fn compile_hof_reduce(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
         match args.len() {
             2 => {
-                // (reduce fn coll) - use first element as init
-                // We need to handle this case specially - get first element as init
-                // For now, require 3-arg form. We'll compile the 2-arg form as:
-                // (reduce fn (first coll) (rest coll))
-                // But this requires evaluating coll twice, so let's just require 3 args for now
-                // TODO: Support 2-arg reduce properly with temp variable
-                Err(self.error(
-                    span,
-                    "reduce currently requires 3 arguments (fn init coll); 2-arg form coming soon",
-                ))
+                // (reduce fn coll) - use first element as init, reduce rest
+                // Compile function
+                self.compile_node(&args[0], code)?;
+
+                // Compile collection
+                self.compile_node(&args[1], code)?;
+
+                // Emit ReduceNoInit opcode (handles first/rest internally)
+                code.emit(Opcode::ReduceNoInit);
+
+                Ok(())
             }
             3 => {
                 // (reduce fn init coll)

@@ -89,6 +89,101 @@ impl Type {
     pub const fn is_nullable(&self) -> bool {
         matches!(self, Self::Nil | Self::Option(_) | Self::Any)
     }
+
+    /// Checks if a value type is accepted by this type.
+    ///
+    /// This performs structural type checking:
+    /// - `Any` accepts all types
+    /// - `Option(T)` accepts `Nil` and any type that `T` accepts
+    /// - Primitive types must match exactly
+    /// - Collection types check element types recursively
+    #[must_use]
+    pub fn accepts(&self, value_type: &Type) -> bool {
+        // Any accepts everything
+        if matches!(self, Self::Any) {
+            return true;
+        }
+
+        // Option accepts nil or the inner type
+        if let Self::Option(inner) = self {
+            return matches!(value_type, Self::Nil) || inner.accepts(value_type);
+        }
+
+        // Check for exact type matches and special cases
+        match (self, value_type) {
+            // Exact type matches (including numeric promotion: Float accepts Int)
+            (Self::Nil, Self::Nil)
+            | (Self::Bool, Self::Bool)
+            | (Self::Int | Self::Float, Self::Int)
+            | (Self::Float, Self::Float)
+            | (Self::String, Self::String)
+            | (Self::Symbol, Self::Symbol)
+            | (Self::Keyword, Self::Keyword)
+            | (Self::EntityRef, Self::EntityRef) => true,
+
+            // Collection types - Vec(Any), Set(Any), Map(Any,Any) indicate runtime values
+            // where element types are not known statically. Accept these when expecting
+            // any collection of that kind, since we can't inspect element types efficiently.
+            (Self::Vec(_), Self::Vec(actual_elem)) => {
+                actual_elem.is_any() || self.accepts_vec_element(actual_elem)
+            }
+            (Self::Set(_), Self::Set(actual_elem)) => {
+                actual_elem.is_any() || self.accepts_set_element(actual_elem)
+            }
+            (Self::Map(_, _), Self::Map(actual_k, actual_v)) => {
+                (actual_k.is_any() && actual_v.is_any())
+                    || self.accepts_map_elements(actual_k, actual_v)
+            }
+
+            // Function types - just check arity
+            (Self::Fn(expected_arity), Self::Fn(actual_arity)) => {
+                Self::arity_compatible(expected_arity, actual_arity)
+            }
+
+            // No match
+            _ => false,
+        }
+    }
+
+    /// Helper for Vec element type checking.
+    fn accepts_vec_element(&self, actual_elem: &Type) -> bool {
+        if let Self::Vec(expected_elem) = self {
+            expected_elem.accepts(actual_elem)
+        } else {
+            false
+        }
+    }
+
+    /// Helper for Set element type checking.
+    fn accepts_set_element(&self, actual_elem: &Type) -> bool {
+        if let Self::Set(expected_elem) = self {
+            expected_elem.accepts(actual_elem)
+        } else {
+            false
+        }
+    }
+
+    /// Helper for Map element type checking.
+    fn accepts_map_elements(&self, actual_k: &Type, actual_v: &Type) -> bool {
+        if let Self::Map(expected_k, expected_v) = self {
+            expected_k.accepts(actual_k) && expected_v.accepts(actual_v)
+        } else {
+            false
+        }
+    }
+
+    /// Helper for function arity compatibility.
+    fn arity_compatible(expected: &Arity, actual: &Arity) -> bool {
+        match (expected, actual) {
+            (Arity::Exact(e), Arity::Exact(a)) => e == a,
+            (Arity::Range(e_min, e_max), Arity::Exact(a)) => *a >= *e_min && *a <= *e_max,
+            (Arity::Variadic(e_min), Arity::Exact(a)) => *a >= *e_min,
+            (Arity::Variadic(e_min), Arity::Variadic(a_min)) => *a_min >= *e_min,
+            // Conservative: accept if either has variadic
+            (Arity::Variadic(_), _) | (_, Arity::Variadic(_)) => true,
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Debug for Type {
@@ -148,5 +243,57 @@ mod tests {
         assert!(Type::Any.is_nullable());
         assert!(!Type::Int.is_nullable());
         assert!(!Type::String.is_nullable());
+    }
+
+    #[test]
+    fn accepts_any() {
+        assert!(Type::Any.accepts(&Type::Int));
+        assert!(Type::Any.accepts(&Type::String));
+        assert!(Type::Any.accepts(&Type::Nil));
+        assert!(Type::Any.accepts(&Type::vec(Type::Int)));
+    }
+
+    #[test]
+    fn accepts_primitives() {
+        assert!(Type::Int.accepts(&Type::Int));
+        assert!(Type::Bool.accepts(&Type::Bool));
+        assert!(Type::String.accepts(&Type::String));
+        assert!(Type::Keyword.accepts(&Type::Keyword));
+        assert!(Type::EntityRef.accepts(&Type::EntityRef));
+
+        assert!(!Type::Int.accepts(&Type::String));
+        assert!(!Type::Bool.accepts(&Type::Int));
+    }
+
+    #[test]
+    fn accepts_numeric_promotion() {
+        // Float should accept Int (numeric promotion)
+        assert!(Type::Float.accepts(&Type::Int));
+        // But Int should not accept Float
+        assert!(!Type::Int.accepts(&Type::Float));
+    }
+
+    #[test]
+    fn accepts_option() {
+        let opt_int = Type::option(Type::Int);
+        assert!(opt_int.accepts(&Type::Nil));
+        assert!(opt_int.accepts(&Type::Int));
+        assert!(!opt_int.accepts(&Type::String));
+    }
+
+    #[test]
+    fn accepts_collections() {
+        let vec_int = Type::vec(Type::Int);
+        let vec_string = Type::vec(Type::String);
+        let vec_any = Type::vec(Type::Any);
+
+        assert!(vec_int.accepts(&Type::vec(Type::Int)));
+        assert!(!vec_int.accepts(&vec_string));
+        assert!(vec_any.accepts(&vec_int)); // Any element accepts Int element
+
+        let map_kw_int = Type::map(Type::Keyword, Type::Int);
+        let map_kw_string = Type::map(Type::Keyword, Type::String);
+        assert!(map_kw_int.accepts(&Type::map(Type::Keyword, Type::Int)));
+        assert!(!map_kw_int.accepts(&map_kw_string));
     }
 }

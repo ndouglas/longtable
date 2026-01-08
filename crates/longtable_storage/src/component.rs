@@ -294,6 +294,25 @@ impl ComponentStore {
             .map(|(id, _)| *id)
     }
 
+    /// Returns all component data in sorted order for deterministic hashing.
+    ///
+    /// Returns an iterator of (component, entity, value) tuples sorted by
+    /// component keyword index, then entity index.
+    pub fn sorted_data(&self) -> impl Iterator<Item = (KeywordId, EntityId, &Value)> {
+        let mut all_data: Vec<(KeywordId, EntityId, &Value)> = Vec::new();
+
+        for (component, entities) in &self.data {
+            for (entity, value) in entities {
+                all_data.push((*component, *entity, value));
+            }
+        }
+
+        // Sort by component index, then entity index
+        all_data.sort_by_key(|(c, e, _)| (c.index(), e.index, e.generation));
+
+        all_data.into_iter()
+    }
+
     // --- Private helpers ---
 
     fn validate_component_value(schema: &ComponentSchema, value: &Value) -> Result<()> {
@@ -329,11 +348,13 @@ impl ComponentStore {
         }
     }
 
-    #[allow(clippy::unnecessary_wraps)]
-    fn validate_field_value(_field_schema: &FieldSchema, _value: &Value) -> Result<()> {
-        // TODO: Implement proper type checking
-        // For now, accept any value
-        Ok(())
+    fn validate_field_value(field_schema: &FieldSchema, value: &Value) -> Result<()> {
+        let value_type = value.value_type();
+        if field_schema.ty.accepts(&value_type) {
+            Ok(())
+        } else {
+            Err(Error::type_mismatch(field_schema.ty.clone(), value_type))
+        }
     }
 
     fn create_default_component(schema: &ComponentSchema) -> Value {

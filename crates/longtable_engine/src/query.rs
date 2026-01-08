@@ -311,14 +311,88 @@ impl QueryExecutor {
 
     /// Count results without full materialization.
     ///
+    /// This is optimized to skip return expression evaluation and sorting,
+    /// which are not needed for counting.
+    ///
     /// # Errors
     ///
     /// Returns an error if query execution fails.
     pub fn count(query: &CompiledQuery, world: &World) -> Result<usize> {
-        // For now, full execute and count
-        // TODO: Optimize to avoid materializing return values
-        let results = Self::execute(query, world)?;
-        Ok(results.len())
+        // Step 1: Pattern matching - get all binding sets
+        let all_bindings = PatternMatcher::match_pattern(&query.pattern, world);
+
+        if all_bindings.is_empty() {
+            return Ok(0);
+        }
+
+        // Step 2: Apply let bindings and filter by guards
+        let mut filtered_count = 0;
+        let mut filtered_bindings = Vec::new();
+
+        for bindings in all_bindings {
+            // Convert Bindings to value vector for VM
+            let mut values = Self::bindings_to_vec(&bindings, &query.binding_vars);
+
+            // Apply let bindings
+            for (name, expr) in &query.bindings {
+                let mut vm = Vm::new();
+                vm.set_bindings(values.clone());
+                let result = vm.execute_bytecode(&expr.code, &expr.constants)?;
+
+                // Add to values
+                let idx = query
+                    .binding_vars
+                    .iter()
+                    .position(|v| v == name)
+                    .unwrap_or(values.len());
+                if idx < values.len() {
+                    values[idx] = result;
+                } else {
+                    values.push(result);
+                }
+            }
+
+            // Check guards
+            let mut pass = true;
+            for guard in &query.guards {
+                let mut vm = Vm::new();
+                vm.set_bindings(values.clone());
+                let result = vm.execute_bytecode(&guard.code, &guard.constants)?;
+                if result != Value::Bool(true) {
+                    pass = false;
+                    break;
+                }
+            }
+
+            if pass {
+                // If there are aggregations or grouping, we need the full bindings
+                if !query.aggregates.is_empty() || !query.group_by.is_empty() {
+                    filtered_bindings.push((bindings, values));
+                } else {
+                    // No aggregation - just count
+                    filtered_count += 1;
+                }
+            }
+        }
+
+        // If no aggregation, we already have the count
+        if query.aggregates.is_empty() && query.group_by.is_empty() {
+            return Ok(filtered_count);
+        }
+
+        // Step 3: Group by (if specified)
+        let grouped = if query.group_by.is_empty() {
+            // No grouping - treat all as one group
+            vec![filtered_bindings]
+        } else {
+            Self::group_bindings(&filtered_bindings, &query.group_by, &query.binding_vars)
+        };
+
+        // Step 4: Apply aggregations within each group and count results
+        let aggregated = Self::apply_aggregations(&grouped, query);
+
+        // No need for ordering or limit for counting - just return the count
+        Ok(aggregated.len())
     }
 
     // -------------------------------------------------------------------------
