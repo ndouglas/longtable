@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use longtable_foundation::{Error, ErrorKind, Result, Value};
+use longtable_foundation::{Error, ErrorKind, Interner, Result, Value};
 
 use crate::ast::Ast;
 use crate::macro_expander::MacroExpander;
@@ -46,6 +46,9 @@ pub struct Compiler {
     namespace_context: NamespaceContext,
     /// Macro registry for macro expansion.
     macro_registry: MacroRegistry,
+    /// Optional interner for keyword resolution.
+    /// When present, keywords are properly interned as `Value::Keyword(KeywordId)`.
+    interner: Option<Interner>,
 }
 
 /// Key for constant deduplication.
@@ -126,6 +129,29 @@ impl Compiler {
             captures: HashMap::new(),
             namespace_context: NamespaceContext::new(),
             macro_registry: MacroRegistry::new(),
+            interner: None,
+        };
+
+        // Register built-in native functions
+        compiler.register_natives();
+        compiler
+    }
+
+    /// Creates a new compiler with an interner for keyword resolution.
+    #[must_use]
+    pub fn with_interner(interner: Interner) -> Self {
+        let mut compiler = Self {
+            constants: Vec::new(),
+            constant_map: HashMap::new(),
+            locals: HashMap::new(),
+            next_local: 0,
+            natives: HashMap::new(),
+            functions: Vec::new(),
+            outer_locals: None,
+            captures: HashMap::new(),
+            namespace_context: NamespaceContext::new(),
+            macro_registry: MacroRegistry::new(),
+            interner: Some(interner),
         };
 
         // Register built-in native functions
@@ -147,6 +173,7 @@ impl Compiler {
             captures: HashMap::new(),
             namespace_context,
             macro_registry: MacroRegistry::new(),
+            interner: None,
         };
 
         // Register built-in native functions
@@ -174,6 +201,7 @@ impl Compiler {
             captures: HashMap::new(),
             namespace_context: NamespaceContext::new(),
             macro_registry,
+            interner: None,
         };
 
         // Register built-in native functions
@@ -463,8 +491,16 @@ impl Compiler {
             }
             Ast::Keyword(name, _) => {
                 // Keywords compile to themselves as values
-                // For now, store as string constant with keyword marker
-                let idx = self.add_constant(Value::String(format!(":{name}").into()));
+                let value = if let Some(ref mut interner) = self.interner {
+                    // When we have an interner, properly intern the keyword
+                    let keyword_id = interner.intern_keyword(name);
+                    Value::Keyword(keyword_id)
+                } else {
+                    // Fallback: store as string with keyword marker
+                    // This is less correct but maintains backward compatibility
+                    Value::String(format!(":{name}").into())
+                };
+                let idx = self.add_constant(value);
                 code.emit(Opcode::Const(idx));
             }
             Ast::List(elements, span) => {
@@ -1842,6 +1878,48 @@ pub struct CompiledExpr {
 /// to be accessible in guard, return, and aggregate expressions.
 pub fn compile_expression(ast: &Ast, binding_vars: &[String]) -> Result<CompiledExpr> {
     let mut compiler = Compiler::new();
+    // Pre-populate locals with binding vars - they'll be treated as locals
+    // but we'll post-process to convert LoadLocal to LoadBinding
+    // Register both with and without ? prefix to support pattern variable syntax
+    for (idx, var) in binding_vars.iter().enumerate() {
+        compiler.locals.insert(var.clone(), idx as u16);
+        // Also register ?var for pattern variable syntax in return expressions
+        compiler.locals.insert(format!("?{var}"), idx as u16);
+    }
+    compiler.next_local = binding_vars.len() as u16;
+
+    let mut code = Bytecode::new();
+    compiler.compile_node(ast, &mut code)?;
+
+    // Convert LoadLocal(n) to LoadBinding(n) for binding vars
+    let binding_count = binding_vars.len() as u16;
+    for op in &mut code.ops {
+        if let Opcode::LoadLocal(slot) = op {
+            if *slot < binding_count {
+                *op = Opcode::LoadBinding(*slot);
+            }
+        }
+    }
+
+    Ok(CompiledExpr {
+        code,
+        constants: compiler.constants,
+    })
+}
+
+/// Compiles an AST expression with predefined binding variables and an interner.
+///
+/// This is the preferred version when you have access to an interner, as it
+/// properly interns keywords as `Value::Keyword(KeywordId)` instead of strings.
+///
+/// Variables in `binding_vars` will be compiled to `LoadBinding(idx)` opcodes
+/// rather than being treated as undefined symbols.
+pub fn compile_expression_with_interner(
+    ast: &Ast,
+    binding_vars: &[String],
+    interner: Interner,
+) -> Result<CompiledExpr> {
+    let mut compiler = Compiler::with_interner(interner);
     // Pre-populate locals with binding vars - they'll be treated as locals
     // but we'll post-process to convert LoadLocal to LoadBinding
     // Register both with and without ? prefix to support pattern variable syntax

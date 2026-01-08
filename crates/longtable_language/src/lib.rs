@@ -56,7 +56,7 @@ mod fuzz_tests;
 pub use ast::Ast;
 pub use compiler::{
     CompiledExpr, CompiledFunction, CompiledProgram, Compiler, compile, compile_expr,
-    compile_expression,
+    compile_expression, compile_expression_with_interner,
 };
 pub use declaration::{
     ActionDecl, AdverbDecl, Cardinality, CommandDecl, ComponentDecl, Declaration,
