@@ -118,14 +118,15 @@ impl VocabularyRegistry {
 
     /// Looks up a word string to find its KeywordId.
     ///
-    /// This requires the word to have been previously registered.
-    /// Returns None if the word is not in the vocabulary.
+    /// This requires the word to have been previously interned.
+    /// Returns None if the word has not been interned.
     #[must_use]
-    pub fn vocabulary_lookup_word(&self, _word: &str) -> Option<KeywordId> {
-        // TODO: This needs integration with the interner
-        // For now, we don't have word->keyword mapping
-        // This will be implemented when we connect to the World's interner
-        None
+    pub fn lookup_word(
+        &self,
+        word: &str,
+        interner: &longtable_foundation::Interner,
+    ) -> Option<KeywordId> {
+        interner.lookup_keyword(word)
     }
 
     /// Registers a verb with its synonyms.

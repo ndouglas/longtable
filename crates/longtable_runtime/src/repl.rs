@@ -3,13 +3,14 @@
 use crate::editor::{LineEditor, ReadResult, RustylineEditor};
 use crate::serialize;
 use crate::session::Session;
-use longtable_engine::{InputEvent, QueryCompiler, QueryExecutor, TickExecutor};
+use longtable_engine::{InputEvent, QueryCompiler, QueryExecutor, RuleCompiler, TickExecutor};
 use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
 use longtable_foundation::{LtMap, Type};
 use longtable_language::{
     Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
     NamespaceInfo, OnTargetDelete, RelationshipDecl, RuleDecl, StorageKind, Vm, parse,
 };
+use longtable_parser::CompiledAction;
 use longtable_storage::schema::{
     Cardinality as StorageCardinality, ComponentSchema, FieldSchema, OnDelete, RelationshipSchema,
     Storage,
@@ -1225,19 +1226,58 @@ impl<E: LineEditor> Repl<E> {
         Ok(())
     }
 
-    /// Executes a scope declaration to register in the vocabulary.
+    /// Executes a scope declaration to register for noun resolution.
     ///
     /// Scopes define visibility rules for noun resolution.
-    #[allow(clippy::unnecessary_wraps)]
+    #[allow(clippy::unnecessary_wraps)] // Will return errors when pattern compilation is added
     fn execute_scope(&mut self, scope_decl: &longtable_language::ScopeDecl) -> Result<()> {
-        // For now, scopes are stored but not yet used in noun resolution
-        // TODO: Implement proper scope storage and usage
-        let _name = self
+        use longtable_parser::scope::{CompiledScope, ScopeKind};
+
+        // Intern the scope name
+        let name = self
             .session
             .world_mut()
             .interner_mut()
             .intern_keyword(&scope_decl.name);
-        // Scopes will be used by the natural language parser for noun resolution
+
+        // Intern the first parent scope if any (CompiledScope only supports single parent)
+        let parent = scope_decl
+            .extends
+            .first()
+            .map(|s| self.session.world_mut().interner_mut().intern_keyword(s));
+
+        // Determine scope kind based on the declaration
+        // For now, custom patterns use ScopeKind::Custom
+        // More specific kinds (SameLocation, Inventory, etc.) would need pattern analysis
+        let kind = if scope_decl.pattern.clauses.is_empty() && parent.is_some() {
+            // No pattern, just extending parent - use Union if multiple extends
+            if scope_decl.extends.len() > 1 {
+                let parents: Vec<_> = scope_decl
+                    .extends
+                    .iter()
+                    .map(|s| self.session.world_mut().interner_mut().intern_keyword(s))
+                    .collect();
+                ScopeKind::Union(parents)
+            } else {
+                // Just extending single parent, use Custom as placeholder
+                ScopeKind::Custom
+            }
+        } else {
+            // Has a pattern - custom scope
+            ScopeKind::Custom
+        };
+
+        let compiled = CompiledScope { name, parent, kind };
+
+        self.session.add_scope(compiled);
+
+        println!(
+            "Registered scope :{} (extends: {:?}, total scopes: {})",
+            scope_decl.name,
+            scope_decl.extends,
+            self.session.scopes().len()
+        );
+
         Ok(())
     }
 
@@ -1307,32 +1347,59 @@ impl<E: LineEditor> Repl<E> {
     /// Executes a rule declaration to register for later tick execution.
     ///
     /// Rules define reactive behaviors that fire when conditions match.
-    #[allow(clippy::unnecessary_wraps)]
     fn execute_rule(&mut self, rule_decl: &RuleDecl) -> Result<()> {
-        // For now, rules are stored but not yet compiled/executed
-        // TODO: Implement proper rule compilation and registration with tick_executor
-        let _name = self
+        // Compile the rule declaration into a full compiled rule
+        let full_rule = RuleCompiler::compile(rule_decl, self.session.world_mut().interner_mut())?;
+
+        // Get the rule name for output
+        let name = self
             .session
-            .world_mut()
-            .interner_mut()
-            .intern_keyword(&rule_decl.name);
-        // Rules will be compiled and registered with the tick executor
+            .world()
+            .interner()
+            .get_keyword(full_rule.name)
+            .unwrap_or(&rule_decl.name)
+            .to_string();
+
+        // Convert to simpler CompiledRule and register with tick executor
+        // Note: The full rule body (effects/guards) is not yet executed during tick;
+        // this requires integration with the VM which is outside current scope.
+        self.tick_executor.add_rule(full_rule.into());
+
+        println!(
+            "Registered rule :{} (total rules: {})",
+            name,
+            self.tick_executor.rule_count()
+        );
+
         Ok(())
     }
 
-    /// Executes an action declaration to register in the vocabulary.
+    /// Executes an action declaration to register in the action registry.
     ///
     /// Actions define what happens when a command matches.
-    #[allow(clippy::unnecessary_wraps)]
+    #[allow(clippy::unnecessary_wraps)] // Will return errors when handler compilation is added
     fn execute_action(&mut self, action_decl: &longtable_language::ActionDecl) -> Result<()> {
-        // For now, actions are stored but not yet executed
-        // TODO: Implement proper action registration and execution
-        let _name = self
+        // Intern the action name
+        let name_kw = self
             .session
             .world_mut()
             .interner_mut()
             .intern_keyword(&action_decl.name);
-        // Actions will be compiled and stored for execution when commands match
+
+        // Create a compiled action with name and params
+        // Note: Full handler compilation is not yet implemented - handlers use generic AST
+        // in ActionDecl, but CompiledAction expects specific handler types.
+        let compiled = CompiledAction::new(name_kw).with_params(action_decl.params.clone());
+
+        // Register the action
+        self.session.action_registry_mut().register(compiled);
+
+        println!(
+            "Registered action :{} with {} params (handlers pending)",
+            action_decl.name,
+            action_decl.params.len()
+        );
+
         Ok(())
     }
 

@@ -63,6 +63,18 @@ impl CompiledRule {
     }
 }
 
+impl From<FullCompiledRule> for CompiledRule {
+    fn from(full: FullCompiledRule) -> Self {
+        Self {
+            name: full.name,
+            salience: full.salience,
+            pattern: full.pattern,
+            once: full.once,
+            enabled: full.enabled,
+        }
+    }
+}
+
 // =============================================================================
 // Activation
 // =============================================================================

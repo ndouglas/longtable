@@ -5,7 +5,8 @@
 use longtable_debug::{DebugSession, Timeline, Tracer};
 use longtable_foundation::{EntityId, Value};
 use longtable_language::{ModuleRegistry, NamespaceContext};
-use longtable_parser::VocabularyRegistry;
+use longtable_parser::scope::CompiledScope;
+use longtable_parser::{ActionRegistry, VocabularyRegistry};
 use longtable_storage::World;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,6 +47,12 @@ pub struct Session {
 
     /// Vocabulary registry for natural language parsing.
     vocabulary_registry: VocabularyRegistry,
+
+    /// Action registry for command execution.
+    action_registry: ActionRegistry,
+
+    /// Compiled scopes for noun resolution.
+    scopes: Vec<CompiledScope>,
 }
 
 impl Session {
@@ -64,6 +71,8 @@ impl Session {
             debug_session: DebugSession::new(),
             timeline: Timeline::new(),
             vocabulary_registry: VocabularyRegistry::default(),
+            action_registry: ActionRegistry::new(),
+            scopes: Vec::new(),
         }
     }
 
@@ -82,6 +91,8 @@ impl Session {
             debug_session: DebugSession::new(),
             timeline: Timeline::new(),
             vocabulary_registry: VocabularyRegistry::default(),
+            action_registry: ActionRegistry::new(),
+            scopes: Vec::new(),
         }
     }
 
@@ -237,6 +248,28 @@ impl Session {
     /// Returns a mutable reference to the vocabulary registry.
     pub fn vocabulary_registry_mut(&mut self) -> &mut VocabularyRegistry {
         &mut self.vocabulary_registry
+    }
+
+    /// Returns a reference to the action registry.
+    #[must_use]
+    pub fn action_registry(&self) -> &ActionRegistry {
+        &self.action_registry
+    }
+
+    /// Returns a mutable reference to the action registry.
+    pub fn action_registry_mut(&mut self) -> &mut ActionRegistry {
+        &mut self.action_registry
+    }
+
+    /// Returns a reference to the compiled scopes.
+    #[must_use]
+    pub fn scopes(&self) -> &[CompiledScope] {
+        &self.scopes
+    }
+
+    /// Adds a compiled scope.
+    pub fn add_scope(&mut self, scope: CompiledScope) {
+        self.scopes.push(scope);
     }
 }
 

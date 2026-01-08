@@ -131,7 +131,8 @@ impl NaturalLanguageParser {
         }
 
         // 2. Try to match syntax patterns
-        let matches = SyntaxMatcher::match_all(&tokens, &self.syntaxes, &self.vocabulary);
+        let matches =
+            SyntaxMatcher::match_all(&tokens, &self.syntaxes, &self.vocabulary, world.interner());
 
         if matches.is_empty() {
             return ParseResult::Error(ParseError::NoMatch);

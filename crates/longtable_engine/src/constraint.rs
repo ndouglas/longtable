@@ -57,39 +57,43 @@ pub struct ViolationDetails {
 }
 
 /// Result of constraint checking.
-#[derive(Clone, Debug)]
-pub enum ConstraintResult {
-    /// All constraints passed
-    Ok,
-    /// Some constraints failed with rollback
-    Rollback(Vec<ViolationDetails>),
-    /// Some constraints failed with warning
-    Warn(Vec<ViolationDetails>),
+#[derive(Clone, Debug, Default)]
+pub struct ConstraintResult {
+    /// Violations that require rollback
+    rollback: Vec<ViolationDetails>,
+    /// Violations that only warn
+    warn: Vec<ViolationDetails>,
 }
 
 impl ConstraintResult {
+    /// Creates an empty (ok) result.
+    #[must_use]
+    pub fn ok() -> Self {
+        Self::default()
+    }
+
     /// Returns true if no rollback violations occurred.
     #[must_use]
     pub fn is_ok(&self) -> bool {
-        !matches!(self, Self::Rollback(_))
+        self.rollback.is_empty()
+    }
+
+    /// Returns true if there are no violations of any kind.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.rollback.is_empty() && self.warn.is_empty()
     }
 
     /// Returns violations that should cause rollback.
     #[must_use]
     pub fn rollback_violations(&self) -> &[ViolationDetails] {
-        match self {
-            Self::Rollback(v) => v,
-            _ => &[],
-        }
+        &self.rollback
     }
 
     /// Returns violations that should only warn.
     #[must_use]
     pub fn warn_violations(&self) -> &[ViolationDetails] {
-        match self {
-            Self::Warn(v) => v,
-            _ => &[],
-        }
+        &self.warn
     }
 }
 
@@ -321,12 +325,9 @@ impl ConstraintChecker {
             }
         }
 
-        if !rollback_violations.is_empty() {
-            ConstraintResult::Rollback(rollback_violations)
-        } else if !warn_violations.is_empty() {
-            ConstraintResult::Warn(warn_violations)
-        } else {
-            ConstraintResult::Ok
+        ConstraintResult {
+            rollback: rollback_violations,
+            warn: warn_violations,
         }
     }
 
@@ -342,19 +343,19 @@ impl ConstraintChecker {
     /// # Errors
     /// Returns an error if any rollback violations occurred.
     pub fn validate(&self, result: ConstraintResult) -> Result<Vec<ViolationDetails>> {
-        match result {
-            ConstraintResult::Ok => Ok(vec![]),
-            ConstraintResult::Warn(violations) => Ok(violations),
-            ConstraintResult::Rollback(violations) => {
-                let names: Vec<_> = violations
-                    .iter()
-                    .map(|v| format!("{:?}", v.constraint))
-                    .collect();
-                Err(Error::new(ErrorKind::Internal(format!(
-                    "constraint violations require rollback: {}",
-                    names.join(", ")
-                ))))
-            }
+        if result.is_ok() {
+            // Return warn violations (may be empty)
+            Ok(result.warn)
+        } else {
+            let names: Vec<_> = result
+                .rollback
+                .iter()
+                .map(|v| format!("{:?}", v.constraint))
+                .collect();
+            Err(Error::new(ErrorKind::Internal(format!(
+                "constraint violations require rollback: {}",
+                names.join(", ")
+            ))))
         }
     }
 
@@ -932,5 +933,272 @@ mod tests {
         assert!(!result.is_ok());
         assert_eq!(result.rollback_violations().len(), 1);
         assert_eq!(result.rollback_violations()[0].failed_check_index, 1); // Second check failed
+    }
+
+    #[test]
+    fn constraint_with_let_binding() {
+        use longtable_foundation::LtMap;
+        use longtable_storage::FieldSchema;
+
+        let mut world = World::new(42);
+
+        // Register a component with x and y fields
+        let point = world.interner_mut().intern_keyword("point");
+        let x_field = world.interner_mut().intern_keyword("x");
+        let y_field = world.interner_mut().intern_keyword("y");
+        let schema = ComponentSchema::new(point)
+            .with_field(FieldSchema::required(
+                x_field,
+                longtable_foundation::Type::Int,
+            ))
+            .with_field(FieldSchema::required(
+                y_field,
+                longtable_foundation::Type::Int,
+            ));
+        world = world.register_component(schema).unwrap();
+
+        // Spawn an entity with x=3, y=4 (sum = 7)
+        let (world, entity) = world.spawn(&LtMap::new()).unwrap();
+        let mut comp = LtMap::new();
+        comp = comp.insert(Value::Keyword(x_field), Value::Int(3));
+        comp = comp.insert(Value::Keyword(y_field), Value::Int(4));
+        let mut world = world.set(entity, point, Value::Map(comp)).unwrap();
+
+        // Create constraint with let binding: sum = x + y, check sum < 10
+        let mut decl = ConstraintDecl::new("sum-check", Span::default());
+        decl.pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "e".to_string(),
+                component: "point".to_string(),
+                value: PatternValue::Variable("p".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        // Let: sum = (+ (get ?p :x) (get ?p :y))
+        decl.bindings.push((
+            "sum".to_string(),
+            Ast::List(
+                vec![
+                    Ast::Symbol("+".to_string(), Span::default()),
+                    Ast::List(
+                        vec![
+                            Ast::Symbol("get".to_string(), Span::default()),
+                            Ast::Symbol("?p".to_string(), Span::default()),
+                            Ast::Keyword("x".to_string(), Span::default()),
+                        ],
+                        Span::default(),
+                    ),
+                    Ast::List(
+                        vec![
+                            Ast::Symbol("get".to_string(), Span::default()),
+                            Ast::Symbol("?p".to_string(), Span::default()),
+                            Ast::Keyword("y".to_string(), Span::default()),
+                        ],
+                        Span::default(),
+                    ),
+                ],
+                Span::default(),
+            ),
+        ));
+        // Check: (< ?sum 10)
+        decl.checks.push(Ast::List(
+            vec![
+                Ast::Symbol("<".to_string(), Span::default()),
+                Ast::Symbol("?sum".to_string(), Span::default()),
+                Ast::Int(10, Span::default()),
+            ],
+            Span::default(),
+        ));
+        decl.on_violation = ConstraintViolation::Rollback;
+
+        let compiled = ConstraintCompiler::compile(&decl, world.interner_mut()).unwrap();
+        let checker = ConstraintChecker::new().with_constraints(vec![compiled]);
+
+        // sum = 3 + 4 = 7 < 10, so constraint passes
+        let result = checker.check_all(&world);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn multiple_constraints_reports_both_violations() {
+        use longtable_foundation::LtMap;
+
+        let mut world = World::new(42);
+
+        // Register two separate tag components
+        let valid_tag = world.interner_mut().intern_keyword("valid-tag");
+        let active_tag = world.interner_mut().intern_keyword("active-tag");
+        world = world
+            .register_component(ComponentSchema::tag(valid_tag))
+            .unwrap();
+        world = world
+            .register_component(ComponentSchema::tag(active_tag))
+            .unwrap();
+
+        // Spawn entity with both tags = true (but we'll check for them being "not present"
+        // by using a check that they equal false, which will fail)
+        let (world, entity) = world.spawn(&LtMap::new()).unwrap();
+        let world = world.set(entity, valid_tag, Value::Bool(true)).unwrap();
+        let mut world = world.set(entity, active_tag, Value::Bool(true)).unwrap();
+
+        // Constraint 1: valid-tag must equal false (Rollback) - will fail since it's true
+        let mut decl1 = ConstraintDecl::new("must-be-invalid", Span::default());
+        decl1.pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "e".to_string(),
+                component: "valid-tag".to_string(),
+                value: PatternValue::Variable("v".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        decl1.checks.push(Ast::List(
+            vec![
+                Ast::Symbol("=".to_string(), Span::default()),
+                Ast::Symbol("?v".to_string(), Span::default()),
+                Ast::Bool(false, Span::default()), // Expect false, but it's true
+            ],
+            Span::default(),
+        ));
+        decl1.on_violation = ConstraintViolation::Rollback;
+
+        // Constraint 2: active-tag must equal false (Warn) - will fail since it's true
+        let mut decl2 = ConstraintDecl::new("should-be-inactive", Span::default());
+        decl2.pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "e".to_string(),
+                component: "active-tag".to_string(),
+                value: PatternValue::Variable("a".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        decl2.checks.push(Ast::List(
+            vec![
+                Ast::Symbol("=".to_string(), Span::default()),
+                Ast::Symbol("?a".to_string(), Span::default()),
+                Ast::Bool(false, Span::default()), // Expect false, but it's true
+            ],
+            Span::default(),
+        ));
+        decl2.on_violation = ConstraintViolation::Warn;
+
+        let c1 = ConstraintCompiler::compile(&decl1, world.interner_mut()).unwrap();
+        let c2 = ConstraintCompiler::compile(&decl2, world.interner_mut()).unwrap();
+        let checker = ConstraintChecker::new().with_constraints(vec![c1, c2]);
+
+        // Both constraints should fail
+        let result = checker.check_all(&world);
+        assert!(!result.is_ok()); // Rollback makes is_ok false
+        assert_eq!(result.rollback_violations().len(), 1);
+        assert_eq!(result.warn_violations().len(), 1);
+    }
+
+    #[test]
+    fn constraint_with_no_checks_always_passes() {
+        use longtable_foundation::LtMap;
+
+        let mut world = World::new(42);
+
+        // Register a tag component
+        let marker = world.interner_mut().intern_keyword("marker");
+        world = world
+            .register_component(ComponentSchema::tag(marker))
+            .unwrap();
+
+        // Spawn entity with marker
+        let (world, entity) = world.spawn(&LtMap::new()).unwrap();
+        let mut world = world.set(entity, marker, Value::Bool(true)).unwrap();
+
+        // Constraint with pattern but no checks
+        let mut decl = ConstraintDecl::new("marker-exists", Span::default());
+        decl.pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "e".to_string(),
+                component: "marker".to_string(),
+                value: PatternValue::Variable("m".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        // No checks added
+        decl.on_violation = ConstraintViolation::Rollback;
+
+        let compiled = ConstraintCompiler::compile(&decl, world.interner_mut()).unwrap();
+        let checker = ConstraintChecker::new().with_constraints(vec![compiled]);
+
+        // No checks means always passes
+        let result = checker.check_all(&world);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn multiple_entities_all_checked() {
+        use longtable_foundation::LtMap;
+        use longtable_storage::FieldSchema;
+
+        let mut world = World::new(42);
+
+        // Register component
+        let status = world.interner_mut().intern_keyword("status");
+        let valid_field = world.interner_mut().intern_keyword("valid");
+        let schema = ComponentSchema::new(status).with_field(FieldSchema::required(
+            valid_field,
+            longtable_foundation::Type::Bool,
+        ));
+        world = world.register_component(schema).unwrap();
+
+        // Spawn 3 entities: 2 valid, 1 invalid
+        let (world, e1) = world.spawn(&LtMap::new()).unwrap();
+        let mut comp = LtMap::new();
+        comp = comp.insert(Value::Keyword(valid_field), Value::Bool(true));
+        let world = world.set(e1, status, Value::Map(comp)).unwrap();
+
+        let (world, e2) = world.spawn(&LtMap::new()).unwrap();
+        let mut comp = LtMap::new();
+        comp = comp.insert(Value::Keyword(valid_field), Value::Bool(false)); // Invalid!
+        let world = world.set(e2, status, Value::Map(comp)).unwrap();
+
+        let (world, e3) = world.spawn(&LtMap::new()).unwrap();
+        let mut comp = LtMap::new();
+        comp = comp.insert(Value::Keyword(valid_field), Value::Bool(true));
+        let mut world = world.set(e3, status, Value::Map(comp)).unwrap();
+
+        // Constraint: valid must be true
+        let mut decl = ConstraintDecl::new("must-be-valid", Span::default());
+        decl.pattern = DeclPattern {
+            clauses: vec![DeclClause {
+                entity_var: "e".to_string(),
+                component: "status".to_string(),
+                value: PatternValue::Variable("s".to_string()),
+                span: Span::default(),
+            }],
+            negations: vec![],
+        };
+        decl.checks.push(Ast::List(
+            vec![
+                Ast::Symbol("=".to_string(), Span::default()),
+                Ast::List(
+                    vec![
+                        Ast::Symbol("get".to_string(), Span::default()),
+                        Ast::Symbol("?s".to_string(), Span::default()),
+                        Ast::Keyword("valid".to_string(), Span::default()),
+                    ],
+                    Span::default(),
+                ),
+                Ast::Bool(true, Span::default()),
+            ],
+            Span::default(),
+        ));
+        decl.on_violation = ConstraintViolation::Rollback;
+
+        let compiled = ConstraintCompiler::compile(&decl, world.interner_mut()).unwrap();
+        let checker = ConstraintChecker::new().with_constraints(vec![compiled]);
+
+        // Only e2 violates, so we should have exactly 1 violation
+        let result = checker.check_all(&world);
+        assert!(!result.is_ok());
+        assert_eq!(result.rollback_violations().len(), 1);
     }
 }

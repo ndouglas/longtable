@@ -213,9 +213,10 @@ fn check_all_with_constraints_no_matches() {
 
 #[test]
 fn constraint_result_ok_methods() {
-    let result = ConstraintResult::Ok;
+    let result = ConstraintResult::ok();
 
     assert!(result.is_ok());
+    assert!(result.is_clean());
     assert!(result.rollback_violations().is_empty());
     assert!(result.warn_violations().is_empty());
 }
@@ -285,7 +286,7 @@ fn add_constraint_preserves_order() {
 #[test]
 fn validate_ok_result() {
     let checker = ConstraintChecker::new();
-    let result = ConstraintResult::Ok;
+    let result = ConstraintResult::ok();
 
     let validation = checker.validate(result);
     assert!(validation.is_ok());

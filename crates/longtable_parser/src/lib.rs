@@ -63,5 +63,6 @@ pub mod tokenizer;
 pub mod vocabulary;
 
 // Re-export main types for convenience
+pub use action::{ActionRegistry, CompiledAction};
 pub use parser::{NaturalLanguageParser, ParseResult};
 pub use vocabulary::VocabularyRegistry;

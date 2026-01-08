@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use longtable_foundation::KeywordId;
+use longtable_foundation::{Interner, KeywordId};
 
 use crate::noun_phrase::NounPhrase;
 use crate::tokenizer::InputToken;
@@ -107,6 +107,7 @@ impl SyntaxMatcher {
         tokens: &[InputToken],
         syntaxes: &[CompiledSyntax],
         vocab: &VocabularyRegistry,
+        interner: &Interner,
     ) -> Vec<SyntaxMatch> {
         let mut matches = Vec::new();
 
@@ -117,7 +118,7 @@ impl SyntaxMatcher {
         };
 
         // Look up verb in vocabulary
-        let verb_kw = vocab.vocabulary_lookup_word(verb_word);
+        let verb_kw = vocab.lookup_word(verb_word, interner);
 
         for syntax in syntaxes {
             // Check if syntax verb matches
@@ -126,7 +127,7 @@ impl SyntaxMatcher {
                     if let Some(verb) = vocab.lookup_verb(kw) {
                         if verb.name == syntax_verb || verb.synonyms.contains(&syntax_verb) {
                             // Try to match this syntax
-                            if let Some(m) = Self::try_match(tokens, syntax, vocab) {
+                            if let Some(m) = Self::try_match(tokens, syntax, vocab, interner) {
                                 matches.push(m);
                             }
                         }
@@ -150,6 +151,7 @@ impl SyntaxMatcher {
         tokens: &[InputToken],
         syntax: &CompiledSyntax,
         vocab: &VocabularyRegistry,
+        interner: &Interner,
     ) -> Option<SyntaxMatch> {
         let mut token_idx = 0;
         let mut noun_bindings = HashMap::new();
@@ -175,7 +177,7 @@ impl SyntaxMatcher {
                     // Must match preposition
                     match tokens.get(token_idx) {
                         Some(InputToken::Word(w)) => {
-                            let w_kw = vocab.vocabulary_lookup_word(w)?;
+                            let w_kw = vocab.lookup_word(w, interner)?;
                             if let Some(prep) = vocab.lookup_preposition(w_kw) {
                                 if prep.name == *prep_kw {
                                     prepositions.push(*prep_kw);
@@ -195,7 +197,8 @@ impl SyntaxMatcher {
                     type_constraint: _,
                 } => {
                     // Collect noun phrase
-                    let (np, consumed) = Self::collect_noun_phrase(tokens, token_idx, vocab)?;
+                    let (np, consumed) =
+                        Self::collect_noun_phrase(tokens, token_idx, vocab, interner)?;
                     noun_bindings.insert(var.clone(), np);
                     token_idx += consumed;
                 }
@@ -205,7 +208,7 @@ impl SyntaxMatcher {
                 } => {
                     // Try to collect noun phrase, but don't fail if absent
                     if let Some((np, consumed)) =
-                        Self::collect_noun_phrase(tokens, token_idx, vocab)
+                        Self::collect_noun_phrase(tokens, token_idx, vocab, interner)
                     {
                         noun_bindings.insert(var.clone(), np);
                         token_idx += consumed;
@@ -215,7 +218,7 @@ impl SyntaxMatcher {
                     // Must match direction
                     match tokens.get(token_idx) {
                         Some(InputToken::Word(w)) => {
-                            let w_kw = vocab.vocabulary_lookup_word(w)?;
+                            let w_kw = vocab.lookup_word(w, interner)?;
                             if let Some(dir) = vocab.lookup_direction(w_kw) {
                                 direction = Some((var.clone(), dir.name));
                                 token_idx += 1;
@@ -258,6 +261,7 @@ impl SyntaxMatcher {
         tokens: &[InputToken],
         start: usize,
         vocab: &VocabularyRegistry,
+        interner: &Interner,
     ) -> Option<(NounPhrase, usize)> {
         let mut idx = start;
         let mut adjectives = Vec::new();
@@ -275,7 +279,7 @@ impl SyntaxMatcher {
         while let Some(token) = tokens.get(idx) {
             match token {
                 InputToken::Word(w) => {
-                    let w_kw = vocab.vocabulary_lookup_word(w);
+                    let w_kw = vocab.lookup_word(w, interner);
 
                     // Stop if we hit a preposition
                     if let Some(kw) = w_kw {

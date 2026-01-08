@@ -122,6 +122,17 @@ impl TickExecutor {
         self
     }
 
+    /// Adds a single rule to this executor.
+    pub fn add_rule(&mut self, rule: CompiledRule) {
+        self.rules.push(rule);
+    }
+
+    /// Returns the number of registered rules.
+    #[must_use]
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
     /// Sets the constraint checker.
     #[must_use]
     pub fn with_constraints(mut self, checker: ConstraintChecker) -> Self {
@@ -189,9 +200,10 @@ impl TickExecutor {
         let constraint_result = self.constraint_checker.check_all(&world);
 
         // Phase 5: Commit or rollback
-        let (final_world, success) = match &constraint_result {
-            ConstraintResult::Ok | ConstraintResult::Warn(_) => (world, true),
-            ConstraintResult::Rollback(_) => (original_world, false),
+        let (final_world, success) = if constraint_result.is_ok() {
+            (world, true)
+        } else {
+            (original_world, false)
         };
 
         Ok(TickResult {

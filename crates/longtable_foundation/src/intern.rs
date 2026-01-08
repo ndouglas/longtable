@@ -196,6 +196,24 @@ impl Interner {
             .and_then(|&idx| self.get_string(idx))
     }
 
+    /// Looks up a keyword by string without interning it.
+    ///
+    /// Returns `Some(KeywordId)` if the keyword has already been interned,
+    /// `None` otherwise. The string should NOT include the leading `:`.
+    #[must_use]
+    pub fn lookup_keyword(&self, s: &str) -> Option<KeywordId> {
+        self.keyword_map.get(s).copied()
+    }
+
+    /// Looks up a symbol by string without interning it.
+    ///
+    /// Returns `Some(SymbolId)` if the symbol has already been interned,
+    /// `None` otherwise.
+    #[must_use]
+    pub fn lookup_symbol(&self, s: &str) -> Option<SymbolId> {
+        self.symbol_map.get(s).copied()
+    }
+
     /// Returns the number of interned symbols.
     #[must_use]
     pub fn symbol_count(&self) -> usize {
