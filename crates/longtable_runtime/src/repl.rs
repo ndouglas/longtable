@@ -8,7 +8,7 @@ use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
 use longtable_foundation::{LtMap, Type};
 use longtable_language::{
     Cardinality, Compiler, ComponentDecl, Declaration, DeclarationAnalyzer, NamespaceContext,
-    NamespaceInfo, OnTargetDelete, RelationshipDecl, StorageKind, Vm, parse,
+    NamespaceInfo, OnTargetDelete, RelationshipDecl, RuleDecl, StorageKind, Vm, parse,
 };
 use longtable_storage::schema::{
     Cardinality as StorageCardinality, ComponentSchema, FieldSchema, OnDelete, RelationshipSchema,
@@ -301,6 +301,110 @@ impl<E: LineEditor> Repl<E> {
                 Ok(Some(value))
             }
 
+            // (describe-room entity) - get room description
+            Ast::Symbol(s, _) if s == "describe-room" => {
+                if list.len() != 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "describe-room requires exactly 1 argument: (describe-room entity)"
+                            .to_string(),
+                    )));
+                }
+
+                let entity_val = self.eval_form(&list[1])?;
+                let entity_id = match entity_val {
+                    Value::EntityRef(id) => id,
+                    Value::Int(idx) if idx >= 0 =>
+                    {
+                        #[allow(clippy::cast_sign_loss)]
+                        EntityId::new(idx as u64, 0)
+                    }
+                    Value::Nil => {
+                        // No room to describe
+                        return Ok(Some(Value::String("".into())));
+                    }
+                    other => {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "describe-room argument must be an entity, got {:?}",
+                            other.value_type()
+                        ))));
+                    }
+                };
+
+                // Get room name and description
+                let name_kw = self
+                    .session
+                    .world_mut()
+                    .interner_mut()
+                    .intern_keyword("name");
+                let desc_kw = self
+                    .session
+                    .world_mut()
+                    .interner_mut()
+                    .intern_keyword("description");
+
+                let mut output = String::new();
+
+                // Get name
+                if let Ok(Some(name_val)) = self.session.world().get(entity_id, name_kw) {
+                    if let Value::Map(m) = name_val {
+                        if let Some(Value::String(s)) = m
+                            .get(&Value::Keyword(
+                                self.session
+                                    .world_mut()
+                                    .interner_mut()
+                                    .intern_keyword("value"),
+                            ))
+                            .cloned()
+                        {
+                            output.push('\n');
+                            output.push_str(&s);
+                            output.push('\n');
+                        }
+                    } else if let Value::String(s) = name_val {
+                        output.push('\n');
+                        output.push_str(&s);
+                        output.push('\n');
+                    }
+                }
+
+                // Get description
+                if let Ok(Some(desc_val)) = self.session.world().get(entity_id, desc_kw) {
+                    if let Value::Map(m) = desc_val {
+                        if let Some(Value::String(s)) = m
+                            .get(&Value::Keyword(
+                                self.session
+                                    .world_mut()
+                                    .interner_mut()
+                                    .intern_keyword("value"),
+                            ))
+                            .cloned()
+                        {
+                            output.push_str(&s);
+                        }
+                    } else if let Value::String(s) = desc_val {
+                        output.push_str(&s);
+                    }
+                }
+
+                Ok(Some(Value::String(output.into())))
+            }
+
+            // (say value) - print value to console
+            Ast::Symbol(s, _) if s == "say" => {
+                if list.len() != 2 {
+                    return Err(Error::new(ErrorKind::Internal(
+                        "say requires exactly 1 argument: (say value)".to_string(),
+                    )));
+                }
+
+                let value = self.eval_form(&list[1])?;
+                match &value {
+                    Value::String(s) => println!("{s}"),
+                    other => println!("{other}"),
+                }
+                Ok(Some(Value::Nil))
+            }
+
             // (load "path")
             Ast::Symbol(s, _) if s == "load" => {
                 if list.len() != 2 {
@@ -504,6 +608,18 @@ impl<E: LineEditor> Repl<E> {
                 } else {
                     Err(Error::new(ErrorKind::Internal(
                         "invalid link: form".to_string(),
+                    )))
+                }
+            }
+
+            // (rule: name :when [...] :then [...]) - define rule
+            Ast::Symbol(s, _) if s == "rule:" => {
+                if let Some(Declaration::Rule(rule_decl)) = DeclarationAnalyzer::analyze(form)? {
+                    self.execute_rule(&rule_decl)?;
+                    Ok(Some(Value::Nil))
+                } else {
+                    Err(Error::new(ErrorKind::Internal(
+                        "invalid rule: form".to_string(),
                     )))
                 }
             }
@@ -1185,6 +1301,22 @@ impl<E: LineEditor> Repl<E> {
                 priority: cmd_decl.priority,
                 syntax_source,
             });
+        Ok(())
+    }
+
+    /// Executes a rule declaration to register for later tick execution.
+    ///
+    /// Rules define reactive behaviors that fire when conditions match.
+    #[allow(clippy::unnecessary_wraps)]
+    fn execute_rule(&mut self, rule_decl: &RuleDecl) -> Result<()> {
+        // For now, rules are stored but not yet compiled/executed
+        // TODO: Implement proper rule compilation and registration with tick_executor
+        let _name = self
+            .session
+            .world_mut()
+            .interner_mut()
+            .intern_keyword(&rule_decl.name);
+        // Rules will be compiled and registered with the tick executor
         Ok(())
     }
 

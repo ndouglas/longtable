@@ -286,10 +286,28 @@ impl DeclarationAnalyzer {
                                     let pc = Self::analyze_pattern_clause(clause, *inner_span)?;
                                     pattern.negations.push(pc);
                                 }
+                                Ast::List(inner_elements, _) => {
+                                    // Handle (not (exists ...)) or (not [pattern])
+                                    // For (exists ...), extract all patterns and add as negations
+                                    if let Some(Ast::Symbol(sym, _)) = inner_elements.first() {
+                                        if sym == "exists" {
+                                            // (not (exists [...] [...] ...)) - no entity exists matching all patterns
+                                            for elem in inner_elements.iter().skip(1) {
+                                                if let Ast::Vector(clause, inner_span) = elem {
+                                                    let pc = Self::analyze_pattern_clause(
+                                                        clause,
+                                                        *inner_span,
+                                                    )?;
+                                                    pattern.negations.push(pc);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 other => {
                                     return Err(Error::new(ErrorKind::ParseError {
                                         message: format!(
-                                            "not requires a pattern vector, got {}",
+                                            "not requires a pattern vector or exists form, got {}",
                                             other.type_name()
                                         ),
                                         line: other.span().line,
@@ -370,7 +388,35 @@ impl DeclarationAnalyzer {
     }
 
     /// Analyze a single pattern clause like [?e :component ?value].
+    ///
+    /// Also supports global patterns like [:component value] where the first element
+    /// is a keyword representing a global fact/event (uses a special "__global__" entity).
     fn analyze_pattern_clause(elements: &[Ast], span: Span) -> Result<PatternClause> {
+        // Handle global patterns like [:keyword value] where first element is a keyword
+        if let Some(Ast::Keyword(k, _)) = elements.first() {
+            // Global pattern: [:component value]
+            // Use a special "__global__" entity variable
+            let component = k.clone();
+            let value = if elements.len() == 2 {
+                match &elements[1] {
+                    Ast::Symbol(s, _) if s.starts_with('?') => {
+                        PatternValue::Variable(s[1..].to_string())
+                    }
+                    Ast::Symbol(s, _) if s == "_" => PatternValue::Wildcard,
+                    other => PatternValue::Literal(other.clone()),
+                }
+            } else {
+                PatternValue::Wildcard
+            };
+
+            return Ok(PatternClause {
+                entity_var: "__global__".to_string(),
+                component,
+                value,
+                span,
+            });
+        }
+
         if elements.len() < 2 || elements.len() > 4 {
             return Err(Error::new(ErrorKind::ParseError {
                 message: "pattern clause must have 2-4 elements: [?entity :component], [?entity :component ?value], or [?entity :component ?key ?value]".to_string(),

@@ -275,13 +275,24 @@ impl Vm {
                     // Extract function reference
                     let func_ref = match &func_val {
                         Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        Value::String(s) if s.starts_with('\'') => {
+                            // This is an undefined symbol that was compiled as a quoted string
+                            let symbol_name = s.strip_prefix('\'').unwrap_or(s);
+                            return Err(Error::new(ErrorKind::UndefinedSymbol(
+                                symbol_name.to_string(),
+                            )));
+                        }
+                        Value::String(s) => {
+                            return Err(Error::new(ErrorKind::Internal(format!(
+                                "cannot call string value as function: \"{s}\""
+                            ))));
+                        }
                         _ => {
-                            return Err(Error::new(ErrorKind::TypeMismatch {
-                                expected: longtable_foundation::Type::Fn(
-                                    longtable_foundation::types::Arity::Variadic(0),
-                                ),
-                                actual: func_val.value_type(),
-                            }));
+                            return Err(Error::new(ErrorKind::Internal(format!(
+                                "cannot call {} as function (value: {})",
+                                func_val.value_type(),
+                                func_val
+                            ))));
                         }
                     };
 

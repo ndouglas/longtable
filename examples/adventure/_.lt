@@ -87,6 +87,8 @@
 (say "")
 
 ;; Describe starting location
-(let [?player (first [?p :tag/player true])]
-  (let [?room (first [?r] [?player :in-room ?r])]
-    (describe-room ?room)))
+;; TODO: Enable once query functions are implemented
+;; (let [?player (first [?p :tag/player true])]
+;;   (let [?room (first [?r] [?player :in-room ?r])]
+;;     (describe-room ?room)))
+(say "Welcome to the cave entrance!")
