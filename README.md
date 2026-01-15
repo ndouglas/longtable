@@ -276,14 +276,14 @@ Requires Rust 1.85.0 or later (Edition 2024).
 
 Benchmark highlights (M1 Mac):
 
-| Operation | Time | Notes |
-|-----------|------|-------|
-| VM simple op | ~500 ns | 2M ops/sec |
-| Function call | ~1 µs | Per call overhead |
-| Pattern match | ~100-230 ns | Per pattern |
-| Component get | 66 ns | O(1) lookup |
-| World clone | ~50 ns | Structural sharing |
-| Entity spawn | ~480 ns | With components |
+| Operation     | Time        | Notes              |
+| ------------- | ----------- | ------------------ |
+| VM simple op  | ~500 ns     | 2M ops/sec         |
+| Function call | ~1 µs       | Per call overhead  |
+| Pattern match | ~100-230 ns | Per pattern        |
+| Component get | 66 ns       | O(1) lookup        |
+| World clone   | ~50 ns      | Structural sharing |
+| Entity spawn  | ~480 ns     | With components    |
 
 See `cargo bench` for full benchmark suite.
 
