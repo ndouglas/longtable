@@ -1,0 +1,325 @@
+;;;; Sudoku Solver - Standard Library
+;;;;
+;;;; Helper functions for the Sudoku solver.
+
+;;; =============================================================================
+;;; Output Helpers
+;;; =============================================================================
+
+;; Print a message to the console
+(fn: say [msg]
+  (println msg))
+
+;; Identity function - returns its argument unchanged
+(fn: identity [x] x)
+
+;;; =============================================================================
+;;; Cell Lookup Helpers
+;;; =============================================================================
+
+;; Get cell at row, col (1-indexed)
+;; Returns the cell entity or nil if not found
+(fn: get-cell [row col]
+  (first (filter (fn [cell]
+                   (and (= (get-field cell :position :row) row)
+                        (= (get-field cell :position :col) col)))
+                 (with-component :cell))))
+
+;; Get all cells in a row
+(fn: cells-in-row [row]
+  (filter (fn [cell]
+            (= (get-field cell :position :row) row))
+          (with-component :cell)))
+
+;; Get all cells in a column
+(fn: cells-in-col [col]
+  (filter (fn [cell]
+            (= (get-field cell :position :col) col))
+          (with-component :cell)))
+
+;; Get all cells in a box
+(fn: cells-in-box [box]
+  (filter (fn [cell]
+            (= (get-field cell :position :box) box))
+          (with-component :cell)))
+
+;; Get all peer cells (same row, col, or box) excluding the cell itself
+(fn: get-peers [cell]
+  (let [row (get-field cell :position :row)
+        col (get-field cell :position :col)
+        box (get-field cell :position :box)]
+    (filter (fn [c]
+              (and (not (= c cell))
+                   (or (= (get-field c :position :row) row)
+                       (= (get-field c :position :col) col)
+                       (= (get-field c :position :box) box))))
+            (with-component :cell))))
+
+;;; =============================================================================
+;;; Candidate Management
+;;; =============================================================================
+
+;; Check if a value is in a list (needed by has-candidate?)
+(fn: member? [val lst]
+  (some (fn [x] (= x val)) lst))
+
+;; Check if a cell has a specific candidate
+;; Note: uses member? because contains? checks for keys/indices, not values
+(fn: has-candidate? [cell value]
+  (let [candidates (get-field cell :candidates :value)]
+    (if candidates
+        (member? value candidates)
+        false)))
+
+;; Get the number of candidates for a cell
+(fn: candidate-count [cell]
+  (let [candidates (get-field cell :candidates :value)]
+    (if candidates
+        (count candidates)
+        0)))
+
+;; Remove a candidate from a cell
+;; Uses vec-remove! which supports effect merging, so multiple removals
+;; on the same cell within the same expression will all be applied.
+(fn: remove-candidate! [cell value]
+  (vec-remove! cell :candidates :value value))
+
+;; Check if cell is solved
+(fn: solved? [cell]
+  (has? cell :solved))
+
+;; Check if cell is a given (initial clue)
+(fn: given? [cell]
+  (has? cell :given))
+
+;;; =============================================================================
+;;; Value Placement
+;;; =============================================================================
+
+;; Place a value in a cell
+;; - Sets the :value component
+;; - Marks the cell as :solved
+;; - Removes the candidate list
+;; - Propagates constraints to peers
+(fn: place-value! [cell value]
+  (do
+    (set-field! cell :value :value value)
+    (set-component! cell :solved true)
+    (retract! cell :candidates)
+    ;; Propagate to all peers - use let binding to ensure evaluation
+    (let [peers (get-peers cell)]
+      (do
+        (map (fn [peer] (remove-candidate! peer value)) peers)
+        nil))))
+
+;; Set a cell as a given (initial clue)
+;; Note: only sets value, doesn't propagate constraints
+(fn: set-given! [cell value]
+  (do
+    (set-field! cell :value :value value)
+    (set-component! cell :solved true)
+    (set-component! cell :given true)
+    (retract! cell :candidates)))
+
+;; Get all solved values from peer cells
+(fn: get-peer-values [cell]
+  (let [peers (get-peers cell)]
+    (let [mapped (map (fn [peer]
+                        (if (solved? peer)
+                            (get-field peer :value :value)
+                            nil))
+                      peers)]
+      (filter (fn [v] v) mapped))))
+
+;; Calculate valid candidates for a cell based on peers
+;; Returns candidates that are NOT used by any peer
+(fn: calculate-candidates [cell]
+  (let [peer-values (get-peer-values cell)
+        all-candidates [1 2 3 4 5 6 7 8 9]]
+    (filter (fn [c] (not (member? c peer-values)))
+            all-candidates)))
+
+;; Update a single cell's candidates based on peers
+(fn: update-cell-candidates! [cell]
+  (if (not (solved? cell))
+      (let [candidates (calculate-candidates cell)]
+        (set-field! cell :candidates :value (vec candidates)))))
+
+;; Propagate all constraints - updates each unsolved cell's candidates
+;; based on the values of its solved peers
+(fn: propagate-all! []
+  (map update-cell-candidates! (with-component :cell)))
+
+;;; =============================================================================
+;;; Grid Display
+;;; =============================================================================
+
+;; Get display character for a cell
+(fn: cell-display [cell]
+  (if (solved? cell)
+      (str (get-field cell :value :value))
+      "."))
+
+;; Print a horizontal separator
+(fn: print-separator []
+  (say "+-------+-------+-------+"))
+
+;; Print a single row of the grid
+(fn: print-row [row]
+  (let [cells (cells-in-row row)
+        sorted-cells (sort-by (fn [c] (get-field c :position :col)) cells)]
+    (say (str "| "
+              (cell-display (nth sorted-cells 0)) " "
+              (cell-display (nth sorted-cells 1)) " "
+              (cell-display (nth sorted-cells 2)) " | "
+              (cell-display (nth sorted-cells 3)) " "
+              (cell-display (nth sorted-cells 4)) " "
+              (cell-display (nth sorted-cells 5)) " | "
+              (cell-display (nth sorted-cells 6)) " "
+              (cell-display (nth sorted-cells 7)) " "
+              (cell-display (nth sorted-cells 8)) " |"))))
+
+;; Print the entire grid
+(fn: print-grid []
+  (do
+    (print-separator)
+    (print-row 1)
+    (print-row 2)
+    (print-row 3)
+    (print-separator)
+    (print-row 4)
+    (print-row 5)
+    (print-row 6)
+    (print-separator)
+    (print-row 7)
+    (print-row 8)
+    (print-row 9)
+    (print-separator)))
+
+;;; =============================================================================
+;;; Statistics
+;;; =============================================================================
+
+;; Count solved cells
+(fn: count-solved []
+  (count (filter solved? (with-component :cell))))
+
+;; Count unsolved cells
+(fn: count-unsolved []
+  (- 81 (count-solved)))
+
+;; Print progress
+(fn: print-progress []
+  (say (str "Solved: " (count-solved) "/81 cells")))
+
+;;; =============================================================================
+;;; Advanced Technique Helpers
+;;; =============================================================================
+
+;; Cell position accessors (convenience wrappers)
+(fn: cell-row [cell]
+  (get-field cell :position :row))
+
+(fn: cell-col [cell]
+  (get-field cell :position :col))
+
+(fn: cell-box [cell]
+  (get-field cell :position :box))
+
+;; Get candidates for a cell as a list
+(fn: get-candidates [cell]
+  (let [cands (get-field cell :candidates :value)]
+    (if cands cands [])))
+
+;; Get all unsolved cells
+(fn: unsolved-cells []
+  (filter (fn [c] (not (solved? c))) (with-component :cell)))
+
+;; Get all bivalue cells (exactly 2 candidates)
+(fn: bivalue-cells []
+  (filter (fn [c] (= (candidate-count c) 2)) (unsolved-cells)))
+
+;; Check if two cells are the same entity
+(fn: same-cell? [c1 c2]
+  (= c1 c2))
+
+;; Check if two cells are peers (share row, col, or box but not same cell)
+(fn: are-peers? [c1 c2]
+  (and (not (same-cell? c1 c2))
+       (or (= (cell-row c1) (cell-row c2))
+           (= (cell-col c1) (cell-col c2))
+           (= (cell-box c1) (cell-box c2)))))
+
+;; Check if puzzle has contradiction (any unsolved cell with 0 candidates)
+(fn: has-contradiction? []
+  (some (fn [cell]
+          (and (not (solved? cell))
+               (= (candidate-count cell) 0)))
+        (with-component :cell)))
+
+;; Check if puzzle is completely solved
+(fn: is-solved? []
+  (= (count-solved) 81))
+
+;; Find unsolved cells in a row with a specific candidate
+(fn: cells-with-candidate-in-row [row digit]
+  (filter (fn [c] (has-candidate? c digit))
+          (filter (fn [c] (not (solved? c)))
+                  (cells-in-row row))))
+
+;; Find unsolved cells in a column with a specific candidate
+(fn: cells-with-candidate-in-col [col digit]
+  (filter (fn [c] (has-candidate? c digit))
+          (filter (fn [c] (not (solved? c)))
+                  (cells-in-col col))))
+
+;; Find unsolved cells in a box with a specific candidate
+(fn: cells-with-candidate-in-box [box digit]
+  (filter (fn [c] (has-candidate? c digit))
+          (filter (fn [c] (not (solved? c)))
+                  (cells-in-box box))))
+
+;;; =============================================================================
+;;; Combinatorics Helpers
+;;; =============================================================================
+
+;; Generate all pairs from a list
+(fn: pairs [lst]
+  (if (< (count lst) 2)
+      []
+      (let [first-elem (first lst)
+            rest-elems (rest lst)]
+        (concat (map (fn [x] [first-elem x]) rest-elems)
+                (pairs rest-elems)))))
+
+;; Generate all triples from a list
+(fn: triples [lst]
+  (if (< (count lst) 3)
+      []
+      (let [first-elem (first lst)
+            rest-elems (rest lst)]
+        (concat (map (fn [pair] [first-elem (first pair) (nth pair 1)])
+                     (pairs rest-elems))
+                (triples rest-elems)))))
+
+;; Get unique values from a list (using distinct)
+(fn: unique [lst]
+  (distinct lst))
+
+;; Check if all elements in list are equal
+(fn: all-equal? [lst]
+  (if (empty? lst)
+      true
+      (let [first-val (first lst)]
+        (every? (fn [x] (= x first-val)) lst))))
+
+;; Find minimum value in a list by a key function
+(fn: min-by [key-fn lst]
+  (if (empty? lst)
+      nil
+      (reduce (fn [best item]
+                (if (< (key-fn item) (key-fn best))
+                    item
+                    best))
+              (first lst)
+              (rest lst))))

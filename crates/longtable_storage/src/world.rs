@@ -823,6 +823,23 @@ impl World {
         })
     }
 
+    /// Removes a component from an entity.
+    ///
+    /// Returns a new World with the component removed.
+    /// If the entity doesn't have the component, returns the world unchanged.
+    pub fn retract(&self, entity: EntityId, component: KeywordId) -> Result<World> {
+        self.entities.validate(entity)?;
+
+        let mut new_components = (*self.components).clone();
+        new_components.remove(entity, component);
+
+        Ok(World {
+            components: Arc::new(new_components),
+            previous: Some(Arc::new(self.clone())),
+            ..self.clone()
+        })
+    }
+
     /// Checks if an entity has a component.
     #[must_use]
     pub fn has(&self, entity: EntityId, component: KeywordId) -> bool {

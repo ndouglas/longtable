@@ -1,0 +1,49 @@
+;;;; Sudoku Solver - Data Schemas
+;;;;
+;;;; Defines the component and relationship schemas for representing
+;;;; a Sudoku puzzle.
+
+;;; =============================================================================
+;;; Tag Components
+;;; =============================================================================
+
+;; Tag: marks an entity as a cell
+(component: cell :bool :default true)
+
+;; Tag: marks a cell as solved
+(component: solved :bool :default true)
+
+;; Tag: marks a cell as a given (initial clue)
+(component: given :bool :default true)
+
+;;; =============================================================================
+;;; Data Components
+;;; =============================================================================
+
+;; Cell position in the grid
+;; - :row, :col: 1-9 coordinates
+;; - :box: 1-9 box number (3x3 region)
+(component: position
+  :row :int
+  :col :int
+  :box :int)
+
+;; Cell value (1-9 when solved)
+(component: value
+  :value :int)
+
+;; Cell candidates (possible values when unsolved)
+;; Stored as a vector of integers [1 2 3 4 5 6 7 8 9]
+(component: candidates
+  :value :vector)
+
+;; Display name for entities
+(component: name
+  :value :string)
+
+;;; =============================================================================
+;;; Relationship Schemas
+;;; =============================================================================
+
+;; Note: Peer relationships are computed dynamically rather than stored,
+;; since they're based on position comparisons.

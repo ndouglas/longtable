@@ -18,7 +18,9 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use longtable_foundation::{EntityId, Error, KeywordId, Result, SemanticLimit, Value};
+use longtable_foundation::{
+    EntityId, Error, ErrorKind, KeywordId, LtSet, LtVec, Result, SemanticLimit, Type, Value,
+};
 use longtable_language::VmEffect;
 use longtable_storage::World;
 
@@ -597,7 +599,7 @@ fn execute_spike_body(
 // =============================================================================
 
 /// Apply an effect to the world.
-#[allow(dead_code)]
+#[allow(dead_code, clippy::too_many_lines)]
 pub fn apply_effect(world: World, effect: &VmEffect) -> Result<World> {
     match effect {
         VmEffect::Spawn { components } => {
@@ -626,6 +628,99 @@ pub fn apply_effect(world: World, effect: &VmEffect) -> Result<World> {
             relationship,
             target,
         } => world.unlink(*source, *relationship, *target),
+        VmEffect::Retract { entity, component } => world.retract(*entity, *component),
+        VmEffect::VecRemove {
+            entity,
+            component,
+            field,
+            value,
+        } => {
+            // Get current field value and remove the value from the vector
+            let current = world.get_field(*entity, *component, *field)?;
+            let elements: LtVec<Value> = match current {
+                Some(Value::Vec(v)) => v,
+                Some(Value::Nil) | None => LtVec::new(),
+                Some(other) => {
+                    return Err(Error::new(ErrorKind::TypeMismatch {
+                        expected: Type::vec(Type::Any),
+                        actual: other.value_type(),
+                    }));
+                }
+            };
+            // Convert to Vec, remove, and convert back
+            let mut vec_elements: Vec<Value> = elements.iter().cloned().collect();
+            if let Some(pos) = vec_elements.iter().position(|e| e == value) {
+                vec_elements.remove(pos);
+            }
+            let new_vec = Value::Vec(vec_elements.into_iter().collect());
+            world.set_field(*entity, *component, *field, new_vec)
+        }
+        VmEffect::VecAdd {
+            entity,
+            component,
+            field,
+            value,
+        } => {
+            // Get current field value and add the value to the vector
+            let current = world.get_field(*entity, *component, *field)?;
+            let elements: LtVec<Value> = match current {
+                Some(Value::Vec(v)) => v,
+                Some(Value::Nil) | None => LtVec::new(),
+                Some(other) => {
+                    return Err(Error::new(ErrorKind::TypeMismatch {
+                        expected: Type::vec(Type::Any),
+                        actual: other.value_type(),
+                    }));
+                }
+            };
+            let new_vec = Value::Vec(elements.push_back(value.clone()));
+            world.set_field(*entity, *component, *field, new_vec)
+        }
+        VmEffect::SetRemove {
+            entity,
+            component,
+            field,
+            value,
+        } => {
+            // Get current field value and remove the value from the set
+            let current = world.get_field(*entity, *component, *field)?;
+            let elements: LtSet<Value> = match current {
+                Some(Value::Set(s)) => s,
+                Some(Value::Nil) | None => LtSet::new(),
+                Some(other) => {
+                    return Err(Error::new(ErrorKind::TypeMismatch {
+                        expected: Type::set(Type::Any),
+                        actual: other.value_type(),
+                    }));
+                }
+            };
+            let new_set = Value::Set(elements.remove(value));
+            world.set_field(*entity, *component, *field, new_set)
+        }
+        VmEffect::SetAdd {
+            entity,
+            component,
+            field,
+            value,
+        } => {
+            // Get current field value and add the value to the set
+            let current = world.get_field(*entity, *component, *field)?;
+            let elements: LtSet<Value> = match current {
+                Some(Value::Set(s)) => s,
+                Some(Value::Nil) | None => LtSet::new(),
+                Some(other) => {
+                    return Err(Error::new(ErrorKind::TypeMismatch {
+                        expected: Type::set(Type::Any),
+                        actual: other.value_type(),
+                    }));
+                }
+            };
+            let new_set = Value::Set(elements.insert(value.clone()));
+            world.set_field(*entity, *component, *field, new_set)
+        }
+        // State management effects are handled at the REPL level, not here.
+        // This function only handles effects that modify the World directly.
+        VmEffect::SaveState { .. } | VmEffect::RestoreState { .. } => Ok(world),
     }
 }
 

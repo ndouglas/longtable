@@ -345,6 +345,11 @@ impl<E: LineEditor> Repl<E> {
             self.session.world_mut().set_interner(interner);
         }
 
+        // Sync compiler's globals map to VM for late-bound lookups (forward references)
+        for (name, &slot) in self.compiler.globals() {
+            self.vm.register_global(name.clone(), slot);
+        }
+
         // Execute with full RuntimeContext for registration opcode support
         let mut ctx = SessionContext::new(&mut self.session);
         let result = self.vm.execute_with_runtime_context(&program, &mut ctx)?;
@@ -365,12 +370,27 @@ impl<E: LineEditor> Repl<E> {
     ///
     /// Effects like `Link`, `Unlink`, `SetComponent`, etc. are collected during VM execution
     /// and must be applied to persist the changes to the world state.
+    ///
+    /// Mergeable effects (`VecRemove`, `VecAdd`, `SetRemove`, `SetAdd`) on the same (entity, component, field)
+    /// are grouped and merged before application. This ensures that multiple operations on the same
+    /// field within a single expression all take effect.
+    #[allow(clippy::too_many_lines, clippy::items_after_statements)]
     fn apply_vm_effects(&mut self) -> Result<()> {
+        use longtable_foundation::{KeywordId, LtSet, Type};
         use longtable_language::VmEffect;
+        use std::collections::HashMap;
 
         let effects = self.vm.take_effects();
+
+        // Group mergeable effects by (entity, component, field)
+        // Each entry contains (values_to_remove, values_to_add)
+        type FieldKey = (EntityId, KeywordId, KeywordId);
+        let mut vec_field_ops: HashMap<FieldKey, (Vec<Value>, Vec<Value>)> = HashMap::new();
+        let mut set_field_ops: HashMap<FieldKey, (Vec<Value>, Vec<Value>)> = HashMap::new();
+
         for effect in effects {
             match effect {
+                // Non-mergeable effects: apply immediately
                 VmEffect::Link {
                     source,
                     relationship,
@@ -408,7 +428,6 @@ impl<E: LineEditor> Repl<E> {
                     *self.session.world_mut() = new_world;
                 }
                 VmEffect::Spawn { components } => {
-                    // Convert map to component data and spawn
                     let (new_world, _entity_id) = self.session.world().spawn(&components)?;
                     *self.session.world_mut() = new_world;
                 }
@@ -416,8 +435,140 @@ impl<E: LineEditor> Repl<E> {
                     let new_world = self.session.world().destroy(entity)?;
                     *self.session.world_mut() = new_world;
                 }
+                VmEffect::Retract { entity, component } => {
+                    let new_world = self.session.world().retract(entity, component)?;
+                    *self.session.world_mut() = new_world;
+                }
+
+                // Mergeable effects: collect for later merging
+                VmEffect::VecRemove {
+                    entity,
+                    component,
+                    field,
+                    value,
+                } => {
+                    let key = (entity, component, field);
+                    let entry = vec_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
+                    entry.0.push(value);
+                }
+                VmEffect::VecAdd {
+                    entity,
+                    component,
+                    field,
+                    value,
+                } => {
+                    let key = (entity, component, field);
+                    let entry = vec_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
+                    entry.1.push(value);
+                }
+                VmEffect::SetRemove {
+                    entity,
+                    component,
+                    field,
+                    value,
+                } => {
+                    let key = (entity, component, field);
+                    let entry = set_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
+                    entry.0.push(value);
+                }
+                VmEffect::SetAdd {
+                    entity,
+                    component,
+                    field,
+                    value,
+                } => {
+                    let key = (entity, component, field);
+                    let entry = set_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
+                    entry.1.push(value);
+                }
+
+                // State management effects are now handled directly through RuntimeContext
+                // during VM execution, not deferred as effects. These match arms are kept
+                // for completeness but should not be reached.
+                VmEffect::SaveState { .. } | VmEffect::RestoreState { .. } => {
+                    // No-op: these are handled immediately during VM execution
+                }
             }
         }
+
+        // Apply merged vector field operations
+        for ((entity, component, field), (to_remove, to_add)) in vec_field_ops {
+            // Get current field value
+            let current = self.session.world().get_field(entity, component, field)?;
+
+            // Extract current vector elements
+            let mut elements: Vec<Value> = match current {
+                Some(Value::Vec(v)) => v.iter().cloned().collect(),
+                Some(Value::Nil) | None => vec![],
+                Some(other) => {
+                    return Err(Error::new(ErrorKind::TypeMismatch {
+                        expected: Type::vec(Type::Any),
+                        actual: other.value_type(),
+                    }));
+                }
+            };
+
+            // Remove values (preserve order, remove first occurrence of each)
+            for val in &to_remove {
+                if let Some(pos) = elements.iter().position(|e| e == val) {
+                    elements.remove(pos);
+                }
+            }
+
+            // Add values
+            for val in to_add {
+                elements.push(val);
+            }
+
+            // Convert back to Value::Vec
+            let new_vec = Value::Vec(elements.into_iter().collect());
+
+            // Apply the merged change
+            let new_world = self
+                .session
+                .world()
+                .set_field(entity, component, field, new_vec)?;
+            *self.session.world_mut() = new_world;
+        }
+
+        // Apply merged set field operations
+        for ((entity, component, field), (to_remove, to_add)) in set_field_ops {
+            // Get current field value
+            let current = self.session.world().get_field(entity, component, field)?;
+
+            // Extract current set elements
+            let mut elements: LtSet<Value> = match current {
+                Some(Value::Set(s)) => s,
+                Some(Value::Nil) | None => LtSet::new(),
+                Some(other) => {
+                    return Err(Error::new(ErrorKind::TypeMismatch {
+                        expected: Type::set(Type::Any),
+                        actual: other.value_type(),
+                    }));
+                }
+            };
+
+            // Remove values
+            for val in to_remove {
+                elements = elements.remove(&val);
+            }
+
+            // Add values
+            for val in to_add {
+                elements = elements.insert(val);
+            }
+
+            // Convert back to Value::Set
+            let new_set = Value::Set(elements);
+
+            // Apply the merged change
+            let new_world = self
+                .session
+                .world()
+                .set_field(entity, component, field, new_set)?;
+            *self.session.world_mut() = new_world;
+        }
+
         Ok(())
     }
 
@@ -751,6 +902,14 @@ impl<E: LineEditor> Repl<E> {
 
             // (timeline) - show timeline status
             Ast::Symbol(s, _) if s == "timeline" => self.handle_timeline(),
+
+            // ==================== Backtracking Support ====================
+
+            // (save-state) - save current world state, returns snapshot ID
+            Ast::Symbol(s, _) if s == "save-state" => self.handle_save_state(),
+
+            // (restore-state ID) - restore world to a saved snapshot
+            Ast::Symbol(s, _) if s == "restore-state" => self.handle_restore_state(&list[1..]),
 
             // ==================== Natural Language Input ====================
 
@@ -2446,6 +2605,43 @@ impl<E: LineEditor> Repl<E> {
     fn handle_timeline(&self) -> Result<Option<Value>> {
         let status = self.session.timeline().status();
         println!("{status}");
+        Ok(Some(Value::Nil))
+    }
+
+    // ==================== Backtracking Support Handlers ====================
+
+    /// Handles the (save-state) form.
+    ///
+    /// Saves the current world state and returns a snapshot ID.
+    /// This is used by the Sudoku solver for backtracking.
+    #[allow(clippy::unnecessary_wraps)]
+    fn handle_save_state(&mut self) -> Result<Option<Value>> {
+        let id = self.session.save_state();
+        #[allow(clippy::cast_possible_wrap)]
+        Ok(Some(Value::Int(id as i64)))
+    }
+
+    /// Handles the (restore-state ID) form.
+    ///
+    /// Restores the world to a previously saved snapshot.
+    fn handle_restore_state(&mut self, args: &[Ast]) -> Result<Option<Value>> {
+        if args.is_empty() {
+            return Err(Error::new(ErrorKind::Internal(
+                "restore-state requires a snapshot ID: (restore-state ID)".to_string(),
+            )));
+        }
+
+        let id_val = self.eval_form(&args[0])?;
+        let Value::Int(id) = id_val else {
+            return Err(Error::new(ErrorKind::Internal(
+                "restore-state requires an integer snapshot ID".to_string(),
+            )));
+        };
+
+        #[allow(clippy::cast_sign_loss)]
+        let id = id as u64;
+
+        self.session.restore_state(id)?;
         Ok(Some(Value::Nil))
     }
 

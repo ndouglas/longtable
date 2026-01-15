@@ -1,0 +1,56 @@
+;;;; Sudoku Solver - Entry Point
+;;;;
+;;;; A Sudoku solver demonstrating Longtable's constraint propagation
+;;;; and rule-based reasoning capabilities.
+
+;;; =============================================================================
+;;; Load Dependencies
+;;; =============================================================================
+
+(load "data/schemas.lt")
+(load "data/grid.lt")
+(load "stdlib.lt")
+(load "solver.lt")
+(load "puzzles.lt")
+
+;;; =============================================================================
+;;; Startup Message
+;;; =============================================================================
+
+(fn: print-banner []
+  (do
+    (say "")
+    (say "===============================================")
+    (say "           SUDOKU SOLVER")
+    (say "      A Longtable Demonstration")
+    (say "===============================================")
+    (say "")
+    (say "Commands:")
+    (say "  (load-easy)   - Load an easy puzzle")
+    (say "  (load-medium) - Load a medium puzzle")
+    (say "  (load-hard)   - Load a hard puzzle")
+    (say "  (print-grid)  - Show current grid")
+    (say "  (status)      - Show grid and progress")
+    (say "  (propagate-all!) - Propagate constraints")
+    (say "  (solve)       - Solve the current puzzle")
+    (say "")
+    (say "Example:")
+    (say "  > (load-easy)")
+    (say "  > (print-grid)")
+    (say "  > (propagate-all!)")
+    (say "  > (solve)")
+    (say "")))
+
+;;; =============================================================================
+;;; Run on Startup
+;;; =============================================================================
+
+(fn: run []
+  (do
+    (print-banner)
+    ;; Load a default puzzle to start with
+    (load-puzzle (easy-1))
+    (say "Loaded default puzzle (easy-1):")
+    (print-grid)
+    (say "")
+    (say "Type (solve) to solve it!")))

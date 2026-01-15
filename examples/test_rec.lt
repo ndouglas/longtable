@@ -1,0 +1,10 @@
+;; Test recursive function
+
+(fn: myrec [idx]
+  (if (>= idx 3)
+      idx
+      (myrec (+ idx 1))))
+
+(println "Function defined")
+(println (myrec 0))
+(println "Done")

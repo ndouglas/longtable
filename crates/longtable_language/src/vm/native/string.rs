@@ -284,3 +284,41 @@ pub(crate) fn native_format(args: &[Value]) -> Result<Value> {
         })),
     }
 }
+
+/// String: char-at - get character at index as string
+/// (char-at "hello" 0) -> "h"
+pub(crate) fn native_char_at(args: &[Value]) -> Result<Value> {
+    match (args.first(), args.get(1)) {
+        (Some(Value::String(s)), Some(Value::Int(idx))) => {
+            let idx = *idx as usize;
+            Ok(s.chars()
+                .nth(idx)
+                .map_or(Value::Nil, |c| Value::String(c.to_string().into())))
+        }
+        (Some(Value::Nil), _) => Ok(Value::Nil),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::String,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
+/// String: parse-int - parse string to integer
+/// (parse-int "42") -> 42
+/// (parse-int "abc") -> nil
+pub(crate) fn native_parse_int(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::String(s)) => Ok(s.parse::<i64>().map_or(Value::Nil, Value::Int)),
+        Some(Value::Int(n)) => Ok(Value::Int(*n)),
+        Some(Value::Float(n)) => Ok(Value::Int(*n as i64)),
+        Some(Value::Nil) => Ok(Value::Nil),
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::String,
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}

@@ -1,0 +1,17 @@
+(load "_.lt")
+(load-easy)
+;; Check what get-peer-values is
+(println (str "type of get-peer-values: " (type get-peer-values)))
+
+;; Try replacing it
+(fn: get-peer-values [cell]
+  (let [peers (get-peers cell)]
+    (let [mapped (map (fn [peer]
+                        (if (solved? peer)
+                            (get-field peer :value :value)
+                            nil))
+                      peers)]
+      (filter (fn [v] v) mapped))))
+
+(let [cell (first (filter (fn [c] (not (solved? c))) (with-component :cell)))]
+  (println (str "get-peer-values result: " (get-peer-values cell))))

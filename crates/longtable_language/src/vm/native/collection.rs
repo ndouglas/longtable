@@ -685,7 +685,7 @@ pub(crate) fn native_sort(args: &[Value]) -> Result<Value> {
 }
 
 /// Compare two values for sorting
-fn compare_for_sort(a: &Value, b: &Value) -> std::cmp::Ordering {
+pub(crate) fn compare_for_sort(a: &Value, b: &Value) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     match (a, b) {
         (Value::Int(x), Value::Int(y)) => x.cmp(y),

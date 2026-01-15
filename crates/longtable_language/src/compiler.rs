@@ -56,6 +56,9 @@ pub struct Compiler {
     /// Optional interner for keyword resolution.
     /// When present, keywords are properly interned as `Value::Keyword(KeywordId)`.
     interner: Option<Interner>,
+    /// Whether we're currently compiling an expression in tail position.
+    /// When true, function calls should emit `TailCall` instead of `Call`.
+    in_tail_position: bool,
 }
 
 /// Key for constant deduplication.
@@ -139,6 +142,7 @@ impl Compiler {
             namespace_context: NamespaceContext::new(),
             macro_registry: MacroRegistry::new(),
             interner: None,
+            in_tail_position: false,
         };
 
         // Register built-in native functions
@@ -163,6 +167,7 @@ impl Compiler {
             namespace_context: NamespaceContext::new(),
             macro_registry: MacroRegistry::new(),
             interner: Some(interner),
+            in_tail_position: false,
         };
 
         // Register built-in native functions
@@ -187,6 +192,7 @@ impl Compiler {
             namespace_context,
             macro_registry: MacroRegistry::new(),
             interner: None,
+            in_tail_position: false,
         };
 
         // Register built-in native functions
@@ -233,6 +239,7 @@ impl Compiler {
             namespace_context: NamespaceContext::new(),
             macro_registry,
             interner: None,
+            in_tail_position: false,
         };
 
         // Register built-in native functions
@@ -276,6 +283,13 @@ impl Compiler {
     #[must_use]
     pub fn namespace_context(&self) -> &NamespaceContext {
         &self.namespace_context
+    }
+
+    /// Returns a reference to the globals map (name -> slot).
+    /// This is used to sync global name bindings with the VM for late-bound lookups.
+    #[must_use]
+    pub fn globals(&self) -> &HashMap<String, u16> {
+        &self.globals
     }
 
     /// Registers built-in native functions.
@@ -361,6 +375,8 @@ impl Compiler {
             "str/blank?",
             "str/substring",
             "format",
+            "char-at",
+            "parse-int",
             // Stage S3: Collection functions
             "take",
             "drop",
@@ -637,9 +653,12 @@ impl Compiler {
             return;
         }
 
-        // Symbol resolves to itself (for use as data)
-        let idx = self.add_constant(Value::String(format!("'{name}").into()));
-        code.emit(Opcode::Const(idx));
+        // Unknown symbol - emit late-bound global lookup for forward references.
+        // At runtime, the VM will look up the symbol by name in its globals map.
+        // If the symbol is actually intended as data (like a quoted symbol),
+        // the caller should handle that explicitly.
+        let idx = self.add_constant(Value::String(name.to_string().into()));
+        code.emit(Opcode::LoadGlobalByName(idx));
     }
 
     /// Compiles a list (function call or special form).
@@ -681,6 +700,7 @@ impl Compiler {
                 "drop-while" => return self.compile_hof_drop_while(args, span, code),
                 "remove" => return self.compile_hof_remove(args, span, code),
                 "group-by" => return self.compile_hof_group_by(args, span, code),
+                "sort-by" => return self.compile_hof_sort_by(args, span, code),
                 "zip-with" => return self.compile_hof_zip_with(args, span, code),
                 "repeatedly" => return self.compile_hof_repeatedly(args, span, code),
                 // World/entity operations (emit special opcodes with context access)
@@ -697,13 +717,26 @@ impl Compiler {
                 "sources" => return self.compile_sources(args, span, code),
                 // Entity construction
                 "entity-ref" => return self.compile_entity_ref(args, span, code),
-                // World mutation operations
-                "spawn" => return self.compile_spawn(args, span, code),
-                "destroy" => return self.compile_destroy(args, span, code),
-                "set-component" => return self.compile_set_component(args, span, code),
-                "set-field" => return self.compile_set_field(args, span, code),
-                "link" => return self.compile_link(args, span, code),
-                "unlink" => return self.compile_unlink(args, span, code),
+                // Entity predicates
+                "has?" => return self.compile_has_component(args, span, code),
+                // World mutation operations (! suffix follows Lisp convention)
+                "spawn!" | "spawn" => return self.compile_spawn(args, span, code),
+                "destroy!" | "destroy" => return self.compile_destroy(args, span, code),
+                "set-component!" | "set-component" => {
+                    return self.compile_set_component(args, span, code);
+                }
+                "set-field!" | "set-field" => return self.compile_set_field(args, span, code),
+                "retract!" | "retract" => return self.compile_retract(args, span, code),
+                "link!" | "link" => return self.compile_link(args, span, code),
+                "unlink!" | "unlink" => return self.compile_unlink(args, span, code),
+                // Mergeable collection mutations
+                "vec-remove!" => return self.compile_vec_remove(args, span, code),
+                "vec-add!" => return self.compile_vec_add(args, span, code),
+                "set-remove!" => return self.compile_set_remove(args, span, code),
+                "set-add!" => return self.compile_set_add(args, span, code),
+                // State management (backtracking support)
+                "save-state" => return self.compile_save_state(span, code),
+                "restore-state" => return self.compile_restore_state(args, span, code),
                 // Declaration forms (compile to registration opcodes)
                 "component:" => return self.compile_component_decl(elements, span, code),
                 "relationship:" => return self.compile_relationship_decl(elements, span, code),
@@ -778,7 +811,11 @@ impl Compiler {
                         if args.len() != 1 {
                             return Err(self.error(span, "not requires exactly 1 argument"));
                         }
+                        // Arguments are never in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_node(&args[0], code)?;
+                        self.in_tail_position = saved_tail;
                         code.emit(Opcode::Not);
                         return Ok(());
                     }
@@ -786,7 +823,11 @@ impl Compiler {
                         if args.len() != 1 {
                             return Err(self.error(span, "print requires exactly 1 argument"));
                         }
+                        // Arguments are never in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         self.compile_node(&args[0], code)?;
+                        self.in_tail_position = saved_tail;
                         code.emit(Opcode::Print);
                         // Print returns nil
                         let idx = self.add_constant(Value::Nil);
@@ -795,9 +836,13 @@ impl Compiler {
                     }
                     _ => {
                         // Other natives: compile arguments then call
+                        // Arguments are never in tail position
+                        let saved_tail = self.in_tail_position;
+                        self.in_tail_position = false;
                         for arg in args {
                             self.compile_node(arg, code)?;
                         }
+                        self.in_tail_position = saved_tail;
                         let arg_count = u8::try_from(args.len())
                             .map_err(|_| self.error(span, "too many arguments"))?;
                         code.emit(Opcode::CallNative(native_idx, arg_count));
@@ -808,16 +853,28 @@ impl Compiler {
         }
 
         // General function call
-        // Compile the function expression
+        // Save tail position - only the call itself is in tail position, not the function or arguments
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+
+        // Compile the function expression (not in tail position)
         self.compile_node(first, code)?;
-        // Compile arguments
+        // Compile arguments (not in tail position)
         for arg in args {
             self.compile_node(arg, code)?;
         }
-        // Call with argument count
+
+        // Restore tail position for the call decision
+        self.in_tail_position = saved_tail;
+
+        // Call with argument count - use TailCall in tail position for TCO
         let arg_count =
             u16::try_from(args.len()).map_err(|_| self.error(span, "too many arguments"))?;
-        code.emit(Opcode::Call(arg_count));
+        if self.in_tail_position {
+            code.emit(Opcode::TailCall(arg_count));
+        } else {
+            code.emit(Opcode::Call(arg_count));
+        }
 
         Ok(())
     }
@@ -834,7 +891,11 @@ impl Compiler {
             return Err(self.error(span, "binary operator requires at least 2 arguments"));
         }
 
-        // Already compiled first arg, compile second
+        // Arguments to operators are never in tail position
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+
+        // Compile arguments
         self.compile_node(&args[0], code)?;
         self.compile_node(&args[1], code)?;
         code.emit(op.clone());
@@ -845,6 +906,7 @@ impl Compiler {
             code.emit(op.clone());
         }
 
+        self.in_tail_position = saved_tail;
         Ok(())
     }
 
@@ -858,8 +920,11 @@ impl Compiler {
         let then_branch = &args[1];
         let else_branch = args.get(2);
 
-        // Compile condition
+        // Compile condition (never in tail position)
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
         self.compile_node(condition, code)?;
+        self.in_tail_position = saved_tail;
 
         // Jump to else if false
         let jump_to_else = code.emit(Opcode::JumpIfNot(0));
@@ -955,6 +1020,10 @@ impl Compiler {
         // (slot, capture_indices_to_patch) - indices in the captures list that refer to this let
         let mut patches: Vec<(u16, Vec<(u16, u16)>)> = Vec::new(); // (slot, [(capture_idx, local_slot)])
 
+        // Save tail position - binding values are never in tail position
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+
         for (_name, value, slot) in &binding_info {
             // Compile the value - this handles both regular values and closures
             self.compile_node(value, code)?;
@@ -1005,22 +1074,29 @@ impl Compiler {
             }
         }
 
-        // Compile body expressions
+        // Compile body expressions (last one inherits tail position)
         let body = &args[1..];
         if body.is_empty() {
             let idx = self.add_constant(Value::Nil);
             code.emit(Opcode::Const(idx));
         } else {
+            let last_idx = body.len() - 1;
             for (i, expr) in body.iter().enumerate() {
+                // Only the last expression inherits tail position
+                let is_last = i == last_idx;
+                self.in_tail_position = if is_last { saved_tail } else { false };
+
                 self.compile_node(expr, code)?;
+
                 // Pop intermediate results
-                if i < body.len() - 1 {
+                if !is_last {
                     code.emit(Opcode::Pop);
                 }
             }
         }
 
-        // Restore locals
+        // Restore tail position and locals
+        self.in_tail_position = saved_tail;
         self.locals = saved_locals;
         self.next_local = saved_next;
 
@@ -1033,12 +1109,20 @@ impl Compiler {
             let idx = self.add_constant(Value::Nil);
             code.emit(Opcode::Const(idx));
         } else {
+            let last_idx = args.len() - 1;
+            let saved_tail = self.in_tail_position;
             for (i, expr) in args.iter().enumerate() {
+                // Only the last expression inherits tail position
+                let is_last = i == last_idx;
+                self.in_tail_position = if is_last { saved_tail } else { false };
+
                 self.compile_node(expr, code)?;
-                if i < args.len() - 1 {
+
+                if !is_last {
                     code.emit(Opcode::Pop);
                 }
             }
+            self.in_tail_position = saved_tail;
         }
         Ok(())
     }
@@ -1102,9 +1186,18 @@ impl Compiler {
             let idx = self.add_constant(Value::Nil);
             fn_code.emit(Opcode::Const(idx));
         } else {
+            let last_idx = body.len() - 1;
             for (i, expr) in body.iter().enumerate() {
+                // Set tail position flag for the last expression (enables TCO)
+                let is_last = i == last_idx;
+                let saved_tail = self.in_tail_position;
+                self.in_tail_position = is_last;
+
                 self.compile_node(expr, &mut fn_code)?;
-                if i < body.len() - 1 {
+
+                self.in_tail_position = saved_tail;
+
+                if !is_last {
                     fn_code.emit(Opcode::Pop);
                 }
             }
@@ -1214,6 +1307,17 @@ impl Compiler {
             _ => return Err(self.error(span, "fn: name must be a symbol")),
         };
 
+        // Get or allocate global slot for this name FIRST, before compiling body
+        // This allows recursive functions to reference themselves
+        let slot = if let Some(&existing) = self.globals.get(&name) {
+            existing
+        } else {
+            let slot = self.next_global;
+            self.next_global += 1;
+            self.globals.insert(name.clone(), slot);
+            slot
+        };
+
         let rest = &args[1..];
 
         // Determine form based on remaining args
@@ -1255,16 +1359,6 @@ impl Compiler {
                 ));
             }
         }
-
-        // Get or allocate global slot for this name
-        let slot = if let Some(&existing) = self.globals.get(&name) {
-            existing
-        } else {
-            let slot = self.next_global;
-            self.next_global += 1;
-            self.globals.insert(name.clone(), slot);
-            slot
-        };
 
         // Store in global slot
         code.emit(Opcode::StoreGlobal(slot));
@@ -1395,6 +1489,9 @@ impl Compiler {
             return Err(self.error(span, "cond requires even number of forms (test/expr pairs)"));
         }
 
+        // Save tail position - clause expressions inherit it, tests don't
+        let saved_tail = self.in_tail_position;
+
         // Build nested if structure
         let mut jump_to_ends = Vec::new();
 
@@ -1402,13 +1499,15 @@ impl Compiler {
             let test = &args[i];
             let expr = &args[i + 1];
 
-            // Compile test
+            // Compile test (never in tail position)
+            self.in_tail_position = false;
             self.compile_node(test, code)?;
 
             // Jump to next clause if false
             let jump_to_next = code.emit(Opcode::JumpIfNot(0));
 
-            // Compile expression for this clause
+            // Compile expression for this clause (inherits tail position)
+            self.in_tail_position = saved_tail;
             self.compile_node(expr, code)?;
 
             // Jump to end (skip remaining clauses)
@@ -1421,6 +1520,9 @@ impl Compiler {
                 .map_err(|_| self.error(span, "jump offset too large"))?;
             code.patch_jump(jump_to_next, offset);
         }
+
+        // Restore tail position
+        self.in_tail_position = saved_tail;
 
         // If no clause matched, result is nil
         let idx = self.add_constant(Value::Nil);
@@ -1811,6 +1913,24 @@ impl Compiler {
         Ok(())
     }
 
+    /// Compiles `(sort-by fn coll)` - sort collection by key function.
+    fn compile_hof_sort_by(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "sort-by requires exactly 2 arguments (fn coll)"));
+        }
+
+        // Compile key function
+        self.compile_node(&args[0], code)?;
+
+        // Compile collection
+        self.compile_node(&args[1], code)?;
+
+        // Emit SortBy opcode
+        code.emit(Opcode::SortBy);
+
+        Ok(())
+    }
+
     /// Compiles `(zip-with fn coll1 coll2 ...)` - zip with combining function.
     fn compile_hof_zip_with(
         &mut self,
@@ -2190,6 +2310,179 @@ impl Compiler {
         // Emit SetField opcode
         code.emit(Opcode::SetField);
         // SetField returns nil
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (vec-remove! entity component field value) -> nil
+    ///
+    /// Removes a value from a vector field. Multiple removals on the same field
+    /// are merged when effects are applied.
+    fn compile_vec_remove(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 4 {
+            return Err(self.error(
+                span,
+                "vec-remove! requires exactly 4 arguments (entity component field value)",
+            ));
+        }
+
+        self.compile_node(&args[0], code)?;
+        self.compile_node(&args[1], code)?;
+        self.compile_node(&args[2], code)?;
+        self.compile_node(&args[3], code)?;
+        code.emit(Opcode::VecRemove);
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (vec-add! entity component field value) -> nil
+    ///
+    /// Adds a value to a vector field. Multiple additions on the same field
+    /// are merged when effects are applied.
+    fn compile_vec_add(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 4 {
+            return Err(self.error(
+                span,
+                "vec-add! requires exactly 4 arguments (entity component field value)",
+            ));
+        }
+
+        self.compile_node(&args[0], code)?;
+        self.compile_node(&args[1], code)?;
+        self.compile_node(&args[2], code)?;
+        self.compile_node(&args[3], code)?;
+        code.emit(Opcode::VecAdd);
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (set-remove! entity component field value) -> nil
+    ///
+    /// Removes a value from a set field. Multiple removals on the same field
+    /// are merged when effects are applied.
+    fn compile_set_remove(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 4 {
+            return Err(self.error(
+                span,
+                "set-remove! requires exactly 4 arguments (entity component field value)",
+            ));
+        }
+
+        self.compile_node(&args[0], code)?;
+        self.compile_node(&args[1], code)?;
+        self.compile_node(&args[2], code)?;
+        self.compile_node(&args[3], code)?;
+        code.emit(Opcode::SetRemove);
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (set-add! entity component field value) -> nil
+    ///
+    /// Adds a value to a set field. Multiple additions on the same field
+    /// are merged when effects are applied.
+    fn compile_set_add(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 4 {
+            return Err(self.error(
+                span,
+                "set-add! requires exactly 4 arguments (entity component field value)",
+            ));
+        }
+
+        self.compile_node(&args[0], code)?;
+        self.compile_node(&args[1], code)?;
+        self.compile_node(&args[2], code)?;
+        self.compile_node(&args[3], code)?;
+        code.emit(Opcode::SetAdd);
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (save-state) -> snapshot-id
+    ///
+    /// Saves the current world state and returns a unique snapshot ID.
+    /// Used for backtracking in constraint solvers.
+    fn compile_save_state(&mut self, _span: Span, code: &mut Bytecode) -> Result<()> {
+        code.emit(Opcode::SaveState);
+        Ok(())
+    }
+
+    /// Compiles (restore-state snapshot-id) -> nil
+    ///
+    /// Restores the world to a previously saved snapshot.
+    /// Used for backtracking in constraint solvers.
+    fn compile_restore_state(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 1 {
+            return Err(self.error(
+                span,
+                "restore-state requires exactly 1 argument (snapshot-id)",
+            ));
+        }
+
+        self.compile_node(&args[0], code)?;
+        code.emit(Opcode::RestoreState);
+        let idx = self.add_constant(Value::Nil);
+        code.emit(Opcode::Const(idx));
+
+        Ok(())
+    }
+
+    /// Compiles (has? entity component-kw) -> bool
+    ///
+    /// Checks if an entity has a component.
+    fn compile_has_component(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(span, "has? requires exactly 2 arguments (entity component)"));
+        }
+
+        // Compile entity
+        self.compile_node(&args[0], code)?;
+        // Compile component keyword
+        self.compile_node(&args[1], code)?;
+        // Emit HasComponent opcode
+        code.emit(Opcode::HasComponent);
+
+        Ok(())
+    }
+
+    /// Compiles (retract entity component-kw) -> nil
+    ///
+    /// Removes a component from an entity.
+    fn compile_retract(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+        if args.len() != 2 {
+            return Err(self.error(
+                span,
+                "retract requires exactly 2 arguments (entity component)",
+            ));
+        }
+
+        // Compile entity
+        self.compile_node(&args[0], code)?;
+        // Compile component keyword
+        self.compile_node(&args[1], code)?;
+        // Emit Retract opcode
+        code.emit(Opcode::Retract);
+        // Retract returns nil
         let idx = self.add_constant(Value::Nil);
         code.emit(Opcode::Const(idx));
 

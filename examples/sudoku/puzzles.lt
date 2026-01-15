@@ -1,0 +1,65 @@
+;;;; Sudoku Solver - Sample Puzzles
+;;;;
+;;;; A collection of Sudoku puzzles for testing.
+
+;;; =============================================================================
+;;; Easy Puzzles
+;;; =============================================================================
+
+;; Easy puzzle #1 - "Beginner"
+;; Can be solved with naked singles alone
+(fn: easy-1 []
+  "530070000600195000098000060800060003400803001700020006060000280000419005000080079")
+
+;; Easy puzzle #2
+(fn: easy-2 []
+  "003020600900305001001806400008102900700000008006708200002609500800203009005010300")
+
+;;; =============================================================================
+;;; Medium Puzzles
+;;; =============================================================================
+
+;; Medium puzzle #1 - Requires hidden singles
+(fn: medium-1 []
+  "000260701680070090190004500820100040004602900050003028009300074040050036703018000")
+
+;; Medium puzzle #2
+(fn: medium-2 []
+  "100007090030020008009600500005300900010080002600004000300000010040000007007000300")
+
+;;; =============================================================================
+;;; Hard Puzzles
+;;; =============================================================================
+
+;; Hard puzzle #1 - "Arto Inkala's 2012"
+;; Known as one of the hardest puzzles
+;; Note: May require more advanced techniques than implemented
+(fn: hard-1 []
+  "800000000003600000070090200050007000000045700000100030001000068008500010090000400")
+
+;; Hard puzzle #2 - "AI Escargot"
+;; Another extremely difficult puzzle
+(fn: hard-2 []
+  "100000000000060000000000200000008000004030001600000050000200700080000600050010000")
+
+;;; =============================================================================
+;;; Helper Commands
+;;; =============================================================================
+
+;; Load an easy puzzle (use (print-grid) or (status) to view)
+(fn: load-easy []
+  (do
+    (load-puzzle (easy-1))
+    (say "Loaded easy puzzle. Use (print-grid) to view.")))
+
+;; Load a medium puzzle (use (print-grid) or (status) to view)
+(fn: load-medium []
+  (do
+    (load-puzzle (medium-1))
+    (say "Loaded medium puzzle. Use (print-grid) to view.")))
+
+;; Load a hard puzzle (use (print-grid) or (status) to view)
+(fn: load-hard []
+  (do
+    (load-puzzle (hard-1))
+    (say "Loaded hard puzzle. Use (print-grid) to view.")))

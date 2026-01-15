@@ -80,6 +80,13 @@ pub struct Session {
 
     /// Compiled command syntaxes for natural language parsing.
     compiled_syntaxes: Vec<CompiledSyntax>,
+
+    /// Saved world state snapshots for backtracking.
+    /// Maps snapshot ID to World state at time of save.
+    state_snapshots: HashMap<u64, World>,
+
+    /// Counter for generating unique snapshot IDs.
+    next_snapshot_id: u64,
 }
 
 impl Session {
@@ -103,6 +110,8 @@ impl Session {
             action_decls: HashMap::new(),
             compiled_rules: Vec::new(),
             compiled_syntaxes: Vec::new(),
+            state_snapshots: HashMap::new(),
+            next_snapshot_id: 0,
         }
     }
 
@@ -126,6 +135,8 @@ impl Session {
             action_decls: HashMap::new(),
             compiled_rules: Vec::new(),
             compiled_syntaxes: Vec::new(),
+            state_snapshots: HashMap::new(),
+            next_snapshot_id: 0,
         }
     }
 
@@ -143,6 +154,30 @@ impl Session {
     /// Replaces the world (for auto-commit after mutations).
     pub fn set_world(&mut self, world: World) {
         self.world = world;
+    }
+
+    /// Saves the current world state and returns a unique snapshot ID.
+    ///
+    /// This is used for backtracking in constraint solvers.
+    pub fn save_state(&mut self) -> u64 {
+        let id = self.next_snapshot_id;
+        self.next_snapshot_id += 1;
+        self.state_snapshots.insert(id, self.world.clone());
+        id
+    }
+
+    /// Restores the world to a previously saved snapshot.
+    ///
+    /// Returns Ok(()) if successful, or an error if the snapshot ID is invalid.
+    pub fn restore_state(&mut self, snapshot_id: u64) -> Result<()> {
+        if let Some(snapshot) = self.state_snapshots.get(&snapshot_id) {
+            self.world = snapshot.clone();
+            Ok(())
+        } else {
+            Err(Error::new(ErrorKind::Internal(format!(
+                "No saved state found for snapshot id: {snapshot_id}"
+            ))))
+        }
     }
 
     /// Gets a session variable by name.
@@ -642,6 +677,14 @@ impl RuntimeContext for SessionContext<'_> {
 
     fn intern_keyword(&mut self, name: &str) -> KeywordId {
         self.interner_mut().intern_keyword(name)
+    }
+
+    fn save_state(&mut self) -> u64 {
+        self.session.save_state()
+    }
+
+    fn restore_state(&mut self, snapshot_id: u64) -> Result<()> {
+        self.session.restore_state(snapshot_id)
     }
 }
 

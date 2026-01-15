@@ -1,0 +1,106 @@
+;;;; Sudoku Solver - Grid Initialization
+;;;;
+;;;; Creates the 81 cells of the Sudoku grid.
+
+;;; =============================================================================
+;;; Create All 81 Cells
+;;; =============================================================================
+
+;; Row 1
+(spawn: r1c1 :cell true :position {:row 1 :col 1 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C1"})
+(spawn: r1c2 :cell true :position {:row 1 :col 2 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C2"})
+(spawn: r1c3 :cell true :position {:row 1 :col 3 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C3"})
+(spawn: r1c4 :cell true :position {:row 1 :col 4 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C4"})
+(spawn: r1c5 :cell true :position {:row 1 :col 5 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C5"})
+(spawn: r1c6 :cell true :position {:row 1 :col 6 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C6"})
+(spawn: r1c7 :cell true :position {:row 1 :col 7 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C7"})
+(spawn: r1c8 :cell true :position {:row 1 :col 8 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C8"})
+(spawn: r1c9 :cell true :position {:row 1 :col 9 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R1C9"})
+
+;; Row 2
+(spawn: r2c1 :cell true :position {:row 2 :col 1 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C1"})
+(spawn: r2c2 :cell true :position {:row 2 :col 2 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C2"})
+(spawn: r2c3 :cell true :position {:row 2 :col 3 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C3"})
+(spawn: r2c4 :cell true :position {:row 2 :col 4 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C4"})
+(spawn: r2c5 :cell true :position {:row 2 :col 5 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C5"})
+(spawn: r2c6 :cell true :position {:row 2 :col 6 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C6"})
+(spawn: r2c7 :cell true :position {:row 2 :col 7 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C7"})
+(spawn: r2c8 :cell true :position {:row 2 :col 8 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C8"})
+(spawn: r2c9 :cell true :position {:row 2 :col 9 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R2C9"})
+
+;; Row 3
+(spawn: r3c1 :cell true :position {:row 3 :col 1 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C1"})
+(spawn: r3c2 :cell true :position {:row 3 :col 2 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C2"})
+(spawn: r3c3 :cell true :position {:row 3 :col 3 :box 1} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C3"})
+(spawn: r3c4 :cell true :position {:row 3 :col 4 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C4"})
+(spawn: r3c5 :cell true :position {:row 3 :col 5 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C5"})
+(spawn: r3c6 :cell true :position {:row 3 :col 6 :box 2} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C6"})
+(spawn: r3c7 :cell true :position {:row 3 :col 7 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C7"})
+(spawn: r3c8 :cell true :position {:row 3 :col 8 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C8"})
+(spawn: r3c9 :cell true :position {:row 3 :col 9 :box 3} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R3C9"})
+
+;; Row 4
+(spawn: r4c1 :cell true :position {:row 4 :col 1 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C1"})
+(spawn: r4c2 :cell true :position {:row 4 :col 2 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C2"})
+(spawn: r4c3 :cell true :position {:row 4 :col 3 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C3"})
+(spawn: r4c4 :cell true :position {:row 4 :col 4 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C4"})
+(spawn: r4c5 :cell true :position {:row 4 :col 5 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C5"})
+(spawn: r4c6 :cell true :position {:row 4 :col 6 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C6"})
+(spawn: r4c7 :cell true :position {:row 4 :col 7 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C7"})
+(spawn: r4c8 :cell true :position {:row 4 :col 8 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C8"})
+(spawn: r4c9 :cell true :position {:row 4 :col 9 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R4C9"})
+
+;; Row 5
+(spawn: r5c1 :cell true :position {:row 5 :col 1 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C1"})
+(spawn: r5c2 :cell true :position {:row 5 :col 2 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C2"})
+(spawn: r5c3 :cell true :position {:row 5 :col 3 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C3"})
+(spawn: r5c4 :cell true :position {:row 5 :col 4 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C4"})
+(spawn: r5c5 :cell true :position {:row 5 :col 5 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C5"})
+(spawn: r5c6 :cell true :position {:row 5 :col 6 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C6"})
+(spawn: r5c7 :cell true :position {:row 5 :col 7 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C7"})
+(spawn: r5c8 :cell true :position {:row 5 :col 8 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C8"})
+(spawn: r5c9 :cell true :position {:row 5 :col 9 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R5C9"})
+
+;; Row 6
+(spawn: r6c1 :cell true :position {:row 6 :col 1 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C1"})
+(spawn: r6c2 :cell true :position {:row 6 :col 2 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C2"})
+(spawn: r6c3 :cell true :position {:row 6 :col 3 :box 4} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C3"})
+(spawn: r6c4 :cell true :position {:row 6 :col 4 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C4"})
+(spawn: r6c5 :cell true :position {:row 6 :col 5 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C5"})
+(spawn: r6c6 :cell true :position {:row 6 :col 6 :box 5} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C6"})
+(spawn: r6c7 :cell true :position {:row 6 :col 7 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C7"})
+(spawn: r6c8 :cell true :position {:row 6 :col 8 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C8"})
+(spawn: r6c9 :cell true :position {:row 6 :col 9 :box 6} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R6C9"})
+
+;; Row 7
+(spawn: r7c1 :cell true :position {:row 7 :col 1 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C1"})
+(spawn: r7c2 :cell true :position {:row 7 :col 2 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C2"})
+(spawn: r7c3 :cell true :position {:row 7 :col 3 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C3"})
+(spawn: r7c4 :cell true :position {:row 7 :col 4 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C4"})
+(spawn: r7c5 :cell true :position {:row 7 :col 5 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C5"})
+(spawn: r7c6 :cell true :position {:row 7 :col 6 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C6"})
+(spawn: r7c7 :cell true :position {:row 7 :col 7 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C7"})
+(spawn: r7c8 :cell true :position {:row 7 :col 8 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C8"})
+(spawn: r7c9 :cell true :position {:row 7 :col 9 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R7C9"})
+
+;; Row 8
+(spawn: r8c1 :cell true :position {:row 8 :col 1 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C1"})
+(spawn: r8c2 :cell true :position {:row 8 :col 2 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C2"})
+(spawn: r8c3 :cell true :position {:row 8 :col 3 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C3"})
+(spawn: r8c4 :cell true :position {:row 8 :col 4 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C4"})
+(spawn: r8c5 :cell true :position {:row 8 :col 5 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C5"})
+(spawn: r8c6 :cell true :position {:row 8 :col 6 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C6"})
+(spawn: r8c7 :cell true :position {:row 8 :col 7 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C7"})
+(spawn: r8c8 :cell true :position {:row 8 :col 8 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C8"})
+(spawn: r8c9 :cell true :position {:row 8 :col 9 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R8C9"})
+
+;; Row 9
+(spawn: r9c1 :cell true :position {:row 9 :col 1 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C1"})
+(spawn: r9c2 :cell true :position {:row 9 :col 2 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C2"})
+(spawn: r9c3 :cell true :position {:row 9 :col 3 :box 7} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C3"})
+(spawn: r9c4 :cell true :position {:row 9 :col 4 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C4"})
+(spawn: r9c5 :cell true :position {:row 9 :col 5 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C5"})
+(spawn: r9c6 :cell true :position {:row 9 :col 6 :box 8} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C6"})
+(spawn: r9c7 :cell true :position {:row 9 :col 7 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C7"})
+(spawn: r9c8 :cell true :position {:row 9 :col 8 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C8"})
+(spawn: r9c9 :cell true :position {:row 9 :col 9 :box 9} :candidates {:value [1 2 3 4 5 6 7 8 9]} :name {:value "R9C9"})

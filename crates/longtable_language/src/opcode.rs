@@ -63,6 +63,9 @@ pub enum Opcode {
     JumpIfNot(i16),
     /// Call a function by index in the function table.
     Call(u16),
+    /// Tail call - reuses current frame instead of pushing a new one.
+    /// This enables tail-call optimization for recursive functions.
+    TailCall(u16),
     /// Call a native/builtin function by index with argument count.
     CallNative(u16, u8),
     /// Return from function, top of stack is return value.
@@ -75,6 +78,9 @@ pub enum Opcode {
     StoreLocal(u16),
     /// Load a global variable by slot index.
     LoadGlobal(u16),
+    /// Load a global variable by name (late-bound for forward references).
+    /// The u16 is an index into the constant pool containing the symbol name.
+    LoadGlobalByName(u16),
     /// Store top of stack to global variable slot.
     StoreGlobal(u16),
     /// Load a value from pattern bindings (during rule execution).
@@ -106,6 +112,10 @@ pub enum Opcode {
     /// Get sources of relationships to target: `[target, rel_type] -> [vec<entity>]`
     Sources,
 
+    // === Entity Predicates ===
+    /// Check if entity has component: `[entity, component_kw] -> [bool]`
+    HasComponent,
+
     // === Effects (Mutation Operations) ===
     /// Spawn entity with components map: `[components_map] -> [entity_id]`
     Spawn,
@@ -115,10 +125,34 @@ pub enum Opcode {
     SetComponent,
     /// Set field in component: `[entity, component_kw, field_kw, value] -> []`
     SetField,
+    /// Retract (remove) component from entity: `[entity, component_kw] -> []`
+    Retract,
     /// Create relationship: `[source, rel_kw, target] -> []`
     Link,
     /// Remove relationship: `[source, rel_kw, target] -> []`
     Unlink,
+
+    // === Collection Field Mutations (Mergeable Effects) ===
+    /// Remove value from vector field: `[entity, component_kw, field_kw, value] -> []`
+    /// Multiple removals on the same field are merged when effects are applied.
+    VecRemove,
+    /// Add value to vector field: `[entity, component_kw, field_kw, value] -> []`
+    /// Multiple additions on the same field are merged when effects are applied.
+    VecAdd,
+    /// Remove value from set field: `[entity, component_kw, field_kw, value] -> []`
+    /// Multiple removals on the same field are merged when effects are applied.
+    SetRemove,
+    /// Add value to set field: `[entity, component_kw, field_kw, value] -> []`
+    /// Multiple additions on the same field are merged when effects are applied.
+    SetAdd,
+
+    // === State Management (Backtracking Support) ===
+    /// Save current world state: `[] -> [snapshot_id]`
+    /// Returns a unique ID that can be used to restore this state later.
+    SaveState,
+    /// Restore to a previously saved state: `[snapshot_id] -> []`
+    /// Restores the world to the snapshot identified by the ID.
+    RestoreState,
 
     // === Machine Configuration (RuntimeContext Operations) ===
     /// Register a component schema: `[schema_map] -> []`
@@ -230,6 +264,9 @@ pub enum Opcode {
     Remove,
     /// Group elements by key function: `[fn, coll] -> [result_map]`
     GroupBy,
+    /// Sort collection by key function: `[fn, coll] -> [result_vec]`
+    /// Applies fn to each element to get sort key, sorts by those keys.
+    SortBy,
     /// Zip collections with a combining function: `[fn, coll1, coll2, ...] -> [result_vec]`
     /// Applies fn to corresponding elements from each collection.
     ZipWith,

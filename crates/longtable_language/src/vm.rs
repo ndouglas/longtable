@@ -33,28 +33,30 @@ pub use context::{ReadOnlyContext, RuntimeContext, VmContext, VmEffect, WorldCon
 
 use context::NoRuntimeContext;
 use native::{
-    add_values, compare_values, div_values, format_value, is_truthy, mod_values, mul_values,
-    native_abs, native_acos, native_and, native_asin, native_assoc, native_atan, native_atan2,
-    native_bool_p, native_cbrt, native_ceil, native_clamp, native_coll_p, native_concat,
-    native_conj, native_cons, native_contains_p, native_cos, native_cosh, native_count, native_dec,
-    native_dedupe, native_dissoc, native_distinct, native_drop, native_e, native_empty_p,
-    native_entity_p, native_exp, native_first, native_flatten, native_float_p, native_floor,
-    native_fn_p, native_format, native_get, native_inc, native_int_p, native_interleave,
-    native_interpose, native_into, native_keys, native_keyword_p, native_last, native_list_p,
-    native_log, native_log2, native_log10, native_map_p, native_max, native_merge, native_min,
-    native_nil_p, native_nth, native_number_p, native_or, native_partition, native_partition_all,
-    native_pi, native_pow, native_range, native_rem, native_repeat, native_rest, native_reverse,
-    native_round, native_set, native_set_p, native_sin, native_sinh, native_some_p, native_sort,
-    native_sqrt, native_str, native_str_blank, native_str_contains, native_str_ends_with,
-    native_str_join, native_str_len, native_str_lower, native_str_replace, native_str_replace_all,
-    native_str_split, native_str_starts_with, native_str_substring, native_str_trim,
-    native_str_trim_left, native_str_trim_right, native_str_upper, native_string_p,
-    native_symbol_p, native_take, native_tan, native_tanh, native_trunc, native_type, native_vals,
-    native_vec, native_vec_add, native_vec_angle, native_vec_cross, native_vec_distance,
-    native_vec_dot, native_vec_length, native_vec_length_sq, native_vec_lerp, native_vec_mul,
-    native_vec_normalize, native_vec_scale, native_vec_sub, native_vector_p, native_zip, neg_value,
-    sub_values,
+    add_values, compare_for_sort, compare_values, div_values, format_value, is_truthy, mod_values,
+    mul_values, native_abs, native_acos, native_and, native_asin, native_assoc, native_atan,
+    native_atan2, native_bool_p, native_cbrt, native_ceil, native_char_at, native_clamp,
+    native_coll_p, native_concat, native_conj, native_cons, native_contains_p, native_cos,
+    native_cosh, native_count, native_dec, native_dedupe, native_dissoc, native_distinct,
+    native_drop, native_e, native_empty_p, native_entity_p, native_exp, native_first,
+    native_flatten, native_float_p, native_floor, native_fn_p, native_format, native_get,
+    native_inc, native_int_p, native_interleave, native_interpose, native_into, native_keys,
+    native_keyword_p, native_last, native_list_p, native_log, native_log2, native_log10,
+    native_map_p, native_max, native_merge, native_min, native_nil_p, native_nth, native_number_p,
+    native_or, native_parse_int, native_partition, native_partition_all, native_pi, native_pow,
+    native_range, native_rem, native_repeat, native_rest, native_reverse, native_round, native_set,
+    native_set_p, native_sin, native_sinh, native_some_p, native_sort, native_sqrt, native_str,
+    native_str_blank, native_str_contains, native_str_ends_with, native_str_join, native_str_len,
+    native_str_lower, native_str_replace, native_str_replace_all, native_str_split,
+    native_str_starts_with, native_str_substring, native_str_trim, native_str_trim_left,
+    native_str_trim_right, native_str_upper, native_string_p, native_symbol_p, native_take,
+    native_tan, native_tanh, native_trunc, native_type, native_vals, native_vec, native_vec_add,
+    native_vec_angle, native_vec_cross, native_vec_distance, native_vec_dot, native_vec_length,
+    native_vec_length_sq, native_vec_lerp, native_vec_mul, native_vec_normalize, native_vec_scale,
+    native_vec_sub, native_vector_p, native_zip, neg_value, sub_values,
 };
+
+use std::collections::HashMap;
 
 use longtable_foundation::{
     EntityId, Error, ErrorKind, KeywordId, LtMap, LtSet, LtVec, Result, Value,
@@ -62,6 +64,21 @@ use longtable_foundation::{
 
 use crate::compiler::CompiledProgram;
 use crate::opcode::{Bytecode, Opcode};
+
+/// Key for tracking pending field mutations.
+/// Allows reads within the same execution to see previous writes.
+type FieldKey = (EntityId, KeywordId, KeywordId);
+
+/// Key for tracking pending component mutations.
+type ComponentKey = (EntityId, KeywordId);
+
+/// Pending vector modifications for a field.
+/// Tracks removals and additions to apply when reading.
+#[derive(Default, Clone)]
+struct PendingVecOps {
+    removals: Vec<Value>,
+    additions: Vec<Value>,
+}
 
 // =============================================================================
 // Macros for reducing VM code duplication
@@ -108,6 +125,22 @@ pub struct Vm {
     effects: Vec<VmEffect>,
     /// Counter for spawned entities (used for temporary IDs).
     spawn_counter: u64,
+    /// Pending field mutations for read-your-writes semantics.
+    /// Maps (entity, component, field) -> value for `SetField` effects.
+    /// This allows `GetField` to see mutations made earlier in the same execution.
+    pending_fields: HashMap<FieldKey, Value>,
+    /// Pending component mutations for read-your-writes semantics.
+    /// Maps (entity, component) -> `Option<Value>`.
+    /// - `Some(value)` means the component was set to this value
+    /// - `None` means the component was retracted
+    pending_components: HashMap<ComponentKey, Option<Value>>,
+    /// Pending vector field operations for read-your-writes semantics.
+    /// Maps (entity, component, field) -> pending removals/additions.
+    pending_vec_ops: HashMap<FieldKey, PendingVecOps>,
+    /// Map from global names to slot indices (for late-bound lookups).
+    globals_by_name: HashMap<String, u16>,
+    /// Effects count at each snapshot for proper restoration during backtracking.
+    effects_counts: HashMap<u64, usize>,
 }
 
 impl Default for Vm {
@@ -130,7 +163,17 @@ impl Vm {
             output: Vec::new(),
             effects: Vec::new(),
             spawn_counter: 0,
+            pending_fields: HashMap::new(),
+            pending_components: HashMap::new(),
+            pending_vec_ops: HashMap::new(),
+            globals_by_name: HashMap::new(),
+            effects_counts: HashMap::new(),
         }
+    }
+
+    /// Registers a global variable by name and slot for late-binding support.
+    pub fn register_global(&mut self, name: String, slot: u16) {
+        self.globals_by_name.insert(name, slot);
     }
 
     /// Resets the VM state.
@@ -143,6 +186,9 @@ impl Vm {
         self.output.clear();
         self.effects.clear();
         self.spawn_counter = 0;
+        self.pending_fields.clear();
+        self.pending_components.clear();
+        self.pending_vec_ops.clear();
     }
 
     /// Sets pattern bindings for rule execution.
@@ -169,12 +215,18 @@ impl Vm {
 
     /// Takes and clears the collected effects.
     pub fn take_effects(&mut self) -> Vec<VmEffect> {
+        self.pending_fields.clear();
+        self.pending_components.clear();
+        self.pending_vec_ops.clear();
         std::mem::take(&mut self.effects)
     }
 
     /// Clears the effects buffer.
     pub fn clear_effects(&mut self) {
         self.effects.clear();
+        self.pending_fields.clear();
+        self.pending_components.clear();
+        self.pending_vec_ops.clear();
     }
 
     /// Executes a compiled program and returns the result.
@@ -231,24 +283,65 @@ impl Vm {
     /// Executes bytecode with a `RuntimeContext`.
     ///
     /// This is the unified internal execution method that handles all opcodes.
+    /// Uses an explicit call stack for tail-call optimization.
     fn execute_internal<C: RuntimeContext>(
         &mut self,
-        code: &Bytecode,
+        initial_code: &Bytecode,
         constants: &[Value],
         functions: &[crate::compiler::CompiledFunction],
         ctx: &mut C,
     ) -> Result<Value> {
+        /// A call frame on the explicit call stack (for TCO support).
+        struct CallFrame {
+            /// The function index we were executing (None for initial/top-level code).
+            function_idx: Option<usize>,
+            /// Return address (instruction pointer after the call).
+            return_ip: usize,
+            /// Saved locals.
+            saved_locals: Vec<Value>,
+            /// Saved captures.
+            saved_captures: Vec<Value>,
+        }
+
+        let mut call_stack: Vec<CallFrame> = Vec::with_capacity(256);
+        let mut current_function_idx: Option<usize> = None;
         self.ip = 0;
 
-        while self.ip < code.ops.len() {
-            let op = &code.ops[self.ip];
+        loop {
+            // Get current code based on which function we're executing
+            let code: &Bytecode = match current_function_idx {
+                None => initial_code,
+                Some(idx) => &functions[idx].code,
+            };
+
+            // Check for end of code (implicit return)
+            if self.ip >= code.ops.len() {
+                let result = if self.stack.is_empty() {
+                    Value::Nil
+                } else {
+                    self.pop()?
+                };
+
+                if let Some(frame) = call_stack.pop() {
+                    self.ip = frame.return_ip;
+                    current_function_idx = frame.function_idx;
+                    self.locals = frame.saved_locals;
+                    self.captures = frame.saved_captures;
+                    self.push(result);
+                    continue;
+                }
+                return Ok(result);
+            }
+
+            // Clone opcode so we can modify current_function_idx
+            let op = code.ops[self.ip].clone();
             self.ip += 1;
 
             match op {
                 Opcode::Nop => {}
 
                 Opcode::Const(idx) => {
-                    let value = constants.get(*idx as usize).cloned().unwrap_or(Value::Nil);
+                    let value = constants.get(idx as usize).cloned().unwrap_or(Value::Nil);
                     self.push(value);
                 }
 
@@ -298,23 +391,23 @@ impl Vm {
 
                 // Control flow
                 Opcode::Jump(offset) => {
-                    self.ip = ((self.ip as i32) + (*offset as i32)) as usize;
+                    self.ip = ((self.ip as i32) + (offset as i32)) as usize;
                 }
                 Opcode::JumpIf(offset) => {
                     let cond = self.pop()?;
                     if is_truthy(&cond) {
-                        self.ip = ((self.ip as i32) + (*offset as i32)) as usize;
+                        self.ip = ((self.ip as i32) + (offset as i32)) as usize;
                     }
                 }
                 Opcode::JumpIfNot(offset) => {
                     let cond = self.pop()?;
                     if !is_truthy(&cond) {
-                        self.ip = ((self.ip as i32) + (*offset as i32)) as usize;
+                        self.ip = ((self.ip as i32) + (offset as i32)) as usize;
                     }
                 }
                 Opcode::Call(arg_count) => {
                     // Pop arguments in reverse order
-                    let arg_count = *arg_count as usize;
+                    let arg_count = arg_count as usize;
                     let mut args = Vec::with_capacity(arg_count);
                     for _ in 0..arg_count {
                         args.push(self.pop()?);
@@ -365,10 +458,17 @@ impl Vm {
                         ))));
                     }
 
-                    // Save current VM state
-                    let saved_ip = self.ip;
-                    let saved_locals: Vec<Value> = self.locals.clone();
-                    let saved_captures = std::mem::take(&mut self.captures);
+                    // Push call frame (for TCO support - explicit stack instead of Rust recursion)
+                    call_stack.push(CallFrame {
+                        function_idx: current_function_idx,
+                        return_ip: self.ip,
+                        saved_locals: std::mem::replace(&mut self.locals, vec![Value::Nil; 256]),
+                        saved_captures: std::mem::take(&mut self.captures),
+                    });
+
+                    // Set up new function execution context
+                    current_function_idx = Some(func_idx);
+                    self.ip = 0;
 
                     // Set up arguments as locals
                     for (i, arg) in args.into_iter().enumerate() {
@@ -379,38 +479,113 @@ impl Vm {
                     if let Some(caps) = &func_ref.captures {
                         self.captures.clone_from(&caps.lock().unwrap());
                     }
+                    // Continue main loop with new function's code
+                }
+                Opcode::TailCall(arg_count) => {
+                    // Tail call - reuse current frame instead of pushing a new one
+                    let arg_count = arg_count as usize;
+                    let mut args = Vec::with_capacity(arg_count);
+                    for _ in 0..arg_count {
+                        args.push(self.pop()?);
+                    }
+                    args.reverse();
 
-                    // Execute the function body
-                    let result = self.execute_internal(&func.code, constants, functions, ctx)?;
+                    // Pop the function value
+                    let func_val = self.pop()?;
 
-                    // Restore VM state
-                    self.ip = saved_ip;
-                    self.locals = saved_locals;
-                    self.captures = saved_captures;
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        Value::String(s) if s.starts_with('\'') => {
+                            let symbol_name = s.strip_prefix('\'').unwrap_or(s);
+                            return Err(Error::new(ErrorKind::UndefinedSymbol(
+                                symbol_name.to_string(),
+                            )));
+                        }
+                        Value::String(s) => {
+                            return Err(Error::new(ErrorKind::Internal(format!(
+                                "cannot call string value as function: \"{s}\""
+                            ))));
+                        }
+                        _ => {
+                            return Err(Error::new(ErrorKind::Internal(format!(
+                                "cannot call {} as function (value: {})",
+                                func_val.value_type(),
+                                func_val
+                            ))));
+                        }
+                    };
 
-                    // Push result
-                    self.push(result);
+                    // Look up the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Check arity
+                    if args.len() != func.arity as usize {
+                        return Err(Error::new(ErrorKind::Internal(format!(
+                            "expected {} arguments, got {}",
+                            func.arity,
+                            args.len()
+                        ))));
+                    }
+
+                    // DON'T push a call frame - reuse current frame (this is the TCO!)
+                    // Just switch to new function
+                    current_function_idx = Some(func_idx);
+                    self.ip = 0;
+
+                    // Clear locals and set up arguments
+                    for i in 0..self.locals.len() {
+                        self.locals[i] = Value::Nil;
+                    }
+                    for (i, arg) in args.into_iter().enumerate() {
+                        self.locals[i] = arg;
+                    }
+
+                    // Set up captures from the function's closure
+                    if let Some(caps) = &func_ref.captures {
+                        self.captures.clone_from(&caps.lock().unwrap());
+                    } else {
+                        self.captures.clear();
+                    }
+                    // Continue main loop with new function's code
                 }
                 Opcode::CallNative(idx, arg_count) => {
-                    self.call_native(*idx, *arg_count)?;
+                    self.call_native(idx, arg_count)?;
                 }
                 Opcode::Return => {
-                    // Return top of stack
-                    return self.pop();
+                    // Return from function using explicit call stack
+                    let result = self.pop()?;
+
+                    if let Some(frame) = call_stack.pop() {
+                        // Return to caller
+                        self.ip = frame.return_ip;
+                        current_function_idx = frame.function_idx;
+                        self.locals = frame.saved_locals;
+                        self.captures = frame.saved_captures;
+                        self.push(result);
+                        continue;
+                    }
+                    // No more frames - return from top-level
+                    return Ok(result);
                 }
 
                 // Variables
                 Opcode::LoadLocal(slot) => {
                     let value = self
                         .locals
-                        .get(*slot as usize)
+                        .get(slot as usize)
                         .cloned()
                         .unwrap_or(Value::Nil);
                     self.push(value);
                 }
                 Opcode::StoreLocal(slot) => {
                     let value = self.pop()?;
-                    let slot = *slot as usize;
+                    let slot = slot as usize;
                     if slot >= self.locals.len() {
                         self.locals.resize(slot + 1, Value::Nil);
                     }
@@ -419,14 +594,41 @@ impl Vm {
                 Opcode::LoadGlobal(slot) => {
                     let value = self
                         .globals
-                        .get(*slot as usize)
+                        .get(slot as usize)
                         .cloned()
                         .unwrap_or(Value::Nil);
                     self.push(value);
                 }
+                Opcode::LoadGlobalByName(name_idx) => {
+                    // Late-bound global lookup by name
+                    let name = constants.get(name_idx as usize).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "constant index {name_idx} out of bounds"
+                        )))
+                    })?;
+                    let name_str = match name {
+                        Value::String(s) => s.as_ref(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::Internal(format!(
+                                "expected string constant for global name, got {}",
+                                name.value_type()
+                            ))));
+                        }
+                    };
+                    if let Some(&slot) = self.globals_by_name.get(name_str) {
+                        let value = self
+                            .globals
+                            .get(slot as usize)
+                            .cloned()
+                            .unwrap_or(Value::Nil);
+                        self.push(value);
+                    } else {
+                        return Err(Error::new(ErrorKind::UndefinedSymbol(name_str.to_string())));
+                    }
+                }
                 Opcode::StoreGlobal(slot) => {
                     let value = self.pop()?;
-                    let slot = *slot as usize;
+                    let slot = slot as usize;
                     if slot >= self.globals.len() {
                         self.globals.resize(slot + 1, Value::Nil);
                     }
@@ -435,7 +637,7 @@ impl Vm {
                 Opcode::LoadBinding(idx) => {
                     let value = self
                         .bindings
-                        .get(*idx as usize)
+                        .get(idx as usize)
                         .cloned()
                         .unwrap_or(Value::Nil);
                     self.push(value);
@@ -443,14 +645,14 @@ impl Vm {
                 Opcode::LoadCapture(idx) => {
                     let value = self
                         .captures
-                        .get(*idx as usize)
+                        .get(idx as usize)
                         .cloned()
                         .unwrap_or(Value::Nil);
                     self.push(value);
                 }
                 Opcode::MakeClosure(fn_index, capture_count) => {
                     // Pop captured values in reverse order
-                    let capture_count = *capture_count as usize;
+                    let capture_count = capture_count as usize;
                     let mut captured = Vec::with_capacity(capture_count);
                     for _ in 0..capture_count {
                         captured.push(self.pop()?);
@@ -459,7 +661,7 @@ impl Vm {
 
                     // Create function value with captures (using RefCell for mutability)
                     let fn_value = Value::Fn(longtable_foundation::LtFn::Compiled(
-                        longtable_foundation::CompiledFn::with_captures(*fn_index, captured),
+                        longtable_foundation::CompiledFn::with_captures(fn_index, captured),
                     ));
                     self.push(fn_value);
                 }
@@ -471,7 +673,7 @@ impl Vm {
 
                     // Patch the capture slot
                     if let Value::Fn(longtable_foundation::LtFn::Compiled(ref func)) = closure_val {
-                        func.patch_capture(*capture_idx as usize, new_value);
+                        func.patch_capture(capture_idx as usize, new_value);
                     }
 
                     // Push the closure back
@@ -486,7 +688,14 @@ impl Vm {
                     let entity = extract_entity(&entity_val)?;
                     let component = extract_keyword(&component_val, ctx)?;
 
-                    let result = ctx.get_component(entity, component)?;
+                    // Check pending_components first for read-your-writes semantics
+                    let key = (entity, component);
+                    let result = if let Some(pending) = self.pending_components.get(&key) {
+                        // Clone the pending value (Some(value) or None if retracted)
+                        pending.clone()
+                    } else {
+                        ctx.get_component(entity, component)?
+                    };
                     self.push(result.unwrap_or(Value::Nil));
                 }
 
@@ -499,7 +708,33 @@ impl Vm {
                     let component = extract_keyword(&component_val, ctx)?;
                     let field = extract_keyword(&field_val, ctx)?;
 
-                    let result = ctx.get_field(entity, component, field)?;
+                    // Check pending_fields first for read-your-writes semantics
+                    let key = (entity, component, field);
+                    let base_value = if let Some(value) = self.pending_fields.get(&key) {
+                        Some(value.clone())
+                    } else {
+                        ctx.get_field(entity, component, field)?
+                    };
+
+                    // Apply any pending vec operations to the result
+                    let result = if let Some(pending_ops) = self.pending_vec_ops.get(&key) {
+                        match base_value {
+                            Some(Value::Vec(vec)) => {
+                                // Apply removals and additions
+                                let mut items: Vec<Value> = vec.iter().cloned().collect();
+                                for removal in &pending_ops.removals {
+                                    items.retain(|v| v != removal);
+                                }
+                                for addition in &pending_ops.additions {
+                                    items.push(addition.clone());
+                                }
+                                Some(Value::Vec(items.into_iter().collect()))
+                            }
+                            other => other,
+                        }
+                    } else {
+                        base_value
+                    };
                     self.push(result.unwrap_or(Value::Nil));
                 }
 
@@ -637,6 +872,10 @@ impl Vm {
                     let entity = extract_entity(&entity_val)?;
                     let component = extract_keyword(&component_val, ctx)?;
 
+                    // Store in pending_components for read-your-writes semantics
+                    self.pending_components
+                        .insert((entity, component), Some(value.clone()));
+
                     self.effects.push(VmEffect::SetComponent {
                         entity,
                         component,
@@ -653,6 +892,10 @@ impl Vm {
                     let entity = extract_entity(&entity_val)?;
                     let component = extract_keyword(&component_val, ctx)?;
                     let field = extract_keyword(&field_val, ctx)?;
+
+                    // Store in pending_fields for read-your-writes semantics
+                    self.pending_fields
+                        .insert((entity, component, field), value.clone());
 
                     self.effects.push(VmEffect::SetField {
                         entity,
@@ -692,6 +935,161 @@ impl Vm {
                         relationship,
                         target,
                     });
+                }
+
+                Opcode::HasComponent => {
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = extract_entity(&entity_val)?;
+                    let component = extract_keyword(&component_val, ctx)?;
+
+                    // Check pending_components first for read-your-writes semantics
+                    let key = (entity, component);
+                    let has = if let Some(pending) = self.pending_components.get(&key) {
+                        // Some(value) means component was set, None means retracted
+                        pending.is_some()
+                    } else {
+                        ctx.has_component(entity, component)
+                    };
+                    self.push(Value::Bool(has));
+                }
+
+                Opcode::Retract => {
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = extract_entity(&entity_val)?;
+                    let component = extract_keyword(&component_val, ctx)?;
+
+                    // Mark as retracted (None) in pending_components for read-your-writes
+                    self.pending_components.insert((entity, component), None);
+
+                    self.effects.push(VmEffect::Retract { entity, component });
+                }
+
+                // Mergeable collection field mutations
+                Opcode::VecRemove => {
+                    let value = self.pop()?;
+                    let field_val = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = extract_entity(&entity_val)?;
+                    let component = extract_keyword(&component_val, ctx)?;
+                    let field = extract_keyword(&field_val, ctx)?;
+
+                    // Track pending removal for read-your-writes semantics
+                    let key = (entity, component, field);
+                    self.pending_vec_ops
+                        .entry(key)
+                        .or_default()
+                        .removals
+                        .push(value.clone());
+
+                    self.effects.push(VmEffect::VecRemove {
+                        entity,
+                        component,
+                        field,
+                        value,
+                    });
+                }
+
+                Opcode::VecAdd => {
+                    let value = self.pop()?;
+                    let field_val = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = extract_entity(&entity_val)?;
+                    let component = extract_keyword(&component_val, ctx)?;
+                    let field = extract_keyword(&field_val, ctx)?;
+
+                    // Track pending addition for read-your-writes semantics
+                    let key = (entity, component, field);
+                    self.pending_vec_ops
+                        .entry(key)
+                        .or_default()
+                        .additions
+                        .push(value.clone());
+
+                    self.effects.push(VmEffect::VecAdd {
+                        entity,
+                        component,
+                        field,
+                        value,
+                    });
+                }
+
+                Opcode::SetRemove => {
+                    let value = self.pop()?;
+                    let field_val = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = extract_entity(&entity_val)?;
+                    let component = extract_keyword(&component_val, ctx)?;
+                    let field = extract_keyword(&field_val, ctx)?;
+
+                    self.effects.push(VmEffect::SetRemove {
+                        entity,
+                        component,
+                        field,
+                        value,
+                    });
+                }
+
+                Opcode::SetAdd => {
+                    let value = self.pop()?;
+                    let field_val = self.pop()?;
+                    let component_val = self.pop()?;
+                    let entity_val = self.pop()?;
+
+                    let entity = extract_entity(&entity_val)?;
+                    let component = extract_keyword(&component_val, ctx)?;
+                    let field = extract_keyword(&field_val, ctx)?;
+
+                    self.effects.push(VmEffect::SetAdd {
+                        entity,
+                        component,
+                        field,
+                        value,
+                    });
+                }
+
+                // State Management (Backtracking Support)
+                Opcode::SaveState => {
+                    // Save state immediately through the context for backtracking support.
+                    // This allows save/restore to work during execution, not just after.
+                    let snapshot_id = ctx.save_state();
+                    // Also record the current effects count so we can truncate on restore.
+                    let effects_len = self.effects.len();
+                    self.effects_counts.insert(snapshot_id, effects_len);
+                    self.push(Value::Int(snapshot_id as i64));
+                }
+                Opcode::RestoreState => {
+                    let id_val = self.pop()?;
+                    match id_val {
+                        Value::Int(id) => {
+                            let snapshot_id = id as u64;
+                            // Restore effects count (truncate effects accumulated after save)
+                            if let Some(&effects_count) = self.effects_counts.get(&snapshot_id) {
+                                self.effects.truncate(effects_count);
+                            }
+                            // Clear pending mutations since we're restoring state
+                            self.pending_fields.clear();
+                            self.pending_components.clear();
+                            self.pending_vec_ops.clear();
+                            // Restore world state through the context.
+                            ctx.restore_state(snapshot_id)?;
+                        }
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Int,
+                                actual: id_val.value_type(),
+                            }));
+                        }
+                    }
                 }
 
                 // Collections
@@ -1618,6 +2016,81 @@ impl Vm {
                     self.push(Value::Map(groups));
                 }
 
+                Opcode::SortBy => {
+                    let coll = self.pop()?;
+                    let func_val = self.pop()?;
+
+                    // Extract function reference
+                    let func_ref = match &func_val {
+                        Value::Fn(longtable_foundation::LtFn::Compiled(f)) => f.clone(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Fn(
+                                    longtable_foundation::types::Arity::Variadic(0),
+                                ),
+                                actual: func_val.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Get the function
+                    let func_idx = func_ref.index as usize;
+                    let func = functions.get(func_idx).ok_or_else(|| {
+                        Error::new(ErrorKind::Internal(format!(
+                            "function index {func_idx} out of bounds"
+                        )))
+                    })?;
+
+                    // Extract collection elements
+                    let elements: Vec<Value> = match coll {
+                        Value::Vec(v) => v.iter().cloned().collect(),
+                        Value::Set(s) => s.iter().cloned().collect(),
+                        Value::Nil => Vec::new(),
+                        _ => {
+                            return Err(Error::new(ErrorKind::TypeMismatch {
+                                expected: longtable_foundation::Type::Vec(Box::new(
+                                    longtable_foundation::Type::Any,
+                                )),
+                                actual: coll.value_type(),
+                            }));
+                        }
+                    };
+
+                    // Compute keys for each element
+                    let mut keyed: Vec<(Value, Value)> = Vec::with_capacity(elements.len());
+                    for elem in elements {
+                        // Save current VM state
+                        let saved_ip = self.ip;
+                        let saved_locals = self.locals.clone();
+                        let saved_captures = std::mem::take(&mut self.captures);
+
+                        // Set up argument
+                        self.locals[0] = elem.clone();
+
+                        // Set up captures from function's closure
+                        if let Some(caps) = &func_ref.captures {
+                            self.captures.clone_from(&caps.lock().unwrap());
+                        }
+
+                        // Execute function to get key
+                        let key = self.execute_internal(&func.code, constants, functions, ctx)?;
+
+                        // Restore state
+                        self.ip = saved_ip;
+                        self.locals = saved_locals;
+                        self.captures = saved_captures;
+
+                        keyed.push((key, elem));
+                    }
+
+                    // Sort by keys
+                    keyed.sort_by(|(k1, _), (k2, _)| compare_for_sort(k1, k2));
+
+                    // Extract sorted elements
+                    let result: LtVec<Value> = keyed.into_iter().map(|(_, elem)| elem).collect();
+                    self.push(Value::Vec(result));
+                }
+
                 Opcode::ZipWith => {
                     let colls_vec = self.pop()?;
                     let func_val = self.pop()?;
@@ -1843,13 +2316,7 @@ impl Vm {
                 }
             }
         }
-
-        // Return top of stack or nil
-        self.stack.pop().ok_or_else(|| {
-            Error::new(ErrorKind::Internal(
-                "stack underflow at end of execution".to_string(),
-            ))
-        })
+        // Note: loop always returns from inside, no code reaches here
     }
 
     // Stack operations
@@ -1889,6 +2356,14 @@ impl Vm {
             args.push(self.pop()?);
         }
         args.reverse();
+
+        // Debug: trace native calls
+        if std::env::var("LONGTABLE_DEBUG_NATIVE").is_ok() {
+            eprintln!(
+                "[DEBUG NATIVE] idx={} arg_count={} args={:?}",
+                idx, arg_count, args
+            );
+        }
 
         // Handle special cases that need VM access (print/println)
         let result = match idx {
@@ -1979,67 +2454,69 @@ impl Vm {
                 67 => native_str_blank,
                 68 => native_str_substring,
                 69 => native_format,
-                // 70-78: Collection functions
-                70 => native_take,
-                71 => native_drop,
-                72 => native_concat,
-                73 => native_reverse,
-                74 => native_vec,
-                75 => native_set,
-                76 => native_into,
-                77 => native_sort,
-                78 => native_merge,
-                // 79-96: Math functions
-                79 => native_rem,
-                80 => native_clamp,
-                81 => native_trunc,
-                82 => native_pow,
-                83 => native_cbrt,
-                84 => native_exp,
-                85 => native_log,
-                86 => native_log10,
-                87 => native_log2,
-                88 => native_sin,
-                89 => native_cos,
-                90 => native_tan,
-                91 => native_asin,
-                92 => native_acos,
-                93 => native_atan,
-                94 => native_atan2,
-                95 => native_pi,
-                96 => native_e,
-                // 97-101: Extended collection functions
-                97 => native_flatten,
-                98 => native_distinct,
-                99 => native_dedupe,
-                100 => native_partition,
-                101 => native_partition_all,
-                // 102-113: Vector math functions
-                102 => native_vec_add,
-                103 => native_vec_sub,
-                104 => native_vec_mul,
-                105 => native_vec_scale,
-                106 => native_vec_dot,
-                107 => native_vec_cross,
-                108 => native_vec_length,
-                109 => native_vec_length_sq,
-                110 => native_vec_normalize,
-                111 => native_vec_distance,
-                112 => native_vec_lerp,
-                113 => native_vec_angle,
-                // 114-125: Remaining functions
-                114 => native_bool_p,
-                115 => native_number_p,
-                116 => native_coll_p,
-                117 => native_fn_p,
-                118 => native_entity_p,
-                119 => native_sinh,
-                120 => native_cosh,
-                121 => native_tanh,
-                122 => native_interleave,
-                123 => native_interpose,
-                124 => native_zip,
-                125 => native_repeat,
+                70 => native_char_at,
+                71 => native_parse_int,
+                // 72-80: Collection functions
+                72 => native_take,
+                73 => native_drop,
+                74 => native_concat,
+                75 => native_reverse,
+                76 => native_vec,
+                77 => native_set,
+                78 => native_into,
+                79 => native_sort,
+                80 => native_merge,
+                // 81-98: Math functions
+                81 => native_rem,
+                82 => native_clamp,
+                83 => native_trunc,
+                84 => native_pow,
+                85 => native_cbrt,
+                86 => native_exp,
+                87 => native_log,
+                88 => native_log10,
+                89 => native_log2,
+                90 => native_sin,
+                91 => native_cos,
+                92 => native_tan,
+                93 => native_asin,
+                94 => native_acos,
+                95 => native_atan,
+                96 => native_atan2,
+                97 => native_pi,
+                98 => native_e,
+                // 99-103: Extended collection functions
+                99 => native_flatten,
+                100 => native_distinct,
+                101 => native_dedupe,
+                102 => native_partition,
+                103 => native_partition_all,
+                // 104-115: Vector math functions
+                104 => native_vec_add,
+                105 => native_vec_sub,
+                106 => native_vec_mul,
+                107 => native_vec_scale,
+                108 => native_vec_dot,
+                109 => native_vec_cross,
+                110 => native_vec_length,
+                111 => native_vec_length_sq,
+                112 => native_vec_normalize,
+                113 => native_vec_distance,
+                114 => native_vec_lerp,
+                115 => native_vec_angle,
+                // 116-127: Remaining functions
+                116 => native_bool_p,
+                117 => native_number_p,
+                118 => native_coll_p,
+                119 => native_fn_p,
+                120 => native_entity_p,
+                121 => native_sinh,
+                122 => native_cosh,
+                123 => native_tanh,
+                124 => native_interleave,
+                125 => native_interpose,
+                126 => native_zip,
+                127 => native_repeat,
             ),
         }?;
 

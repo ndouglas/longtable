@@ -1,0 +1,618 @@
+;;;; Sudoku Solver - Solving Strategies
+;;;;
+;;;; Implements constraint propagation strategies for solving Sudoku puzzles.
+
+;;; =============================================================================
+;;; Strategy 1: Naked Singles
+;;; =============================================================================
+;;;
+;;; If a cell has only one candidate, it must be that value.
+;;; This is the most basic solving strategy.
+
+;; Find all cells with exactly one candidate (naked singles)
+(fn: find-naked-singles []
+  (filter (fn [cell]
+            (and (not (solved? cell))
+                 (= (candidate-count cell) 1)))
+          (with-component :cell)))
+
+;; Apply naked singles strategy
+;; Returns the number of cells solved
+(fn: apply-naked-singles []
+  (let [singles (find-naked-singles)]
+    (do
+      (map (fn [cell]
+             (let [value (first (get-field cell :candidates :value))
+                   name (get-field cell :name :value)]
+               (do
+                 (say (str "Naked single: " name " = " value))
+                 (place-value! cell value))))
+           singles)
+      (count singles))))
+
+;;; =============================================================================
+;;; Strategy 2: Hidden Singles
+;;; =============================================================================
+;;;
+;;; If a value can only go in one cell within a row/column/box,
+;;; that cell must have that value, even if it has other candidates.
+
+;; Find hidden singles in a group of cells
+;; Returns list of [cell value] pairs
+(fn: find-hidden-singles-in-group [cells]
+  (let [unsolved (filter (fn [c] (not (solved? c))) cells)]
+    ;; For each digit 1-9, check if only one cell can have it
+    (filter (fn [pair] pair)
+      (map (fn [digit]
+             (let [possible (filter (fn [c] (has-candidate? c digit)) unsolved)]
+               (if (= (count possible) 1)
+                   [(first possible) digit]
+                   nil)))
+           [1 2 3 4 5 6 7 8 9]))))
+
+;; Find hidden singles in all rows
+(fn: find-hidden-singles-rows []
+  (flatten
+    (map (fn [row] (find-hidden-singles-in-group (cells-in-row row)))
+         [1 2 3 4 5 6 7 8 9])))
+
+;; Find hidden singles in all columns
+(fn: find-hidden-singles-cols []
+  (flatten
+    (map (fn [col] (find-hidden-singles-in-group (cells-in-col col)))
+         [1 2 3 4 5 6 7 8 9])))
+
+;; Find hidden singles in all boxes
+(fn: find-hidden-singles-boxes []
+  (flatten
+    (map (fn [box] (find-hidden-singles-in-group (cells-in-box box)))
+         [1 2 3 4 5 6 7 8 9])))
+
+;; Apply hidden singles strategy
+;; Returns the number of cells solved
+(fn: apply-hidden-singles []
+  (let [row-singles (find-hidden-singles-rows)
+        col-singles (find-hidden-singles-cols)
+        box-singles (find-hidden-singles-boxes)
+        ;; Combine and deduplicate (a cell might be found multiple times)
+        all-singles (distinct (concat row-singles col-singles box-singles))]
+    ;; Count cells actually solved
+    ;; Check both solved? and has-candidate? to avoid placing invalid values
+    (count (filter (fn [pair]
+                     (let [cell (first pair)
+                           value (nth pair 1)]
+                       (if (and (not (solved? cell))
+                                (has-candidate? cell value))
+                           (let [name (get-field cell :name :value)]
+                             (do
+                               (say (str "Hidden single: " name " = " value))
+                               (place-value! cell value)
+                               true))
+                           false)))
+                   all-singles))))
+
+;;; =============================================================================
+;;; Strategy 3: X-Wing
+;;; =============================================================================
+;;;
+;;; If a digit appears as a candidate in exactly 2 cells in each of 2 rows,
+;;; and those 4 cells form a rectangle (same 2 columns), then that digit
+;;; can be eliminated from other cells in those columns.
+;;; Similarly for columns eliminating from rows.
+
+;; Check if a row has exactly 2 cells with the given digit as candidate
+;; Returns the column numbers if exactly 2, otherwise nil
+(fn: row-has-2-candidates [row digit]
+  (let [cells (cells-with-candidate-in-row row digit)]
+    (if (= (count cells) 2)
+        (sort (map cell-col cells))
+        nil)))
+
+;; Check if a column has exactly 2 cells with the given digit as candidate
+;; Returns the row numbers if exactly 2, otherwise nil
+(fn: col-has-2-candidates [col digit]
+  (let [cells (cells-with-candidate-in-col col digit)]
+    (if (= (count cells) 2)
+        (sort (map cell-row cells))
+        nil)))
+
+;; Find X-Wing pattern in rows for a digit
+;; Returns {:rows [r1 r2] :cols [c1 c2]} or nil
+(fn: find-x-wing-in-rows [digit]
+  (let [rows-with-2 (filter (fn [r] (row-has-2-candidates r digit))
+                            [1 2 3 4 5 6 7 8 9])]
+    ;; Check all pairs of rows
+    (first (filter (fn [x] (not (nil? x)))
+      (map (fn [pair]
+             (let [r1 (first pair)
+                   r2 (nth pair 1)
+                   cols1 (row-has-2-candidates r1 digit)
+                   cols2 (row-has-2-candidates r2 digit)]
+               ;; If both rows have same 2 columns, it's an X-Wing
+               (if (and cols1 cols2 (= cols1 cols2))
+                   {:digit digit :rows [r1 r2] :cols cols1}
+                   nil)))
+           (pairs rows-with-2))))))
+
+;; Find X-Wing pattern in columns for a digit
+;; Returns {:cols [c1 c2] :rows [r1 r2]} or nil
+(fn: find-x-wing-in-cols [digit]
+  (let [cols-with-2 (filter (fn [c] (col-has-2-candidates c digit))
+                            [1 2 3 4 5 6 7 8 9])]
+    ;; Check all pairs of columns
+    (first (filter (fn [x] (not (nil? x)))
+      (map (fn [pair]
+             (let [c1 (first pair)
+                   c2 (nth pair 1)
+                   rows1 (col-has-2-candidates c1 digit)
+                   rows2 (col-has-2-candidates c2 digit)]
+               ;; If both columns have same 2 rows, it's an X-Wing
+               (if (and rows1 rows2 (= rows1 rows2))
+                   {:digit digit :cols [c1 c2] :rows rows1}
+                   nil)))
+           (pairs cols-with-2))))))
+
+;; Helper to eliminate digit from a single column, skipping specified rows
+(fn: eliminate-from-col-skip-rows [col digit skip-rows]
+  (count (filter (fn [x] (not (nil? x)))
+    (map (fn [cell]
+           (let [r (cell-row cell)]
+             (if (and (not (member? r skip-rows))
+                      (has-candidate? cell digit))
+                 (do
+                   (remove-candidate! cell digit)
+                   true)
+                 false)))
+         (filter (fn [c] (not (solved? c)))
+                 (cells-in-col col))))))
+
+;; Helper to eliminate digit from a single row, skipping specified columns
+(fn: eliminate-from-row-skip-cols [row digit skip-cols]
+  (count (filter (fn [x] (not (nil? x)))
+    (map (fn [cell]
+           (let [c (cell-col cell)]
+             (if (and (not (member? c skip-cols))
+                      (has-candidate? cell digit))
+                 (do
+                   (remove-candidate! cell digit)
+                   true)
+                 false)))
+         (filter (fn [c] (not (solved? c)))
+                 (cells-in-row row))))))
+
+;; Eliminate digit from column cells not in the X-Wing rows
+(fn: eliminate-x-wing-from-cols [pattern]
+  (let [digit (get pattern :digit)
+        rows (get pattern :rows)
+        cols (get pattern :cols)]
+    (reduce (fn [total col]
+              (+ total (eliminate-from-col-skip-rows col digit rows)))
+            0
+            cols)))
+
+;; Eliminate digit from row cells not in the X-Wing columns
+(fn: eliminate-x-wing-from-rows [pattern]
+  (let [digit (get pattern :digit)
+        rows (get pattern :rows)
+        cols (get pattern :cols)]
+    (reduce (fn [total row]
+              (+ total (eliminate-from-row-skip-cols row digit cols)))
+            0
+            rows)))
+
+;; Apply X-Wing strategy (rows version)
+;; Returns number of candidates eliminated
+(fn: apply-x-wing-rows []
+  (let [result (first (filter (fn [x] (not (nil? x)))
+                        (map find-x-wing-in-rows [1 2 3 4 5 6 7 8 9])))]
+    (if result
+        (let [eliminations (eliminate-x-wing-from-cols result)]
+          (if (> eliminations 0)
+              (do
+                (say (str "X-Wing (rows): digit " (get result :digit)
+                          " in rows " (get result :rows)
+                          " cols " (get result :cols)
+                          " - " eliminations " eliminations"))
+                eliminations)
+              0))
+        0)))
+
+;; Apply X-Wing strategy (columns version)
+;; Returns number of candidates eliminated
+(fn: apply-x-wing-cols []
+  (let [result (first (filter (fn [x] (not (nil? x)))
+                        (map find-x-wing-in-cols [1 2 3 4 5 6 7 8 9])))]
+    (if result
+        (let [eliminations (eliminate-x-wing-from-rows result)]
+          (if (> eliminations 0)
+              (do
+                (say (str "X-Wing (cols): digit " (get result :digit)
+                          " in cols " (get result :cols)
+                          " rows " (get result :rows)
+                          " - " eliminations " eliminations"))
+                eliminations)
+              0))
+        0)))
+
+;; Apply X-Wing strategy (both rows and columns)
+(fn: apply-x-wing []
+  (let [rows-result (apply-x-wing-rows)]
+    (if (> rows-result 0)
+        rows-result
+        (apply-x-wing-cols))))
+
+;;; =============================================================================
+;;; Strategy 4: Swordfish
+;;; =============================================================================
+;;;
+;;; Extension of X-Wing to 3 rows/columns.
+;;; If a digit appears in 2-3 cells across exactly 3 rows, and those cells
+;;; cover exactly 3 columns, eliminate that digit from other cells in those columns.
+
+;; Get columns where a digit appears in a row (for rows with 2-3 candidates)
+(fn: row-candidate-cols [row digit]
+  (let [cells (cells-with-candidate-in-row row digit)
+        n (count cells)]
+    (if (and (>= n 2) (<= n 3))
+        (sort (map cell-col cells))
+        nil)))
+
+;; Get rows where a digit appears in a column (for cols with 2-3 candidates)
+(fn: col-candidate-rows [col digit]
+  (let [cells (cells-with-candidate-in-col col digit)
+        n (count cells)]
+    (if (and (>= n 2) (<= n 3))
+        (sort (map cell-row cells))
+        nil)))
+
+;; Find Swordfish pattern in rows for a digit
+;; Returns {:rows [r1 r2 r3] :cols [c1 c2 c3] :digit d} or nil
+(fn: find-swordfish-in-rows [digit]
+  (let [valid-rows (filter (fn [r] (row-candidate-cols r digit))
+                           [1 2 3 4 5 6 7 8 9])]
+    ;; Check all triples of rows
+    (first (filter (fn [x] (not (nil? x)))
+      (map (fn [triple]
+             (let [r1 (first triple)
+                   r2 (nth triple 1)
+                   r3 (nth triple 2)
+                   cols1 (row-candidate-cols r1 digit)
+                   cols2 (row-candidate-cols r2 digit)
+                   cols3 (row-candidate-cols r3 digit)
+                   all-cols (distinct (concat cols1 cols2 cols3))]
+               ;; If union of columns is exactly 3, it's a Swordfish
+               (if (= (count all-cols) 3)
+                   {:digit digit :rows [r1 r2 r3] :cols (sort all-cols)}
+                   nil)))
+           (triples valid-rows))))))
+
+;; Find Swordfish pattern in columns for a digit
+(fn: find-swordfish-in-cols [digit]
+  (let [valid-cols (filter (fn [c] (col-candidate-rows c digit))
+                           [1 2 3 4 5 6 7 8 9])]
+    ;; Check all triples of columns
+    (first (filter (fn [x] (not (nil? x)))
+      (map (fn [triple]
+             (let [c1 (first triple)
+                   c2 (nth triple 1)
+                   c3 (nth triple 2)
+                   rows1 (col-candidate-rows c1 digit)
+                   rows2 (col-candidate-rows c2 digit)
+                   rows3 (col-candidate-rows c3 digit)
+                   all-rows (distinct (concat rows1 rows2 rows3))]
+               ;; If union of rows is exactly 3, it's a Swordfish
+               (if (= (count all-rows) 3)
+                   {:digit digit :cols [c1 c2 c3] :rows (sort all-rows)}
+                   nil)))
+           (triples valid-cols))))))
+
+;; Eliminate digit from column cells not in the Swordfish rows
+;; Reuses helper from X-Wing
+(fn: eliminate-swordfish-from-cols [pattern]
+  (let [digit (get pattern :digit)
+        rows (get pattern :rows)
+        cols (get pattern :cols)]
+    (reduce (fn [total col]
+              (+ total (eliminate-from-col-skip-rows col digit rows)))
+            0
+            cols)))
+
+;; Eliminate digit from row cells not in the Swordfish columns
+;; Reuses helper from X-Wing
+(fn: eliminate-swordfish-from-rows [pattern]
+  (let [digit (get pattern :digit)
+        rows (get pattern :rows)
+        cols (get pattern :cols)]
+    (reduce (fn [total row]
+              (+ total (eliminate-from-row-skip-cols row digit cols)))
+            0
+            rows)))
+
+;; Apply Swordfish strategy (rows version)
+(fn: apply-swordfish-rows []
+  (let [result (first (filter (fn [x] (not (nil? x)))
+                        (map find-swordfish-in-rows [1 2 3 4 5 6 7 8 9])))]
+    (if result
+        (let [eliminations (eliminate-swordfish-from-cols result)]
+          (if (> eliminations 0)
+              (do
+                (say (str "Swordfish (rows): digit " (get result :digit)
+                          " in rows " (get result :rows)
+                          " cols " (get result :cols)
+                          " - " eliminations " eliminations"))
+                eliminations)
+              0))
+        0)))
+
+;; Apply Swordfish strategy (columns version)
+(fn: apply-swordfish-cols []
+  (let [result (first (filter (fn [x] (not (nil? x)))
+                        (map find-swordfish-in-cols [1 2 3 4 5 6 7 8 9])))]
+    (if result
+        (let [eliminations (eliminate-swordfish-from-rows result)]
+          (if (> eliminations 0)
+              (do
+                (say (str "Swordfish (cols): digit " (get result :digit)
+                          " in cols " (get result :cols)
+                          " rows " (get result :rows)
+                          " - " eliminations " eliminations"))
+                eliminations)
+              0))
+        0)))
+
+;; Apply Swordfish strategy (both rows and columns)
+(fn: apply-swordfish []
+  (let [rows-result (apply-swordfish-rows)]
+    (if (> rows-result 0)
+        rows-result
+        (apply-swordfish-cols))))
+
+;;; =============================================================================
+;;; Strategy 5: XY-Wing
+;;; =============================================================================
+;;;
+;;; Find a "pivot" cell with exactly 2 candidates (X, Y).
+;;; Find two "wing" cells, each with exactly 2 candidates:
+;;;   - Wing1 has (X, Z) and is a peer of pivot
+;;;   - Wing2 has (Y, Z) and is a peer of pivot
+;;;   - Wings are NOT peers of each other
+;;; Any cell that is a peer of BOTH wings cannot contain Z.
+
+;; Check if two bivalue cells share exactly one candidate
+;; Returns the shared candidate or nil
+(fn: shared-candidate [cell1 cell2]
+  (let [cands1 (get-candidates cell1)
+        cands2 (get-candidates cell2)]
+    (if (and (= (count cands1) 2) (= (count cands2) 2))
+        (let [shared (filter (fn [c] (member? c cands2)) cands1)]
+          (if (= (count shared) 1)
+              (first shared)
+              nil))
+        nil)))
+
+;; Get the "other" candidate in a bivalue cell (not the given one)
+(fn: other-candidate [cell exclude]
+  (let [cands (get-candidates cell)]
+    (first (filter (fn [c] (not (= c exclude))) cands))))
+
+;; Check if wing2 is a valid second wing for the given pivot, wing1, and z value
+(fn: valid-wing2? [pivot wing1 wing2 z]
+  (let [pivot-cands (get-candidates pivot)
+        x (first pivot-cands)
+        y (nth pivot-cands 1)
+        shared-with-w1 (shared-candidate pivot wing1)
+        other-pivot (if (= shared-with-w1 x) y x)]
+    (and (not (same-cell? wing1 wing2))
+         (not (are-peers? wing1 wing2))
+         (has-candidate? wing2 other-pivot)
+         (has-candidate? wing2 z)
+         (= (candidate-count wing2) 2))))
+
+;; Find wing2 candidates for a given pivot and wing1
+(fn: find-wing2-for [pivot wing1 peer-bivalues]
+  (let [shared1 (shared-candidate pivot wing1)]
+    (if shared1
+        (let [z1 (other-candidate wing1 shared1)]
+          (filter (fn [wing2] (valid-wing2? pivot wing1 wing2 z1))
+                  peer-bivalues))
+        [])))
+
+;; Build XY-Wing patterns for a pivot and wing1 pair
+(fn: build-xy-wing-patterns [pivot wing1 peer-bivalues]
+  (let [shared1 (shared-candidate pivot wing1)]
+    (if shared1
+        (let [z1 (other-candidate wing1 shared1)
+              valid-wing2s (find-wing2-for pivot wing1 peer-bivalues)]
+          (map (fn [wing2] {:pivot pivot :wing1 wing1 :wing2 wing2 :z z1})
+               valid-wing2s))
+        [])))
+
+;; Find XY-Wing patterns from a given pivot cell
+;; Returns list of {:pivot :wing1 :wing2 :z} patterns
+(fn: find-xy-wings-from-pivot [pivot]
+  (let [peer-bivalues (filter (fn [c] (and (are-peers? pivot c)
+                                           (= (candidate-count c) 2)))
+                              (unsolved-cells))]
+    ;; For each potential wing1, find valid wing2s
+    (flatten
+      (map (fn [wing1]
+             (let [shared1 (shared-candidate pivot wing1)]
+               (if shared1
+                   (build-xy-wing-patterns pivot wing1 peer-bivalues)
+                   [])))
+           peer-bivalues))))
+
+;; Find all XY-Wing patterns
+(fn: find-xy-wings []
+  (let [bivalues (bivalue-cells)]
+    (flatten (map find-xy-wings-from-pivot bivalues))))
+
+;; Eliminate Z from cells that are peers of both wings
+(fn: eliminate-xy-wing [pattern]
+  (let [wing1 (get pattern :wing1)
+        wing2 (get pattern :wing2)
+        z (get pattern :z)]
+    (count (filter (fn [x] (not (nil? x)))
+      (map (fn [cell]
+             (if (and (are-peers? cell wing1)
+                      (are-peers? cell wing2)
+                      (not (same-cell? cell wing1))
+                      (not (same-cell? cell wing2))
+                      (has-candidate? cell z))
+                 (do
+                   (remove-candidate! cell z)
+                   true)
+                 false))
+           (unsolved-cells))))))
+
+;; Apply XY-Wing strategy
+;; Returns number of candidates eliminated
+(fn: apply-xy-wing []
+  (let [patterns (find-xy-wings)
+        first-pattern (first patterns)]
+    (if first-pattern
+        (let [eliminations (eliminate-xy-wing first-pattern)]
+          (if (> eliminations 0)
+              (do
+                (say (str "XY-Wing: pivot " (get-field (get first-pattern :pivot) :name :value)
+                          " wings " (get-field (get first-pattern :wing1) :name :value)
+                          " " (get-field (get first-pattern :wing2) :name :value)
+                          " eliminates " (get first-pattern :z)
+                          " - " eliminations " eliminations"))
+                eliminations)
+              0))
+        0)))
+
+;;; =============================================================================
+;;; Main Solver Loop
+;;; =============================================================================
+
+;; Apply all constraint propagation techniques in order of complexity
+;; Returns the number of candidates eliminated or cells solved
+;; NOTE: X-Wing and Swordfish temporarily disabled due to runtime issues
+(fn: apply-all-techniques []
+  (let [naked (apply-naked-singles)]
+    (if (> naked 0)
+        naked
+        (let [hidden (apply-hidden-singles)]
+          (if (> hidden 0)
+              hidden
+              (apply-xy-wing))))))
+
+;; Find the unsolved cell with fewest candidates (MRV heuristic)
+(fn: find-mrv-cell []
+  (min-by candidate-count (unsolved-cells)))
+
+;; Try each candidate for backtracking
+;; Returns true if puzzle solved, false if all candidates failed
+(fn: try-candidates [cell candidates snapshot]
+  (if (empty? candidates)
+      false
+      (do
+        ;; Restore to snapshot before each attempt
+        (restore-state snapshot)
+        (let [guess (first candidates)
+              name (get-field cell :name :value)]
+          (do
+            (place-value! cell guess)
+            (if (solve-with-backtrack)
+                true
+                (try-candidates cell (rest candidates) snapshot)))))))
+
+;; Attempt backtracking when constraint propagation is stuck
+;; Returns true if puzzle solved, false if no solution
+(fn: try-backtrack []
+  (let [cell (find-mrv-cell)]
+    (if (nil? cell)
+        (is-solved?)
+        (let [candidates (get-candidates cell)
+              snapshot (save-state)]
+          (try-candidates cell candidates snapshot)))))
+
+;; Main recursive solver with backtracking support
+;; Returns true if puzzle solved, false if no solution exists
+(fn: solve-with-backtrack []
+  (let [progress (apply-all-techniques)]
+    (if (is-solved?)
+        true
+        (if (has-contradiction?)
+            false
+            (if (> progress 0)
+                (solve-with-backtrack)
+                (try-backtrack))))))
+
+;; Internal solve loop helper (for puzzles without backtracking)
+(fn: solve-loop [iterations]
+  (let [progress (apply-all-techniques)]
+    (if (> progress 0)
+        (solve-loop (+ iterations 1))
+        iterations)))
+
+;; Run the solver with backtracking support
+(fn: run-solver []
+  (if (solve-with-backtrack)
+      (do
+        (say "")
+        (print-grid)
+        (say "")
+        (say "Puzzle solved"))
+      (do
+        (say "")
+        (print-grid)
+        (say "")
+        (say "No solution found"))))
+
+;; Full solver without initial propagation
+;; Use this when you've already called propagate-all! separately
+(fn: solve-only []
+  (run-solver))
+
+;; Full solver - propagate then solve
+(fn: solve []
+  (propagate-all!)
+  (run-solver))
+
+;;; =============================================================================
+;;; Puzzle Loading
+;;; =============================================================================
+
+;; Load a single cell value from puzzle string
+;; Non-recursive to reduce stack usage
+(fn: load-cell-value [puzzle-string idx]
+  (let [char (char-at puzzle-string idx)]
+    (if (and char (not (= char ".")) (not (= char "0")))
+        (let [value (parse-int char)
+              row (+ (/ idx 9) 1)
+              col (+ (mod idx 9) 1)]
+          (if (and value (>= value 1) (<= value 9))
+              (let [cell (get-cell row col)]
+                (set-given! cell value)))))))
+
+;; Load all cell values using map instead of recursion
+(fn: load-puzzle-cells [puzzle-string _]
+  (map (fn [idx] (load-cell-value puzzle-string idx))
+       (range 81)))
+
+;; Load a puzzle from a string of 81 characters
+;; Uses '.' or '0' for empty cells, 1-9 for given values
+;; Reset a single cell
+(fn: reset-cell [cell]
+  (do
+    (retract! cell :solved)
+    (retract! cell :given)
+    (retract! cell :value)
+    (set-field! cell :candidates :value [1 2 3 4 5 6 7 8 9])))
+
+(fn: load-puzzle [puzzle-string]
+  (do
+    ;; Reset all cells first
+    (map reset-cell (with-component :cell))
+    ;; Load cell values
+    (load-puzzle-cells puzzle-string 0)))
+
+;; Print current puzzle status
+(fn: status []
+  (do
+    (print-grid)
+    (say "")
+    (print-progress)))
