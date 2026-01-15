@@ -105,7 +105,7 @@
   (do
     (set-field! cell :value :value value)
     (set-component! cell :solved true)
-    (retract! cell :candidates)
+    (remove-component! cell :candidates)
     ;; Propagate to all peers - use let binding to ensure evaluation
     (let [peers (get-peers cell)]
       (do
@@ -119,7 +119,7 @@
     (set-field! cell :value :value value)
     (set-component! cell :solved true)
     (set-component! cell :given true)
-    (retract! cell :candidates)))
+    (remove-component! cell :candidates)))
 
 ;; Get all solved values from peer cells
 (fn: get-peer-values [cell]

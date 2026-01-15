@@ -44,13 +44,13 @@ cargo build --release
 ### Running the REPL
 
 ```bash
-cargo run --release
+./target/release/longtable
 ```
 
 Or with files:
 
 ```bash
-cargo run --release -- examples/adventure/_.lt
+./target/release/longtable examples/adventure/_.lt
 ```
 
 ### Example Session
@@ -97,7 +97,7 @@ cargo run --release -- examples/adventure/_.lt
 The `examples/sudoku/` directory contains a complete constraint-propagation Sudoku solver implemented in Longtable's DSL:
 
 ```bash
-cargo run --release -- examples/sudoku/_.lt
+./target/release/longtable examples/sudoku/_.lt
 ```
 
 ```

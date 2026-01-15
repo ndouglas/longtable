@@ -125,8 +125,8 @@ pub enum Opcode {
     SetComponent,
     /// Set field in component: `[entity, component_kw, field_kw, value] -> []`
     SetField,
-    /// Retract (remove) component from entity: `[entity, component_kw] -> []`
-    Retract,
+    /// Remove component from entity: `[entity, component_kw] -> []`
+    RemoveComponent,
     /// Create relationship: `[source, rel_kw, target] -> []`
     Link,
     /// Remove relationship: `[source, rel_kw, target] -> []`

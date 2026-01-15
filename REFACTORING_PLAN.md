@@ -71,12 +71,12 @@ The compiler now has a "global environment" that persists across compilations:
 ### Implementation ✅ COMPLETED
 
 All world mutation operations now compile to their corresponding opcodes:
-- `(spawn {:name "foo"})` → compile map, emit `Opcode::Spawn`
-- `(destroy entity)` → compile entity, emit `Opcode::Destroy`
-- `(set-component entity :component value)` → compile args, emit `Opcode::SetComponent`
-- `(set-field entity :component :field value)` → compile args, emit `Opcode::SetField`
-- `(link source :rel-type target)` → compile args, emit `Opcode::Link`
-- `(unlink source :rel-type target)` → compile args, emit `Opcode::Unlink`
+- `(spawn! {:name "foo"})` → compile map, emit `Opcode::Spawn`
+- `(destroy! entity)` → compile entity, emit `Opcode::Destroy`
+- `(set-component! entity :component value)` → compile args, emit `Opcode::SetComponent`
+- `(set-field! entity :component :field value)` → compile args, emit `Opcode::SetField`
+- `(link! source :rel-type target)` → compile args, emit `Opcode::Link`
+- `(unlink! source :rel-type target)` → compile args, emit `Opcode::Unlink`
 
 ---
 
@@ -208,8 +208,8 @@ Removed forms (now compiler/native):
 - `def` → `fn:` compiler form
 - `say` → `println` native function
 - `entity-ref` → compiler form
-- `spawn:` → `(spawn ...)` compiler form
-- `link:` → `(link ...)` compiler form
+- `spawn:` → `(spawn! ...)` compiler form
+- `link:` → `(link! ...)` compiler form
 
 Remaining REPL forms that legitimately need session/world context:
 1. **Mode switching:** `run`, `repl`

@@ -299,7 +299,7 @@ pub enum VmEffect {
     },
 
     /// Remove a component from an entity.
-    Retract {
+    RemoveComponent {
         /// The target entity.
         entity: EntityId,
         /// The component to remove.

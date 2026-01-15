@@ -720,15 +720,15 @@ impl Compiler {
                 // Entity predicates
                 "has?" => return self.compile_has_component(args, span, code),
                 // World mutation operations (! suffix follows Lisp convention)
-                "spawn!" | "spawn" => return self.compile_spawn(args, span, code),
-                "destroy!" | "destroy" => return self.compile_destroy(args, span, code),
-                "set-component!" | "set-component" => {
-                    return self.compile_set_component(args, span, code);
+                "spawn!" => return self.compile_spawn(args, span, code),
+                "destroy!" => return self.compile_destroy(args, span, code),
+                "set-component!" => return self.compile_set_component(args, span, code),
+                "set-field!" => return self.compile_set_field(args, span, code),
+                "remove-component!" | "dissoc!" => {
+                    return self.compile_remove_component(args, span, code);
                 }
-                "set-field!" | "set-field" => return self.compile_set_field(args, span, code),
-                "retract!" | "retract" => return self.compile_retract(args, span, code),
-                "link!" | "link" => return self.compile_link(args, span, code),
-                "unlink!" | "unlink" => return self.compile_unlink(args, span, code),
+                "link!" => return self.compile_link(args, span, code),
+                "unlink!" => return self.compile_unlink(args, span, code),
                 // Mergeable collection mutations
                 "vec-remove!" => return self.compile_vec_remove(args, span, code),
                 "vec-add!" => return self.compile_vec_add(args, span, code),
@@ -2222,7 +2222,7 @@ impl Compiler {
     // World Mutation Operations
     // =========================================================================
 
-    /// Compiles (spawn components-map) -> entity-id
+    /// Compiles (spawn! components-map) -> entity-id
     ///
     /// Creates a new entity with the given components.
     fn compile_spawn(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
@@ -2238,7 +2238,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles (destroy entity) -> nil
+    /// Compiles (destroy! entity) -> nil
     ///
     /// Destroys an entity.
     fn compile_destroy(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
@@ -2257,7 +2257,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles (set-component entity component-kw value) -> nil
+    /// Compiles (set-component! entity component-kw value) -> nil
     ///
     /// Sets a component value on an entity.
     fn compile_set_component(
@@ -2288,7 +2288,7 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles (set-field entity component-kw field-kw value) -> nil
+    /// Compiles (set-field! entity component-kw field-kw value) -> nil
     ///
     /// Sets a field value within a component on an entity.
     fn compile_set_field(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
@@ -2465,14 +2465,19 @@ impl Compiler {
         Ok(())
     }
 
-    /// Compiles (retract entity component-kw) -> nil
+    /// Compiles (remove-component! entity component-kw) -> nil
     ///
-    /// Removes a component from an entity.
-    fn compile_retract(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
+    /// Removes a component from an entity. Also available as `dissoc!`.
+    fn compile_remove_component(
+        &mut self,
+        args: &[Ast],
+        span: Span,
+        code: &mut Bytecode,
+    ) -> Result<()> {
         if args.len() != 2 {
             return Err(self.error(
                 span,
-                "retract requires exactly 2 arguments (entity component)",
+                "remove-component! requires exactly 2 arguments (entity component)",
             ));
         }
 
@@ -2480,16 +2485,16 @@ impl Compiler {
         self.compile_node(&args[0], code)?;
         // Compile component keyword
         self.compile_node(&args[1], code)?;
-        // Emit Retract opcode
-        code.emit(Opcode::Retract);
-        // Retract returns nil
+        // Emit RemoveComponent opcode
+        code.emit(Opcode::RemoveComponent);
+        // RemoveComponent returns nil
         let idx = self.add_constant(Value::Nil);
         code.emit(Opcode::Const(idx));
 
         Ok(())
     }
 
-    /// Compiles (link source rel-kw target) -> nil
+    /// Compiles (link! source rel-kw target) -> nil
     ///
     /// Creates a relationship between two entities.
     fn compile_link(&mut self, args: &[Ast], span: Span, code: &mut Bytecode) -> Result<()> {
@@ -4055,19 +4060,19 @@ mod tests {
 
     #[test]
     fn compile_spawn() {
-        let prog = compile_test("(spawn {:name \"test\"})");
+        let prog = compile_test("(spawn! {:name \"test\"})");
         assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Spawn)));
     }
 
     #[test]
     fn compile_destroy() {
-        let prog = compile_test("(destroy (entity-ref 1 0))");
+        let prog = compile_test("(destroy! (entity-ref 1 0))");
         assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Destroy)));
     }
 
     #[test]
     fn compile_set_component() {
-        let prog = compile_test("(set-component (entity-ref 1 0) :name \"test\")");
+        let prog = compile_test("(set-component! (entity-ref 1 0) :name \"test\")");
         assert!(
             prog.code
                 .ops
@@ -4078,7 +4083,7 @@ mod tests {
 
     #[test]
     fn compile_set_field() {
-        let prog = compile_test("(set-field (entity-ref 1 0) :position :x 10)");
+        let prog = compile_test("(set-field! (entity-ref 1 0) :position :x 10)");
         assert!(
             prog.code
                 .ops
@@ -4089,13 +4094,13 @@ mod tests {
 
     #[test]
     fn compile_link() {
-        let prog = compile_test("(link (entity-ref 1 0) :contains (entity-ref 2 0))");
+        let prog = compile_test("(link! (entity-ref 1 0) :contains (entity-ref 2 0))");
         assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Link)));
     }
 
     #[test]
     fn compile_unlink() {
-        let prog = compile_test("(unlink (entity-ref 1 0) :contains (entity-ref 2 0))");
+        let prog = compile_test("(unlink! (entity-ref 1 0) :contains (entity-ref 2 0))");
         assert!(prog.code.ops.iter().any(|op| matches!(op, Opcode::Unlink)));
     }
 }

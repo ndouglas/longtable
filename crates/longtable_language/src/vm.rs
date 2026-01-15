@@ -955,17 +955,18 @@ impl Vm {
                     self.push(Value::Bool(has));
                 }
 
-                Opcode::Retract => {
+                Opcode::RemoveComponent => {
                     let component_val = self.pop()?;
                     let entity_val = self.pop()?;
 
                     let entity = extract_entity(&entity_val)?;
                     let component = extract_keyword(&component_val, ctx)?;
 
-                    // Mark as retracted (None) in pending_components for read-your-writes
+                    // Mark as removed (None) in pending_components for read-your-writes
                     self.pending_components.insert((entity, component), None);
 
-                    self.effects.push(VmEffect::Retract { entity, component });
+                    self.effects
+                        .push(VmEffect::RemoveComponent { entity, component });
                 }
 
                 // Mergeable collection field mutations

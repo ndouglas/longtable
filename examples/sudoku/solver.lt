@@ -598,9 +598,9 @@
 ;; Reset a single cell
 (fn: reset-cell [cell]
   (do
-    (retract! cell :solved)
-    (retract! cell :given)
-    (retract! cell :value)
+    (remove-component! cell :solved)
+    (remove-component! cell :given)
+    (remove-component! cell :value)
     (set-field! cell :candidates :value [1 2 3 4 5 6 7 8 9])))
 
 (fn: load-puzzle [puzzle-string]

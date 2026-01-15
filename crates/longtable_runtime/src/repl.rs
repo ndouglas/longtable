@@ -435,8 +435,8 @@ impl<E: LineEditor> Repl<E> {
                     let new_world = self.session.world().destroy(entity)?;
                     *self.session.world_mut() = new_world;
                 }
-                VmEffect::Retract { entity, component } => {
-                    let new_world = self.session.world().retract(entity, component)?;
+                VmEffect::RemoveComponent { entity, component } => {
+                    let new_world = self.session.world().remove_component(entity, component)?;
                     *self.session.world_mut() = new_world;
                 }
 

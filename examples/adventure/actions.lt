@@ -15,8 +15,8 @@
     (let [?destination (get-exit ?room ?direction)]
       (if ?destination
         (do
-          (unlink ?actor :in-room ?room)
-          (link ?actor :in-room ?destination)
+          (unlink! ?actor :in-room ?room)
+          (link! ?actor :in-room ?destination)
           (say (describe-room ?destination)))
         (say "You can't go that way.")))])
 

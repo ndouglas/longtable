@@ -628,7 +628,9 @@ pub fn apply_effect(world: World, effect: &VmEffect) -> Result<World> {
             relationship,
             target,
         } => world.unlink(*source, *relationship, *target),
-        VmEffect::Retract { entity, component } => world.retract(*entity, *component),
+        VmEffect::RemoveComponent { entity, component } => {
+            world.remove_component(*entity, *component)
+        }
         VmEffect::VecRemove {
             entity,
             component,

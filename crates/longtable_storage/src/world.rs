@@ -827,7 +827,7 @@ impl World {
     ///
     /// Returns a new World with the component removed.
     /// If the entity doesn't have the component, returns the world unchanged.
-    pub fn retract(&self, entity: EntityId, component: KeywordId) -> Result<World> {
+    pub fn remove_component(&self, entity: EntityId, component: KeywordId) -> Result<World> {
         self.entities.validate(entity)?;
 
         let mut new_components = (*self.components).clone();
