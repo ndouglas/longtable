@@ -10,10 +10,12 @@ use longtable_engine::{
     Bindings, InputEvent, PatternCompiler, PatternMatcher, QueryCompiler, QueryExecutor,
     TickExecutor,
 };
-use longtable_foundation::{EntityId, Error, ErrorKind, Result, Value};
+use longtable_foundation::{EntityId, Error, ErrorKind, KeywordId, Result, Value};
 use longtable_language::{
     Ast, Compiler, Declaration, DeclarationAnalyzer, NamespaceContext, NamespaceInfo, Vm, parse,
 };
+use longtable_parser::NounResolver;
+use longtable_parser::parser::{NaturalLanguageParser, ParseError, ParseResult};
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -2047,18 +2049,161 @@ impl<E: LineEditor> Repl<E> {
 
     /// Dispatches natural language input to the appropriate action.
     fn dispatch_input(&mut self, input: &str) -> Result<Option<Value>> {
-        // Simple tokenization: split on whitespace
+        // Get the player entity as the actor
+        let Some(actor) = self.session.get_entity("player") else {
+            println!("No player entity found.");
+            return Ok(Some(Value::Nil));
+        };
+
+        // Try to parse with NaturalLanguageParser
+        let parse_result = {
+            // Build parser with current vocabulary and syntaxes
+            let vocab = self.session.vocabulary_registry().clone();
+            let mut parser = NaturalLanguageParser::new(vocab);
+
+            // Add all compiled syntaxes
+            for syntax in self.session.compiled_syntaxes() {
+                parser.add_syntax(syntax.clone());
+            }
+
+            // Configure noun resolver with appropriate keywords
+            let name_kw = self.session.world().interner().lookup_keyword("name");
+            let value_kw = self.session.world().interner().lookup_keyword("value");
+            let aliases_kw = self.session.world().interner().lookup_keyword("aliases");
+            let adjectives_kw = self.session.world().interner().lookup_keyword("adjectives");
+
+            if let (Some(name_kw), Some(value_kw)) = (name_kw, value_kw) {
+                let resolver = NounResolver::new(
+                    name_kw,
+                    value_kw,
+                    aliases_kw.unwrap_or(name_kw),    // fallback
+                    adjectives_kw.unwrap_or(name_kw), // fallback
+                );
+                parser = parser.with_noun_resolver(resolver);
+            }
+
+            // Parse the input
+            parser.parse(input, actor, self.session.world())
+        };
+
+        match parse_result {
+            ParseResult::Success(cmd) => {
+                self.execute_parsed_command(cmd.action, actor, cmd.direction, cmd.noun_bindings)
+            }
+            ParseResult::Multiple(cmds) => {
+                // Execute each command in sequence
+                for cmd in cmds {
+                    self.execute_parsed_command(
+                        cmd.action,
+                        actor,
+                        cmd.direction,
+                        cmd.noun_bindings,
+                    )?;
+                }
+                Ok(Some(Value::Nil))
+            }
+            ParseResult::Ambiguous(disamb) => {
+                println!("{}", disamb.question);
+                for (i, (desc, _)) in disamb.options.iter().enumerate() {
+                    println!("  {}. {}", i + 1, desc);
+                }
+                // TODO: Store pending parse state for disambiguation
+                Ok(Some(Value::Nil))
+            }
+            ParseResult::Error(err) => {
+                // Fall back to simple verb lookup for backwards compatibility
+                self.dispatch_input_simple(input, actor).or_else(|_| {
+                    match err {
+                        ParseError::EmptyInput => println!("What?"),
+                        ParseError::NoMatch => {
+                            let verb = input.split_whitespace().next().unwrap_or(input);
+                            println!("I don't understand '{verb}'.");
+                        }
+                        ParseError::UnknownWord(word) => {
+                            println!("I don't know the word '{word}'.");
+                        }
+                        ParseError::NotFound(noun) => {
+                            println!("I don't see any '{noun}' here.");
+                        }
+                        ParseError::WrongType { noun, expected } => {
+                            println!("You can't do that with the {noun} ({expected} expected).");
+                        }
+                        ParseError::NoReferent(pronoun) => {
+                            println!("I don't know what '{pronoun}' refers to.");
+                        }
+                    }
+                    Ok(Some(Value::Nil))
+                })
+            }
+        }
+    }
+
+    /// Executes a parsed command.
+    fn execute_parsed_command(
+        &mut self,
+        action: KeywordId,
+        actor: EntityId,
+        direction: Option<(String, KeywordId)>,
+        noun_bindings: std::collections::HashMap<String, EntityId>,
+    ) -> Result<Option<Value>> {
+        // Get the full action declaration
+        let Some(action_decl) = self.session.get_action_decl(action).cloned() else {
+            let action_name = self
+                .session
+                .world()
+                .interner()
+                .get_keyword(action)
+                .unwrap_or("unknown");
+            println!("Action '{action_name}' has no declaration.");
+            return Ok(Some(Value::Nil));
+        };
+
+        // Build bindings
+        let mut bindings = Bindings::new();
+
+        // Bind actor
+        if action_decl.params.contains(&"actor".to_string()) {
+            bindings.set("actor".to_string(), Value::EntityRef(actor));
+        }
+
+        // Bind direction if present
+        // Note: We use "direction" as the binding name since that's what the `go` action expects
+        // TODO: Properly use the :bindings mapping from command declarations
+        if let Some((_var_name, dir_kw)) = direction {
+            bindings.set("direction".to_string(), Value::Keyword(dir_kw));
+        }
+
+        // Bind all noun bindings (e.g., target, item, container, etc.)
+        for (var_name, entity_id) in noun_bindings {
+            bindings.set(var_name, Value::EntityRef(entity_id));
+        }
+
+        // Evaluate preconditions
+        if !action_decl.preconditions.is_empty() {
+            match self.evaluate_preconditions(&action_decl, &bindings) {
+                Ok(Some(new_bindings)) => bindings = new_bindings,
+                Ok(None) => return Ok(Some(Value::Nil)),
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Execute handlers
+        for handler in &action_decl.handler {
+            self.execute_action_handler(handler, &bindings)?;
+        }
+
+        Ok(Some(Value::Nil))
+    }
+
+    /// Simple input dispatch - fallback for when parser fails.
+    fn dispatch_input_simple(&mut self, input: &str, actor: EntityId) -> Result<Option<Value>> {
         let tokens: Vec<&str> = input.split_whitespace().collect();
 
         if tokens.is_empty() {
-            println!("What?");
-            return Ok(Some(Value::Nil));
+            return Err(Error::new(ErrorKind::Internal("Empty input".to_string())));
         }
 
-        // First token is the verb/action
         let verb = tokens[0].to_lowercase();
-
-        // Look up the action by name
         let action_name_kw = self
             .session
             .world_mut()
@@ -2067,30 +2212,24 @@ impl<E: LineEditor> Repl<E> {
 
         // Check if we have an action registered with this name
         if self.session.action_registry().get(action_name_kw).is_none() {
-            println!("I don't understand '{verb}'.");
-            return Ok(Some(Value::Nil));
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "Unknown action: {verb}"
+            ))));
         }
 
-        // Get the full action declaration
         let Some(action_decl) = self.session.get_action_decl(action_name_kw).cloned() else {
-            println!("Action '{verb}' has no declaration.");
-            return Ok(Some(Value::Nil));
+            return Err(Error::new(ErrorKind::Internal(format!(
+                "Action '{verb}' has no declaration."
+            ))));
         };
 
-        // Get the player entity as the actor
-        let actor = self.session.get_entity("player");
-
-        // Build initial bindings from action params
         let mut bindings = Bindings::new();
 
-        // Bind actor if we have a player and the action expects an actor param
-        if let Some(actor_id) = actor {
-            if action_decl.params.contains(&"actor".to_string()) {
-                bindings.set("actor".to_string(), Value::EntityRef(actor_id));
-            }
+        if action_decl.params.contains(&"actor".to_string()) {
+            bindings.set("actor".to_string(), Value::EntityRef(actor));
         }
 
-        // Bind direction if the action expects it and there's a direction token
+        // Bind direction if present
         if action_decl.params.contains(&"direction".to_string()) && tokens.len() > 1 {
             let direction_str = tokens[1].to_lowercase();
             let direction_kw = self
@@ -2101,20 +2240,14 @@ impl<E: LineEditor> Repl<E> {
             bindings.set("direction".to_string(), Value::Keyword(direction_kw));
         }
 
-        // If there are preconditions, evaluate them to get additional bindings
         if !action_decl.preconditions.is_empty() {
             match self.evaluate_preconditions(&action_decl, &bindings) {
                 Ok(Some(new_bindings)) => bindings = new_bindings,
-                Ok(None) => {
-                    // Preconditions failed - action_decl should have on_fail message
-                    // For now, just return
-                    return Ok(Some(Value::Nil));
-                }
+                Ok(None) => return Ok(Some(Value::Nil)),
                 Err(e) => return Err(e),
             }
         }
 
-        // Execute each handler expression with bindings
         for handler in &action_decl.handler {
             self.execute_action_handler(handler, &bindings)?;
         }

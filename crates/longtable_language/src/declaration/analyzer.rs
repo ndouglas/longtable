@@ -2600,13 +2600,84 @@ impl DeclarationAnalyzer {
 
         let mut result = Vec::new();
 
-        for element in elements {
+        let mut i = 0;
+        while i < elements.len() {
+            let element = &elements[i];
             let syntax_elem = match element {
-                // :verb marker
+                // :verb marker (generic) or :verb/name (specific)
                 Ast::Keyword(k, _) if k == "verb" => SyntaxElement::Verb,
-                // :preposition literal
-                Ast::Keyword(k, _) => SyntaxElement::Preposition(k.clone()),
+                Ast::Keyword(k, _) if k.starts_with("verb/") => {
+                    // Specific verb like :verb/go
+                    // The verb name is after "verb/"
+                    SyntaxElement::SpecificVerb(k[5..].to_string())
+                }
+                // :direction marker - next element should be the variable
+                Ast::Keyword(k, _) if k == "direction" => {
+                    // Look ahead for the direction variable
+                    i += 1;
+                    if i < elements.len() {
+                        if let Ast::Symbol(s, _) = &elements[i] {
+                            if let Some(var_name) = s.strip_prefix('?') {
+                                // Handle ?var:direction format
+                                let var = if let Some((name, _type)) = var_name.split_once(':') {
+                                    name.to_string()
+                                } else {
+                                    var_name.to_string()
+                                };
+                                SyntaxElement::Direction { var }
+                            } else {
+                                return Err(Error::new(ErrorKind::ParseError {
+                                    message: "direction variable must start with ?".to_string(),
+                                    line: element.span().line,
+                                    column: element.span().column,
+                                    context: String::new(),
+                                }));
+                            }
+                        } else {
+                            return Err(Error::new(ErrorKind::ParseError {
+                                message: "expected direction variable after :direction".to_string(),
+                                line: element.span().line,
+                                column: element.span().column,
+                                context: String::new(),
+                            }));
+                        }
+                    } else {
+                        return Err(Error::new(ErrorKind::ParseError {
+                            message: "expected direction variable after :direction".to_string(),
+                            line: element.span().line,
+                            column: element.span().column,
+                            context: String::new(),
+                        }));
+                    }
+                }
+                // :prep/name preposition
+                Ast::Keyword(k, _) if k.starts_with("prep/") => {
+                    SyntaxElement::Preposition(k[5..].to_string())
+                }
+                // Other keyword as literal (e.g., :all)
+                Ast::Keyword(k, _) => SyntaxElement::Literal(k.clone()),
                 // Literal word
+                Ast::Symbol(s, _) if s.starts_with('?') => {
+                    // Direction or noun variable like ?dir:direction
+                    let var_spec = &s[1..];
+                    if let Some((var, type_name)) = var_spec.split_once(':') {
+                        if type_name == "direction" {
+                            SyntaxElement::Direction {
+                                var: var.to_string(),
+                            }
+                        } else {
+                            SyntaxElement::Noun {
+                                var: var.to_string(),
+                                type_constraint: Some(type_name.to_string()),
+                            }
+                        }
+                    } else {
+                        SyntaxElement::Noun {
+                            var: var_spec.to_string(),
+                            type_constraint: None,
+                        }
+                    }
+                }
                 Ast::Symbol(s, _) => SyntaxElement::Literal(s.clone()),
                 // Noun slot: [?var] or [?var type]
                 Ast::Vector(parts, span) => Self::analyze_noun_slot(parts, *span)?,
@@ -2623,6 +2694,7 @@ impl DeclarationAnalyzer {
                 }
             };
             result.push(syntax_elem);
+            i += 1;
         }
 
         Ok(result)

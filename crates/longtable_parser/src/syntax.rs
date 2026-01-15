@@ -74,6 +74,15 @@ impl CompiledSyntax {
             .filter(|e| !matches!(e, CompiledSyntaxElement::OptionalNoun { .. }))
             .count()
     }
+
+    /// Checks if this syntax starts with a direction slot (rather than a verb).
+    #[must_use]
+    pub fn starts_with_direction(&self) -> bool {
+        matches!(
+            self.elements.first(),
+            Some(CompiledSyntaxElement::Direction { .. })
+        )
+    }
 }
 
 /// A successful syntax match.
@@ -123,7 +132,7 @@ impl SyntaxMatcher {
         let verb_kw = vocab.lookup_word(verb_word, interner);
 
         for syntax in syntaxes {
-            // Check if syntax verb matches
+            // Check if syntax starts with a verb
             if let Some(syntax_verb) = syntax.verb() {
                 if let Some(kw) = verb_kw {
                     if let Some(verb) = vocab.lookup_verb(kw) {
@@ -132,6 +141,19 @@ impl SyntaxMatcher {
                             if let Some(m) = Self::try_match(tokens, syntax, vocab, interner) {
                                 matches.push(m);
                             }
+                        }
+                    }
+                }
+            } else if syntax.starts_with_direction() {
+                // Syntax starts with a direction slot (e.g., [:direction ?dir])
+                // Check if first word is a recognized direction
+                if let Some(kw) = verb_kw {
+                    if vocab.lookup_direction(kw).is_some() {
+                        // Try to match this direction-first syntax
+                        if let Some(m) =
+                            Self::try_match_direction_first(tokens, syntax, vocab, interner)
+                        {
+                            matches.push(m);
                         }
                     }
                 }
@@ -264,6 +286,69 @@ impl SyntaxMatcher {
         })
     }
 
+    /// Tries to match tokens against a direction-first syntax pattern.
+    ///
+    /// Direction-first patterns like `[:direction ?dir]` don't start with a verb.
+    /// The first token is expected to be a direction.
+    fn try_match_direction_first(
+        tokens: &[InputToken],
+        syntax: &CompiledSyntax,
+        vocab: &VocabularyRegistry,
+        interner: &Interner,
+    ) -> Option<SyntaxMatch> {
+        let mut token_idx = 0;
+        let mut direction = None;
+
+        for element in &syntax.elements {
+            match element {
+                CompiledSyntaxElement::Direction { var } => {
+                    // Must match direction
+                    match tokens.get(token_idx) {
+                        Some(InputToken::Word(w)) => {
+                            let w_kw = vocab.lookup_word(w, interner)?;
+                            if let Some(dir) = vocab.lookup_direction(w_kw) {
+                                direction = Some((var.clone(), dir.name));
+                                token_idx += 1;
+                            } else {
+                                return None;
+                            }
+                        }
+                        _ => return None,
+                    }
+                }
+                // Direction-first patterns shouldn't have verbs, but handle anyway
+                CompiledSyntaxElement::Verb(_) => {
+                    return None;
+                }
+                _ => {
+                    // Other elements not expected in direction-first patterns
+                }
+            }
+        }
+
+        // Check that we consumed all tokens (except End)
+        let remaining: Vec<_> = tokens[token_idx..]
+            .iter()
+            .filter(|t| !matches!(t, InputToken::End))
+            .collect();
+
+        if !remaining.is_empty() {
+            // Extra tokens - don't match
+            return None;
+        }
+
+        Some(SyntaxMatch {
+            command: syntax.command,
+            action: syntax.action,
+            noun_bindings: HashMap::new(),
+            type_constraints: HashMap::new(),
+            direction,
+            prepositions: Vec::new(),
+            specificity: syntax.specificity(),
+            priority: syntax.priority,
+        })
+    }
+
     /// Collects a noun phrase from the token stream.
     ///
     /// Returns the noun phrase and number of tokens consumed.
@@ -336,6 +421,103 @@ impl SyntaxMatcher {
             },
             consumed,
         ))
+    }
+}
+
+/// Compiles a syntax specification from a Value (vector) into a CompiledSyntax.
+///
+/// The syntax format supports:
+/// - `:verb/go` - Requires verb "go" (or its synonyms)
+/// - `:prep/in` - Requires preposition "in"
+/// - `:direction` - Followed by a direction variable like `?dir`
+/// - `?var` - Noun variable
+/// - `?var:type` - Noun variable with type constraint
+pub struct SyntaxCompiler;
+
+impl SyntaxCompiler {
+    /// Compiles a syntax Value into a CompiledSyntax.
+    ///
+    /// # Arguments
+    /// * `syntax_value` - The `:syntax` field value (a vector)
+    /// * `command_name` - The command name keyword
+    /// * `action_name` - The action to invoke keyword
+    /// * `priority` - Command priority for disambiguation
+    /// * `interner` - The keyword interner
+    pub fn compile(
+        syntax_value: &longtable_foundation::Value,
+        command_name: longtable_foundation::KeywordId,
+        action_name: longtable_foundation::KeywordId,
+        priority: i32,
+        interner: &longtable_foundation::Interner,
+    ) -> Option<CompiledSyntax> {
+        let vec = syntax_value.as_vec()?;
+        let mut elements = Vec::new();
+        let mut expect_direction_var = false;
+
+        for item in vec.iter() {
+            match item {
+                longtable_foundation::Value::Keyword(kw) => {
+                    let name = interner.get_keyword(*kw)?;
+
+                    if name == "direction" {
+                        // Next element should be a direction variable
+                        expect_direction_var = true;
+                    } else if let Some(verb_name) = name.strip_prefix("verb/") {
+                        // Verb element like :verb/go
+                        let verb_kw = interner.lookup_keyword(verb_name)?;
+                        elements.push(CompiledSyntaxElement::Verb(verb_kw));
+                    } else if let Some(prep_name) = name.strip_prefix("prep/") {
+                        // Preposition element like :prep/in
+                        let prep_kw = interner.lookup_keyword(prep_name)?;
+                        elements.push(CompiledSyntaxElement::Preposition(prep_kw));
+                    } else if name == "all" {
+                        // Special "all" literal
+                        elements.push(CompiledSyntaxElement::Literal("all".to_string()));
+                    }
+                    // Other keywords are ignored for now
+                }
+                longtable_foundation::Value::Symbol(sym_id) => {
+                    let sym = interner.get_symbol(*sym_id)?;
+                    if let Some(var_spec) = sym.strip_prefix('?') {
+                        // Variable like ?dir or ?target:thing
+                        let (var_name, type_constraint) =
+                            if let Some((name, type_name)) = var_spec.split_once(':') {
+                                let type_kw = interner.lookup_keyword(type_name);
+                                (name.to_string(), type_kw)
+                            } else {
+                                (var_spec.to_string(), None)
+                            };
+
+                        if expect_direction_var {
+                            // This is a direction variable following :direction
+                            elements.push(CompiledSyntaxElement::Direction { var: var_name });
+                            expect_direction_var = false;
+                        } else if type_constraint.and_then(|tc| interner.get_keyword(tc))
+                            == Some("direction")
+                        {
+                            // Variable with :direction type constraint
+                            elements.push(CompiledSyntaxElement::Direction { var: var_name });
+                        } else {
+                            // Regular noun variable
+                            elements.push(CompiledSyntaxElement::Noun {
+                                var: var_name,
+                                type_constraint,
+                            });
+                        }
+                    }
+                }
+                _ => {
+                    // Skip other value types
+                }
+            }
+        }
+
+        Some(CompiledSyntax {
+            command: command_name,
+            action: action_name,
+            elements,
+            priority,
+        })
     }
 }
 

@@ -37,6 +37,7 @@ struct AdventureKeywords {
     name: KeywordId,
     aliases: KeywordId,
     adjectives: KeywordId,
+    value: KeywordId, // Field keyword for component values
 
     // Item properties
     takeable: KeywordId,
@@ -97,6 +98,7 @@ impl AdventureKeywords {
             name: interner.intern_keyword("name"),
             aliases: interner.intern_keyword("aliases"),
             adjectives: interner.intern_keyword("adjectives"),
+            value: interner.intern_keyword("value"),
 
             // Items
             takeable: interner.intern_keyword("takeable"),
@@ -162,28 +164,28 @@ fn register_schemas(world: World, kw: &AdventureKeywords) -> World {
         )
         .unwrap();
 
-    // Named entity component
+    // Named entity component (uses :value field like the real game)
     let world = world
         .register_component(
-            ComponentSchema::new(kw.name).with_field(FieldSchema::required(kw.name, Type::String)),
+            ComponentSchema::new(kw.name).with_field(FieldSchema::required(kw.value, Type::String)),
         )
         .unwrap();
 
-    // Aliases component
+    // Aliases component (uses :value field like the real game)
     let world = world
         .register_component(
             ComponentSchema::new(kw.aliases).with_field(FieldSchema::required(
-                kw.aliases,
+                kw.value,
                 Type::Vec(Box::new(Type::String)),
             )),
         )
         .unwrap();
 
-    // Adjectives component
+    // Adjectives component (uses :value field like the real game)
     let world =
         world
             .register_component(ComponentSchema::new(kw.adjectives).with_field(
-                FieldSchema::required(kw.adjectives, Type::Vec(Box::new(Type::String))),
+                FieldSchema::required(kw.value, Type::Vec(Box::new(Type::String))),
             ))
             .unwrap();
 
@@ -338,13 +340,13 @@ fn create_item(
 ) -> (World, EntityId) {
     let (world, item) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(item, kw.name, kw.name, Value::from(name))
+        .set_field(item, kw.name, kw.value, Value::from(name))
         .unwrap();
     let world = world
         .set_field(
             item,
             kw.adjectives,
-            kw.adjectives,
+            kw.value,
             Value::Vec(make_vec(adjectives.into_iter().map(Value::from).collect())),
         )
         .unwrap();
@@ -352,7 +354,7 @@ fn create_item(
         .set_field(
             item,
             kw.aliases,
-            kw.aliases,
+            kw.value,
             Value::Vec(make_vec(aliases.into_iter().map(Value::from).collect())),
         )
         .unwrap();
@@ -410,13 +412,13 @@ fn create_enemy(
 ) -> (World, EntityId) {
     let (world, enemy) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(enemy, kw.name, kw.name, Value::from(name))
+        .set_field(enemy, kw.name, kw.value, Value::from(name))
         .unwrap();
     let world = world
         .set_field(
             enemy,
             kw.adjectives,
-            kw.adjectives,
+            kw.value,
             Value::Vec(make_vec(adjectives.into_iter().map(Value::from).collect())),
         )
         .unwrap();
@@ -424,7 +426,7 @@ fn create_enemy(
         .set_field(
             enemy,
             kw.aliases,
-            kw.aliases,
+            kw.value,
             Value::Vec(make_vec(Vec::new())),
         )
         .unwrap();
@@ -666,8 +668,8 @@ fn create_test_world() -> TestWorld {
     let mut vocab = VocabularyRegistry::new();
     register_all(&mut vocab, &kw.stdlib);
 
-    // Set up noun resolver
-    let resolver = NounResolver::new(kw.name, kw.aliases, kw.adjectives);
+    // Set up noun resolver (using :value as the field keyword, like the real game)
+    let resolver = NounResolver::new(kw.name, kw.value, kw.aliases, kw.adjectives);
 
     // Set up actions
     let actions = create_action_registry(&kw);

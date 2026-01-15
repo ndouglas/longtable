@@ -64,5 +64,7 @@ pub mod vocabulary;
 
 // Re-export main types for convenience
 pub use action::{ActionRegistry, CompiledAction};
+pub use noun_phrase::NounResolver;
 pub use parser::{NaturalLanguageParser, ParseResult};
+pub use syntax::{CompiledSyntax, CompiledSyntaxElement, SyntaxCompiler};
 pub use vocabulary::VocabularyRegistry;

@@ -16,19 +16,20 @@ fn setup_world_with_items() -> (World, TestSetup) {
 
     // Intern keywords
     let name_kw = world.interner_mut().intern_keyword("name");
+    let value_kw = world.interner_mut().intern_keyword("value");
     let aliases_kw = world.interner_mut().intern_keyword("aliases");
     let adjectives_kw = world.interner_mut().intern_keyword("adjectives");
 
-    // Register schemas
+    // Register schemas (using :value as field, like the real game)
     let world = world
         .register_component(
-            ComponentSchema::new(name_kw).with_field(FieldSchema::required(name_kw, Type::String)),
+            ComponentSchema::new(name_kw).with_field(FieldSchema::required(value_kw, Type::String)),
         )
         .unwrap();
     let world = world
         .register_component(
             ComponentSchema::new(aliases_kw).with_field(FieldSchema::required(
-                aliases_kw,
+                value_kw,
                 Type::Vec(Box::new(Type::String)),
             )),
         )
@@ -36,20 +37,20 @@ fn setup_world_with_items() -> (World, TestSetup) {
     let world =
         world
             .register_component(ComponentSchema::new(adjectives_kw).with_field(
-                FieldSchema::required(adjectives_kw, Type::Vec(Box::new(Type::String))),
+                FieldSchema::required(value_kw, Type::Vec(Box::new(Type::String))),
             ))
             .unwrap();
 
     // Create sword entity
     let (world, sword) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(sword, name_kw, name_kw, Value::from("sword"))
+        .set_field(sword, name_kw, value_kw, Value::from("sword"))
         .unwrap();
     let world = world
         .set_field(
             sword,
             aliases_kw,
-            aliases_kw,
+            value_kw,
             Value::Vec(make_vec(vec![Value::from("blade")])),
         )
         .unwrap();
@@ -57,7 +58,7 @@ fn setup_world_with_items() -> (World, TestSetup) {
         .set_field(
             sword,
             adjectives_kw,
-            adjectives_kw,
+            value_kw,
             Value::Vec(make_vec(vec![Value::from("iron")])),
         )
         .unwrap();
@@ -65,13 +66,13 @@ fn setup_world_with_items() -> (World, TestSetup) {
     // Create lamp entity
     let (world, lamp) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(lamp, name_kw, name_kw, Value::from("lamp"))
+        .set_field(lamp, name_kw, value_kw, Value::from("lamp"))
         .unwrap();
     let world = world
         .set_field(
             lamp,
             adjectives_kw,
-            adjectives_kw,
+            value_kw,
             Value::Vec(make_vec(vec![Value::from("brass")])),
         )
         .unwrap();
@@ -79,13 +80,13 @@ fn setup_world_with_items() -> (World, TestSetup) {
     // Create another lamp (for disambiguation tests)
     let (world, other_lamp) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(other_lamp, name_kw, name_kw, Value::from("lamp"))
+        .set_field(other_lamp, name_kw, value_kw, Value::from("lamp"))
         .unwrap();
     let world = world
         .set_field(
             other_lamp,
             adjectives_kw,
-            adjectives_kw,
+            value_kw,
             Value::Vec(make_vec(vec![Value::from("rusty")])),
         )
         .unwrap();
@@ -97,6 +98,7 @@ fn setup_world_with_items() -> (World, TestSetup) {
         name_kw,
         aliases_kw,
         adjectives_kw,
+        value_kw,
     };
 
     (world, setup)
@@ -109,13 +111,19 @@ struct TestSetup {
     name_kw: longtable_foundation::KeywordId,
     aliases_kw: longtable_foundation::KeywordId,
     adjectives_kw: longtable_foundation::KeywordId,
+    value_kw: longtable_foundation::KeywordId,
 }
 
 #[test]
 fn resolve_by_exact_name() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("sword");
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -129,7 +137,12 @@ fn resolve_by_exact_name() {
 fn resolve_by_alias() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("blade");
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -143,7 +156,12 @@ fn resolve_by_alias() {
 fn resolve_ambiguous_returns_multiple() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("lamp"); // Both lamps match
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -163,7 +181,12 @@ fn resolve_ambiguous_returns_multiple() {
 fn resolve_with_adjective_disambiguation() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("lamp").with_adjective("brass");
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -177,7 +200,12 @@ fn resolve_with_adjective_disambiguation() {
 fn resolve_not_found() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("dragon");
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -191,7 +219,12 @@ fn resolve_not_found() {
 fn resolve_not_in_scope() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("sword");
     let scope = vec![setup.lamp, setup.other_lamp]; // Sword not in scope
@@ -205,7 +238,12 @@ fn resolve_not_in_scope() {
 fn resolve_all_quantifier() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("lamp").with_quantifier(Quantifier::All);
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -225,7 +263,12 @@ fn resolve_all_quantifier() {
 fn resolve_any_quantifier() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("lamp").with_quantifier(Quantifier::Any);
     let scope = vec![setup.sword, setup.lamp, setup.other_lamp];
@@ -241,7 +284,12 @@ fn resolve_any_quantifier() {
 #[test]
 fn describe_entity() {
     let (world, setup) = setup_world_with_items();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let desc = resolver.describe(setup.lamp, &world);
 
@@ -254,7 +302,12 @@ fn describe_entity() {
 fn case_insensitive_matching() {
     let (world, setup) = setup_world_with_items();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("SWORD");
     let scope = vec![setup.sword, setup.lamp];

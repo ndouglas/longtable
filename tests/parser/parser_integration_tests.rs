@@ -60,10 +60,11 @@ fn parser_with_noun_resolver() {
     let vocab = VocabularyRegistry::new();
 
     let name_kw = longtable_foundation::KeywordId::VALUE;
+    let value_kw = longtable_foundation::KeywordId::VALUE; // same as name_kw in tests
     let aliases_kw = longtable_foundation::KeywordId::REL_TYPE;
     let adjectives_kw = longtable_foundation::KeywordId::REL_SOURCE;
 
-    let resolver = NounResolver::new(name_kw, aliases_kw, adjectives_kw);
+    let resolver = NounResolver::new(name_kw, value_kw, aliases_kw, adjectives_kw);
 
     let _parser = NaturalLanguageParser::new(vocab).with_noun_resolver(resolver);
 }
@@ -218,18 +219,20 @@ fn setup_resolution_world() -> (World, ResolutionSetup) {
     let mut world = World::new(42);
 
     let name_kw = world.interner_mut().intern_keyword("name");
+    let value_kw = world.interner_mut().intern_keyword("value");
     let aliases_kw = world.interner_mut().intern_keyword("aliases");
     let adjectives_kw = world.interner_mut().intern_keyword("adjectives");
 
+    // Register schemas (using :value as field, like the real game)
     let world = world
         .register_component(
-            ComponentSchema::new(name_kw).with_field(FieldSchema::required(name_kw, Type::String)),
+            ComponentSchema::new(name_kw).with_field(FieldSchema::required(value_kw, Type::String)),
         )
         .unwrap();
     let world = world
         .register_component(
             ComponentSchema::new(aliases_kw).with_field(FieldSchema::required(
-                aliases_kw,
+                value_kw,
                 Type::Vec(Box::new(Type::String)),
             )),
         )
@@ -237,20 +240,20 @@ fn setup_resolution_world() -> (World, ResolutionSetup) {
     let world =
         world
             .register_component(ComponentSchema::new(adjectives_kw).with_field(
-                FieldSchema::required(adjectives_kw, Type::Vec(Box::new(Type::String))),
+                FieldSchema::required(value_kw, Type::Vec(Box::new(Type::String))),
             ))
             .unwrap();
 
     // Create sword
     let (world, sword) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(sword, name_kw, name_kw, Value::from("sword"))
+        .set_field(sword, name_kw, value_kw, Value::from("sword"))
         .unwrap();
     let world = world
         .set_field(
             sword,
             adjectives_kw,
-            adjectives_kw,
+            value_kw,
             Value::Vec(make_vec(vec![Value::from("iron")])),
         )
         .unwrap();
@@ -258,13 +261,13 @@ fn setup_resolution_world() -> (World, ResolutionSetup) {
     // Create lamp
     let (world, lamp) = world.spawn(&LtMap::new()).unwrap();
     let world = world
-        .set_field(lamp, name_kw, name_kw, Value::from("lamp"))
+        .set_field(lamp, name_kw, value_kw, Value::from("lamp"))
         .unwrap();
     let world = world
         .set_field(
             lamp,
             adjectives_kw,
-            adjectives_kw,
+            value_kw,
             Value::Vec(make_vec(vec![Value::from("brass")])),
         )
         .unwrap();
@@ -275,6 +278,7 @@ fn setup_resolution_world() -> (World, ResolutionSetup) {
         name_kw,
         aliases_kw,
         adjectives_kw,
+        value_kw,
     };
 
     (world, setup)
@@ -286,13 +290,19 @@ struct ResolutionSetup {
     name_kw: longtable_foundation::KeywordId,
     aliases_kw: longtable_foundation::KeywordId,
     adjectives_kw: longtable_foundation::KeywordId,
+    value_kw: longtable_foundation::KeywordId,
 }
 
 #[test]
 fn resolver_finds_entity_by_name() {
     let (world, setup) = setup_resolution_world();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("sword");
     let scope = vec![setup.sword, setup.lamp];
@@ -306,7 +316,12 @@ fn resolver_finds_entity_by_name() {
 fn resolver_returns_not_found() {
     let (world, setup) = setup_resolution_world();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("dragon");
     let scope = vec![setup.sword, setup.lamp];
@@ -320,7 +335,12 @@ fn resolver_returns_not_found() {
 fn resolver_with_adjective() {
     let (world, setup) = setup_resolution_world();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("sword").with_adjective("iron");
     let scope = vec![setup.sword, setup.lamp];
@@ -334,7 +354,12 @@ fn resolver_with_adjective() {
 fn resolver_any_quantifier_returns_first() {
     let (world, setup) = setup_resolution_world();
     let vocab = VocabularyRegistry::new();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let np = NounPhrase::new("sword").with_quantifier(Quantifier::Any);
     let scope = vec![setup.sword, setup.lamp];
@@ -348,7 +373,12 @@ fn resolver_any_quantifier_returns_first() {
 #[test]
 fn resolver_describes_entity() {
     let (world, setup) = setup_resolution_world();
-    let resolver = NounResolver::new(setup.name_kw, setup.aliases_kw, setup.adjectives_kw);
+    let resolver = NounResolver::new(
+        setup.name_kw,
+        setup.value_kw,
+        setup.aliases_kw,
+        setup.adjectives_kw,
+    );
 
     let desc = resolver.describe(setup.lamp, &world);
 

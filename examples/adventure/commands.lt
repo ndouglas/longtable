@@ -38,7 +38,7 @@
   :action look
   :bindings {})
 
-;; Examine object: "examine sword", "x lamp", "look at chest"
+;; Examine object: "examine sword", "x lamp", "look at chest", "l chest"
 (command: examine-thing
   :syntax [:verb/examine ?target:thing]
   :action examine
@@ -46,6 +46,12 @@
 
 (command: look-at-thing
   :syntax [:verb/look :prep/at ?target:thing]
+  :action examine
+  :bindings {:target ?target})
+
+;; Look directly at object without preposition: "look chest", "l sword"
+(command: look-thing
+  :syntax [:verb/look ?target:thing]
   :action examine
   :bindings {:target ?target})
 

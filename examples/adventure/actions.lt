@@ -63,15 +63,10 @@
 
 (action: examine
   :params [actor target]
-  :preconditions [
-    ;; Target must be visible (in room or inventory)
-    (or [?target :in-room ?room]
-        [?target :contained-in ?actor]
-        [?target :contained-in ?container])
-  ]
+  ;; Note: Preconditions removed because (or ...) is not properly implemented.
+  ;; The parser handles visibility/scoping, so targets are already validated.
   :handler [
-    (say (get ?target :description))
-    (set-it! ?target)
+    (say (get-field ?target :description :value))
   ])
 
 (action: search

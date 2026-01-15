@@ -649,6 +649,8 @@ impl NounTypeDecl {
 pub enum SyntaxElement {
     /// The verb position (always first)
     Verb,
+    /// A specific verb that must appear (e.g., `:verb/go` matches "go" and its synonyms)
+    SpecificVerb(String),
     /// A literal word that must appear
     Literal(String),
     /// A noun slot with variable binding and optional type constraint

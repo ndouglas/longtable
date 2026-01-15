@@ -2775,7 +2775,83 @@ impl Compiler {
             Value::Int(i64::from(decl.priority)),
         );
 
+        // Serialize syntax as a vector
+        let syntax_key = self.intern_keyword("syntax");
+        let syntax_val = self.syntax_elements_to_value(&decl.syntax)?;
+        map = map.insert(Value::Keyword(syntax_key), syntax_val);
+
         Ok(Value::Map(map))
+    }
+
+    /// Converts syntax elements to a Value vector.
+    fn syntax_elements_to_value(
+        &mut self,
+        elements: &[crate::declaration::SyntaxElement],
+    ) -> Result<Value> {
+        use crate::declaration::SyntaxElement;
+
+        let mut values = Vec::new();
+
+        for element in elements {
+            match element {
+                SyntaxElement::Verb => {
+                    // Verb position - use the command's verb (will be looked up by name)
+                    // For now, just mark it as :verb
+                    let kw = self.intern_keyword("verb");
+                    values.push(Value::Keyword(kw));
+                }
+                SyntaxElement::SpecificVerb(verb_name) => {
+                    // Specific verb like :verb/go
+                    let kw = self.intern_keyword(&format!("verb/{verb_name}"));
+                    values.push(Value::Keyword(kw));
+                }
+                SyntaxElement::Literal(word) => {
+                    let kw = self.intern_keyword(word);
+                    values.push(Value::Keyword(kw));
+                }
+                SyntaxElement::Noun {
+                    var,
+                    type_constraint,
+                } => {
+                    // Serialize as a symbol like ?var:type or ?var
+                    let sym_str = if let Some(tc) = type_constraint {
+                        format!("?{var}:{tc}")
+                    } else {
+                        format!("?{var}")
+                    };
+                    let sym_id = self.intern_symbol(&sym_str);
+                    values.push(Value::Symbol(sym_id));
+                }
+                SyntaxElement::OptionalNoun {
+                    var,
+                    type_constraint,
+                } => {
+                    // Same as Noun but marked optional (for now, treat the same)
+                    let sym_str = if let Some(tc) = type_constraint {
+                        format!("?{var}:{tc}")
+                    } else {
+                        format!("?{var}")
+                    };
+                    let sym_id = self.intern_symbol(&sym_str);
+                    values.push(Value::Symbol(sym_id));
+                }
+                SyntaxElement::Direction { var } => {
+                    // Serialize as :direction followed by ?var
+                    let dir_kw = self.intern_keyword("direction");
+                    values.push(Value::Keyword(dir_kw));
+                    let sym_str = format!("?{var}");
+                    let sym_id = self.intern_symbol(&sym_str);
+                    values.push(Value::Symbol(sym_id));
+                }
+                SyntaxElement::Preposition(name) => {
+                    // Serialize as :prep/name
+                    let kw = self.intern_keyword(&format!("prep/{name}"));
+                    values.push(Value::Keyword(kw));
+                }
+            }
+        }
+
+        Ok(Value::Vec(values.into_iter().collect()))
     }
 
     /// Converts an `ActionDecl` to a Value map.
@@ -3023,6 +3099,13 @@ impl Compiler {
             .as_mut()
             .expect("intern_keyword requires an interner for declaration compilation")
             .intern_keyword(name)
+    }
+
+    fn intern_symbol(&mut self, name: &str) -> longtable_foundation::SymbolId {
+        self.interner
+            .as_mut()
+            .expect("intern_symbol requires an interner for declaration compilation")
+            .intern_symbol(name)
     }
 
     /// Compiles a quoted expression (as data, not evaluated).

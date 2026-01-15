@@ -19,7 +19,9 @@ use longtable_parser::scope::CompiledScope;
 use longtable_parser::vocabulary::{
     CommandSyntax, Direction, NounType, Preposition, Pronoun, PronounGender, PronounNumber, Verb,
 };
-use longtable_parser::{ActionRegistry, CompiledAction, VocabularyRegistry};
+use longtable_parser::{
+    ActionRegistry, CompiledAction, CompiledSyntax, SyntaxCompiler, VocabularyRegistry,
+};
 use longtable_storage::World;
 use longtable_storage::schema::{
     Cardinality, ComponentSchema, FieldSchema, OnDelete, RelationshipSchema,
@@ -75,6 +77,9 @@ pub struct Session {
     /// Compiled rules for tick execution.
     /// Rules are compiled when registered via `register_rule`.
     compiled_rules: Vec<CompiledRule>,
+
+    /// Compiled command syntaxes for natural language parsing.
+    compiled_syntaxes: Vec<CompiledSyntax>,
 }
 
 impl Session {
@@ -97,6 +102,7 @@ impl Session {
             scopes: Vec::new(),
             action_decls: HashMap::new(),
             compiled_rules: Vec::new(),
+            compiled_syntaxes: Vec::new(),
         }
     }
 
@@ -119,6 +125,7 @@ impl Session {
             scopes: Vec::new(),
             action_decls: HashMap::new(),
             compiled_rules: Vec::new(),
+            compiled_syntaxes: Vec::new(),
         }
     }
 
@@ -324,6 +331,17 @@ impl Session {
     #[must_use]
     pub fn compiled_rule_count(&self) -> usize {
         self.compiled_rules.len()
+    }
+
+    /// Returns a reference to the compiled command syntaxes.
+    #[must_use]
+    pub fn compiled_syntaxes(&self) -> &[CompiledSyntax] {
+        &self.compiled_syntaxes
+    }
+
+    /// Adds a compiled command syntax.
+    pub fn add_compiled_syntax(&mut self, syntax: CompiledSyntax) {
+        self.compiled_syntaxes.push(syntax);
     }
 }
 
@@ -534,6 +552,20 @@ impl RuntimeContext for SessionContext<'_> {
 
     fn register_command(&mut self, data: &Value) -> Result<()> {
         let cmd = parse_command_syntax(data, self.interner())?;
+
+        // Also compile the syntax for the parser
+        if let Some(syntax_value) = extract_value_field(data, "syntax", self.interner()) {
+            if let Some(compiled) = SyntaxCompiler::compile(
+                &syntax_value,
+                cmd.name,
+                cmd.action,
+                cmd.priority,
+                self.interner(),
+            ) {
+                self.session.add_compiled_syntax(compiled);
+            }
+        }
+
         self.session.vocabulary_registry_mut().register_command(cmd);
         Ok(())
     }

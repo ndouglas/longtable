@@ -85,6 +85,8 @@ pub enum NounResolution {
 pub struct NounResolver {
     /// Keyword for entity name component
     name_keyword: KeywordId,
+    /// Keyword for the value field within components (typically `:value`)
+    value_keyword: KeywordId,
     /// Keyword for aliases component
     aliases_keyword: KeywordId,
     /// Keyword for adjectives component
@@ -96,11 +98,13 @@ impl NounResolver {
     #[must_use]
     pub fn new(
         name_keyword: KeywordId,
+        value_keyword: KeywordId,
         aliases_keyword: KeywordId,
         adjectives_keyword: KeywordId,
     ) -> Self {
         Self {
             name_keyword,
+            value_keyword,
             aliases_keyword,
             adjectives_keyword,
         }
@@ -206,8 +210,9 @@ impl NounResolver {
 
         // 1. Check exact name match
         // Use get_field since components store fields in a Map structure
+        // e.g., :name {:value "treasure chest"} → get_field(entity, :name, :value)
         if let Ok(Some(Value::String(name))) =
-            world.get_field(entity, self.name_keyword, self.name_keyword)
+            world.get_field(entity, self.name_keyword, self.value_keyword)
         {
             if name.to_lowercase() == noun_lower {
                 return self.adjectives_match(entity, phrase, world);
@@ -216,7 +221,7 @@ impl NounResolver {
 
         // 2. Check aliases
         if let Ok(Some(Value::Vec(aliases))) =
-            world.get_field(entity, self.aliases_keyword, self.aliases_keyword)
+            world.get_field(entity, self.aliases_keyword, self.value_keyword)
         {
             for alias in aliases.iter() {
                 if let Value::String(alias_str) = alias {
@@ -229,7 +234,7 @@ impl NounResolver {
 
         // 3. Check partial name match (word appears in name)
         if let Ok(Some(Value::String(name))) =
-            world.get_field(entity, self.name_keyword, self.name_keyword)
+            world.get_field(entity, self.name_keyword, self.value_keyword)
         {
             let name_lower = name.to_lowercase();
             if name_lower.contains(&noun_lower) || noun_lower.contains(&name_lower) {
@@ -249,7 +254,7 @@ impl NounResolver {
 
         // Get entity's adjectives using get_field
         let entity_adjectives = if let Ok(Some(Value::Vec(adjs))) =
-            world.get_field(entity, self.adjectives_keyword, self.adjectives_keyword)
+            world.get_field(entity, self.adjectives_keyword, self.value_keyword)
         {
             adjs.iter()
                 .filter_map(|v| {
@@ -295,7 +300,7 @@ impl NounResolver {
     pub fn describe(&self, entity: EntityId, world: &World) -> String {
         // Get adjectives and name using get_field
         let adjectives = if let Ok(Some(Value::Vec(adjs))) =
-            world.get_field(entity, self.adjectives_keyword, self.adjectives_keyword)
+            world.get_field(entity, self.adjectives_keyword, self.value_keyword)
         {
             adjs.iter()
                 .filter_map(|v| {
@@ -312,7 +317,7 @@ impl NounResolver {
         };
 
         let name = if let Ok(Some(Value::String(name))) =
-            world.get_field(entity, self.name_keyword, self.name_keyword)
+            world.get_field(entity, self.name_keyword, self.value_keyword)
         {
             name.to_string()
         } else {
