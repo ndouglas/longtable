@@ -246,6 +246,9 @@ pub trait RuntimeContext: VmContext {
 pub enum VmEffect {
     /// Spawn a new entity with components.
     Spawn {
+        /// Temporary entity ID assigned during execution for read-your-writes.
+        /// Used to map to the real ID after the entity is created.
+        temp_id: EntityId,
         /// Initial components as a map of keyword -> value.
         components: LtMap<Value, Value>,
     },

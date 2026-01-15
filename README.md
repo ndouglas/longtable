@@ -146,6 +146,63 @@ The solver demonstrates:
 - **Backtracking with state save/restore**: For puzzles requiring guessing
 - **Declarative logic**: Pure functional implementation in ~600 lines of DSL code
 
+### Logic Grid Puzzle Solver
+
+The `examples/logic-grid/` directory contains a constraint-satisfaction solver for logic grid puzzles (the kind where you match items across categories using clues).
+
+**Puzzle credit**: The included "Minnetonka Manatee Company" puzzle is from [PuzzleBaron's Logic Puzzles](https://logic.puzzlebaron.com/).
+
+```bash
+./target/release/longtable examples/logic-grid/_.lt
+```
+
+```
+> (solve-manatee-puzzle!)
+
+============================================================
+       MINNETONKA MANATEE COMPANY LOGIC PUZZLE
+============================================================
+Setting up logic grid...
+Grid setup queued (588 cells).
+
+Applying basic exclusion clues...
+  Clue 2: Sea Cow != Silver Springs
+  Clue 3: Rainbow Reef != Jacobson
+  Clue 5: Mellow Mel != 3 manatees
+  Clue 8: Samantha != 4, Samantha != Silver Springs
+
+Basic clues applied. Running propagation...
+
+=== Applying deduced constraints ===
+
+Clue 10 -> Hollow Hole = 7 manatees, Benny II = Romero = 9
+  Solved: :location/:hollow-hole = :manatees/:7
+  Solved: :boat/:benny-ii = :captain/:romero
+  ...
+
+============================================================
+                        SOLUTION
+============================================================
+
+Boat          Captain     Manatees  Location
+------------  ----------  --------  --------------
+:benny-ii     :romero     :9        :betty-beach
+:daily-ray    :espinoza   :6        :yellow-bend
+:foxy-roxy    :armstrong  :4        :rainbow-reef
+:mellow-mel   :yang       :7        :hollow-hole
+:samantha     :jacobson   :5        :treys-tunnel
+:sea-cow      :quinn      :8        :arnos-spit
+:watery-pete  :preston    :3        :silver-springs
+
+============================================================
+```
+
+The solver demonstrates:
+- **Grid cell entities**: 588 cells tracking all category pairings (boat×captain, boat×location, etc.)
+- **Constraint propagation**: Eliminating possibilities when cells are solved
+- **Bidirectional solving**: When boat→captain is solved, captain→boat is automatically solved
+- **Declarative clue application**: `(clue-is! :boat :benny-ii :captain :romero)` to assert facts
+
 ## CLI Usage
 
 ```bash

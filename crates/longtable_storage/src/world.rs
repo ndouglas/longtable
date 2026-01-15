@@ -334,6 +334,39 @@ impl World {
         Ok((new_world, id))
     }
 
+    /// Spawns an entity with a specific pre-determined ID.
+    ///
+    /// This is used for read-your-writes semantics where the entity ID
+    /// was determined during VM execution and needs to remain stable.
+    ///
+    /// Returns a new World with the entity created.
+    pub fn spawn_with_id(
+        &self,
+        id: EntityId,
+        components: &LtMap<Value, Value>,
+    ) -> Result<(World, EntityId)> {
+        let mut new_entities = (*self.entities).clone();
+        new_entities.spawn_with_id(id);
+
+        let mut new_components = (*self.components).clone();
+
+        // Set initial components
+        for (key, value) in components.iter() {
+            if let Value::Keyword(comp_name) = key {
+                new_components.set(id, *comp_name, value.clone())?;
+            }
+        }
+
+        let new_world = World {
+            entities: Arc::new(new_entities),
+            components: Arc::new(new_components),
+            previous: Some(Arc::new(self.clone())),
+            ..self.clone()
+        };
+
+        Ok((new_world, id))
+    }
+
     /// Spawns a relationship entity linking source to target.
     ///
     /// This creates a new entity with `:rel/type`, `:rel/source`, and `:rel/target`

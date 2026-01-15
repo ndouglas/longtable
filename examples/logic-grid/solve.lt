@@ -1,0 +1,3 @@
+(load "core.lt")
+(load "manatee.lt")
+(solve-manatee-puzzle!)

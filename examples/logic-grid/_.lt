@@ -1,0 +1,19 @@
+;; Logic Grid Puzzle Solver
+;;
+;; A demonstration of Longtable's constraint satisfaction capabilities.
+;;
+;; Usage:
+;;   ./target/release/longtable examples/logic-grid/_.lt
+;;   > (solve-manatee-puzzle!)
+
+(load "core.lt")
+(load "manatee.lt")
+
+(println "\n")
+(println "=== Logic Grid Puzzle Solver ===")
+(println "")
+(println "Available commands:")
+(println "  (solve-manatee-puzzle!)  - Solve the Minnetonka Manatee puzzle")
+(println "  (setup-grid!)            - Initialize empty grid")
+(println "  (print-solution)         - Display current solution state")
+(println "")

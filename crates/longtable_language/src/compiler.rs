@@ -335,6 +335,7 @@ impl Compiler {
             "get",
             "assoc",
             "dissoc",
+            "disj",
             "contains?",
             "keys",
             "vals",

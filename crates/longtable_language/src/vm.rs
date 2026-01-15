@@ -37,17 +37,17 @@ use native::{
     mul_values, native_abs, native_acos, native_and, native_asin, native_assoc, native_atan,
     native_atan2, native_bool_p, native_cbrt, native_ceil, native_char_at, native_clamp,
     native_coll_p, native_concat, native_conj, native_cons, native_contains_p, native_cos,
-    native_cosh, native_count, native_dec, native_dedupe, native_dissoc, native_distinct,
-    native_drop, native_e, native_empty_p, native_entity_p, native_exp, native_first,
-    native_flatten, native_float_p, native_floor, native_fn_p, native_format, native_get,
-    native_inc, native_int_p, native_interleave, native_interpose, native_into, native_keys,
-    native_keyword_p, native_last, native_list_p, native_log, native_log2, native_log10,
-    native_map_p, native_max, native_merge, native_min, native_nil_p, native_nth, native_number_p,
-    native_or, native_parse_int, native_partition, native_partition_all, native_pi, native_pow,
-    native_range, native_rem, native_repeat, native_rest, native_reverse, native_round, native_set,
-    native_set_p, native_sin, native_sinh, native_some_p, native_sort, native_sqrt, native_str,
-    native_str_blank, native_str_contains, native_str_ends_with, native_str_join, native_str_len,
-    native_str_lower, native_str_replace, native_str_replace_all, native_str_split,
+    native_cosh, native_count, native_dec, native_dedupe, native_disj, native_dissoc,
+    native_distinct, native_drop, native_e, native_empty_p, native_entity_p, native_exp,
+    native_first, native_flatten, native_float_p, native_floor, native_fn_p, native_format,
+    native_get, native_inc, native_int_p, native_interleave, native_interpose, native_into,
+    native_keys, native_keyword_p, native_last, native_list_p, native_log, native_log2,
+    native_log10, native_map_p, native_max, native_merge, native_min, native_nil_p, native_nth,
+    native_number_p, native_or, native_parse_int, native_partition, native_partition_all,
+    native_pi, native_pow, native_range, native_rem, native_repeat, native_rest, native_reverse,
+    native_round, native_set, native_set_p, native_sin, native_sinh, native_some_p, native_sort,
+    native_sqrt, native_str_blank, native_str_contains, native_str_ends_with, native_str_join,
+    native_str_len, native_str_lower, native_str_replace, native_str_replace_all, native_str_split,
     native_str_starts_with, native_str_substring, native_str_trim, native_str_trim_left,
     native_str_trim_right, native_str_upper, native_string_p, native_symbol_p, native_take,
     native_tan, native_tanh, native_trunc, native_type, native_vals, native_vec, native_vec_add,
@@ -105,6 +105,54 @@ macro_rules! native_dispatch {
     };
 }
 
+/// Formats a value for display, using the context to resolve keywords.
+fn format_value_with_ctx<C: VmContext>(value: &Value, ctx: &C) -> String {
+    match value {
+        Value::Nil => "nil".to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Int(n) => n.to_string(),
+        Value::Float(n) => {
+            if n.fract() == 0.0 {
+                format!("{n}.0")
+            } else {
+                n.to_string()
+            }
+        }
+        Value::String(s) => s.to_string(),
+        Value::Symbol(id) => format!("Symbol({})", id.index()),
+        Value::Keyword(id) => ctx
+            .keyword_to_string(*id)
+            .map_or_else(|| format!("Keyword({})", id.index()), |s| format!(":{s}")),
+        Value::EntityRef(id) => format!("Entity({}, {})", id.index, id.generation),
+        Value::Vec(v) => {
+            let items: Vec<_> = v.iter().map(|v| format_value_with_ctx(v, ctx)).collect();
+            format!("[{}]", items.join(" "))
+        }
+        Value::List(l) => {
+            let items: Vec<_> = l.iter().map(|v| format_value_with_ctx(v, ctx)).collect();
+            format!("({})", items.join(" "))
+        }
+        Value::Set(s) => {
+            let items: Vec<_> = s.iter().map(|v| format_value_with_ctx(v, ctx)).collect();
+            format!("#{{{}}}", items.join(" "))
+        }
+        Value::Map(m) => {
+            let pairs: Vec<_> = m
+                .iter()
+                .map(|(k, v)| {
+                    format!(
+                        "{} {}",
+                        format_value_with_ctx(k, ctx),
+                        format_value_with_ctx(v, ctx)
+                    )
+                })
+                .collect();
+            format!("{{{}}}", pairs.join(" "))
+        }
+        Value::Fn(_) => "<fn>".to_string(),
+    }
+}
+
 /// Stack-based virtual machine.
 pub struct Vm {
     /// Operand stack.
@@ -141,6 +189,10 @@ pub struct Vm {
     globals_by_name: HashMap<String, u16>,
     /// Effects count at each snapshot for proper restoration during backtracking.
     effects_counts: HashMap<u64, usize>,
+    /// Pending spawned entities for read-your-writes semantics.
+    /// Maps temp `EntityId` to its components map, allowing queries to see
+    /// spawned entities before effects are applied to the World.
+    pending_spawns: HashMap<EntityId, LtMap<Value, Value>>,
 }
 
 impl Default for Vm {
@@ -168,6 +220,7 @@ impl Vm {
             pending_vec_ops: HashMap::new(),
             globals_by_name: HashMap::new(),
             effects_counts: HashMap::new(),
+            pending_spawns: HashMap::new(),
         }
     }
 
@@ -189,6 +242,7 @@ impl Vm {
         self.pending_fields.clear();
         self.pending_components.clear();
         self.pending_vec_ops.clear();
+        self.pending_spawns.clear();
     }
 
     /// Sets pattern bindings for rule execution.
@@ -218,6 +272,7 @@ impl Vm {
         self.pending_fields.clear();
         self.pending_components.clear();
         self.pending_vec_ops.clear();
+        self.pending_spawns.clear();
         std::mem::take(&mut self.effects)
     }
 
@@ -227,6 +282,7 @@ impl Vm {
         self.pending_fields.clear();
         self.pending_components.clear();
         self.pending_vec_ops.clear();
+        self.pending_spawns.clear();
     }
 
     /// Executes a compiled program and returns the result.
@@ -555,7 +611,7 @@ impl Vm {
                     // Continue main loop with new function's code
                 }
                 Opcode::CallNative(idx, arg_count) => {
-                    self.call_native(idx, arg_count)?;
+                    self.call_native(idx, arg_count, ctx)?;
                 }
                 Opcode::Return => {
                     // Return from function using explicit call stack
@@ -712,6 +768,14 @@ impl Vm {
                     let key = (entity, component, field);
                     let base_value = if let Some(value) = self.pending_fields.get(&key) {
                         Some(value.clone())
+                    } else if let Some(components) = self.pending_spawns.get(&entity) {
+                        // Entity is a pending spawn - look up field from its components
+                        if let Some(Value::Map(fields)) = components.get(&Value::Keyword(component))
+                        {
+                            fields.get(&Value::Keyword(field)).cloned()
+                        } else {
+                            None
+                        }
                     } else {
                         ctx.get_field(entity, component, field)?
                     };
@@ -743,11 +807,27 @@ impl Vm {
                     let component_val = self.pop()?;
                     let component = extract_keyword(&component_val, ctx)?;
 
+                    // Get entities from the committed world
                     let entities: LtVec<Value> = ctx
                         .with_component(component)
                         .into_iter()
                         .map(Value::EntityRef)
                         .collect();
+
+                    // Also include pending spawns that have this component
+                    // This enables read-your-writes: spawned entities are visible
+                    // to queries within the same execution.
+                    let entities = self.pending_spawns.iter().fold(
+                        entities,
+                        |acc, (entity_id, components)| {
+                            if components.contains_key(&Value::Keyword(component)) {
+                                acc.push_back(Value::EntityRef(*entity_id))
+                            } else {
+                                acc
+                            }
+                        },
+                    );
+
                     self.push(Value::Vec(entities));
                 }
 
@@ -847,14 +927,32 @@ impl Vm {
                         _ => LtMap::new(),
                     };
 
-                    // Generate a temporary entity ID
+                    // Generate a temporary entity ID with a large base offset to avoid
+                    // conflicts with real entity IDs in the World. Uses generation 1
+                    // (odd = alive) to match EntityStore conventions.
                     self.spawn_counter += 1;
                     let temp_id = EntityId {
-                        index: self.spawn_counter,
-                        generation: 0,
+                        index: 1_000_000_000 + self.spawn_counter,
+                        generation: 1,
                     };
 
-                    self.effects.push(VmEffect::Spawn { components });
+                    // Store in pending_spawns for read-your-writes semantics
+                    // This allows queries (with-component, get-field) to see spawned
+                    // entities before effects are applied to the World.
+                    self.pending_spawns.insert(temp_id, components.clone());
+
+                    // Also populate pending_components so has-component works
+                    for (key, value) in components.iter() {
+                        if let Value::Keyword(comp_kw) = key {
+                            self.pending_components
+                                .insert((temp_id, *comp_kw), Some(value.clone()));
+                        }
+                    }
+
+                    self.effects.push(VmEffect::Spawn {
+                        temp_id,
+                        components,
+                    });
                     self.push(Value::EntityRef(temp_id));
                 }
 
@@ -949,6 +1047,9 @@ impl Vm {
                     let has = if let Some(pending) = self.pending_components.get(&key) {
                         // Some(value) means component was set, None means retracted
                         pending.is_some()
+                    } else if let Some(components) = self.pending_spawns.get(&entity) {
+                        // Also check pending spawns for entities not yet committed
+                        components.contains_key(&Value::Keyword(component))
                     } else {
                         ctx.has_component(entity, component)
                     };
@@ -1081,6 +1182,7 @@ impl Vm {
                             self.pending_fields.clear();
                             self.pending_components.clear();
                             self.pending_vec_ops.clear();
+                            self.pending_spawns.clear();
                             // Restore world state through the context.
                             ctx.restore_state(snapshot_id)?;
                         }
@@ -2350,7 +2452,7 @@ impl Vm {
     }
 
     /// Calls a native function.
-    fn call_native(&mut self, idx: u16, arg_count: u8) -> Result<()> {
+    fn call_native<C: RuntimeContext>(&mut self, idx: u16, arg_count: u8, ctx: &C) -> Result<()> {
         // Pop arguments in reverse order
         let mut args = Vec::with_capacity(arg_count as usize);
         for _ in 0..arg_count {
@@ -2360,34 +2462,39 @@ impl Vm {
 
         // Debug: trace native calls
         if std::env::var("LONGTABLE_DEBUG_NATIVE").is_ok() {
-            eprintln!(
-                "[DEBUG NATIVE] idx={} arg_count={} args={:?}",
-                idx, arg_count, args
-            );
+            eprintln!("[DEBUG NATIVE] idx={idx} arg_count={arg_count} args={args:?}");
         }
+
+        // Helper to format values with keyword resolution
+        let format_val = |v: &Value| -> String { format_value_with_ctx(v, ctx) };
 
         // Handle special cases that need VM access (print/println)
         let result = match idx {
-            49 => {
+            50 => {
                 // print
                 if let Some(v) = args.first() {
-                    self.output.push(format_value(v));
-                }
-                Ok(Value::Nil)
-            }
-            50 => {
-                // println
-                if let Some(v) = args.first() {
-                    self.output.push(format!("{}\n", format_value(v)));
+                    self.output.push(format_val(v));
                 }
                 Ok(Value::Nil)
             }
             51 => {
-                // say (alias for println)
+                // println
                 if let Some(v) = args.first() {
-                    self.output.push(format!("{}\n", format_value(v)));
+                    self.output.push(format!("{}\n", format_val(v)));
                 }
                 Ok(Value::Nil)
+            }
+            52 => {
+                // say (alias for println)
+                if let Some(v) = args.first() {
+                    self.output.push(format!("{}\n", format_val(v)));
+                }
+                Ok(Value::Nil)
+            }
+            39 => {
+                // str - concatenate values to string with keyword resolution
+                let result: String = args.iter().map(|v| format_val(v)).collect();
+                Ok(Value::String(result.into()))
             }
             // All other natives use the dispatch macro
             // Index matches order in compiler's register_natives()
@@ -2418,106 +2525,106 @@ impl Vm {
                 32 => native_get,
                 33 => native_assoc,
                 34 => native_dissoc,
-                35 => native_contains_p,
-                36 => native_keys,
-                37 => native_vals,
-                // 38-41: String basics
-                38 => native_str,
-                39 => native_str_len,
-                40 => native_str_upper,
-                41 => native_str_lower,
-                // 42-48: Math basics
-                42 => native_abs,
-                43 => native_min,
-                44 => native_max,
-                45 => native_floor,
-                46 => native_ceil,
-                47 => native_round,
-                48 => native_sqrt,
-                // 52: type (51 is say, handled above)
-                52 => native_type,
-                // 53-56: Critical functions
-                53 => native_inc,
-                54 => native_dec,
-                55 => native_last,
-                56 => native_range,
-                // 57-69: String functions
-                57 => native_str_split,
-                58 => native_str_join,
-                59 => native_str_trim,
-                60 => native_str_trim_left,
-                61 => native_str_trim_right,
-                62 => native_str_starts_with,
-                63 => native_str_ends_with,
-                64 => native_str_contains,
-                65 => native_str_replace,
-                66 => native_str_replace_all,
-                67 => native_str_blank,
-                68 => native_str_substring,
-                69 => native_format,
-                70 => native_char_at,
-                71 => native_parse_int,
-                // 72-80: Collection functions
-                72 => native_take,
-                73 => native_drop,
-                74 => native_concat,
-                75 => native_reverse,
-                76 => native_vec,
-                77 => native_set,
-                78 => native_into,
-                79 => native_sort,
-                80 => native_merge,
-                // 81-98: Math functions
-                81 => native_rem,
-                82 => native_clamp,
-                83 => native_trunc,
-                84 => native_pow,
-                85 => native_cbrt,
-                86 => native_exp,
-                87 => native_log,
-                88 => native_log10,
-                89 => native_log2,
-                90 => native_sin,
-                91 => native_cos,
-                92 => native_tan,
-                93 => native_asin,
-                94 => native_acos,
-                95 => native_atan,
-                96 => native_atan2,
-                97 => native_pi,
-                98 => native_e,
-                // 99-103: Extended collection functions
-                99 => native_flatten,
-                100 => native_distinct,
-                101 => native_dedupe,
-                102 => native_partition,
-                103 => native_partition_all,
-                // 104-115: Vector math functions
-                104 => native_vec_add,
-                105 => native_vec_sub,
-                106 => native_vec_mul,
-                107 => native_vec_scale,
-                108 => native_vec_dot,
-                109 => native_vec_cross,
-                110 => native_vec_length,
-                111 => native_vec_length_sq,
-                112 => native_vec_normalize,
-                113 => native_vec_distance,
-                114 => native_vec_lerp,
-                115 => native_vec_angle,
-                // 116-127: Remaining functions
-                116 => native_bool_p,
-                117 => native_number_p,
-                118 => native_coll_p,
-                119 => native_fn_p,
-                120 => native_entity_p,
-                121 => native_sinh,
-                122 => native_cosh,
-                123 => native_tanh,
-                124 => native_interleave,
-                125 => native_interpose,
-                126 => native_zip,
-                127 => native_repeat,
+                35 => native_disj,
+                36 => native_contains_p,
+                37 => native_keys,
+                38 => native_vals,
+                // 40-42: String basics (39 = str is handled above with context)
+                40 => native_str_len,
+                41 => native_str_upper,
+                42 => native_str_lower,
+                // 43-49: Math basics
+                43 => native_abs,
+                44 => native_min,
+                45 => native_max,
+                46 => native_floor,
+                47 => native_ceil,
+                48 => native_round,
+                49 => native_sqrt,
+                // 53: type (50-52 are print/println/say, handled above)
+                53 => native_type,
+                // 54-57: Critical functions
+                54 => native_inc,
+                55 => native_dec,
+                56 => native_last,
+                57 => native_range,
+                // 58-71: String functions
+                58 => native_str_split,
+                59 => native_str_join,
+                60 => native_str_trim,
+                61 => native_str_trim_left,
+                62 => native_str_trim_right,
+                63 => native_str_starts_with,
+                64 => native_str_ends_with,
+                65 => native_str_contains,
+                66 => native_str_replace,
+                67 => native_str_replace_all,
+                68 => native_str_blank,
+                69 => native_str_substring,
+                70 => native_format,
+                71 => native_char_at,
+                72 => native_parse_int,
+                // 73-81: Collection functions
+                73 => native_take,
+                74 => native_drop,
+                75 => native_concat,
+                76 => native_reverse,
+                77 => native_vec,
+                78 => native_set,
+                79 => native_into,
+                80 => native_sort,
+                81 => native_merge,
+                // 82-99: Math functions
+                82 => native_rem,
+                83 => native_clamp,
+                84 => native_trunc,
+                85 => native_pow,
+                86 => native_cbrt,
+                87 => native_exp,
+                88 => native_log,
+                89 => native_log10,
+                90 => native_log2,
+                91 => native_sin,
+                92 => native_cos,
+                93 => native_tan,
+                94 => native_asin,
+                95 => native_acos,
+                96 => native_atan,
+                97 => native_atan2,
+                98 => native_pi,
+                99 => native_e,
+                // 100-104: Extended collection functions
+                100 => native_flatten,
+                101 => native_distinct,
+                102 => native_dedupe,
+                103 => native_partition,
+                104 => native_partition_all,
+                // 105-116: Vector math functions
+                105 => native_vec_add,
+                106 => native_vec_sub,
+                107 => native_vec_mul,
+                108 => native_vec_scale,
+                109 => native_vec_dot,
+                110 => native_vec_cross,
+                111 => native_vec_length,
+                112 => native_vec_length_sq,
+                113 => native_vec_normalize,
+                114 => native_vec_distance,
+                115 => native_vec_lerp,
+                116 => native_vec_angle,
+                // 117-128: Remaining functions
+                117 => native_bool_p,
+                118 => native_number_p,
+                119 => native_coll_p,
+                120 => native_fn_p,
+                121 => native_entity_p,
+                122 => native_sinh,
+                123 => native_cosh,
+                124 => native_tanh,
+                125 => native_interleave,
+                126 => native_interpose,
+                127 => native_zip,
+                128 => native_repeat,
             ),
         }?;
 

@@ -1,0 +1,14 @@
+(load "core.lt")
+
+(component: test-cell :val1 :keyword :val2 :keyword)
+
+(println "Creating test cells...")
+
+(fn: create-test-cell! []
+  (spawn! {:test-cell {:val1 :a :val2 :b}}))
+
+(create-test-cell!)
+(println "First cell created")
+(create-test-cell!)
+(println "Second cell created")
+(println "Done!")

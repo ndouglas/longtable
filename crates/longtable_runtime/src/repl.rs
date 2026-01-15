@@ -388,6 +388,16 @@ impl<E: LineEditor> Repl<E> {
         let mut vec_field_ops: HashMap<FieldKey, (Vec<Value>, Vec<Value>)> = HashMap::new();
         let mut set_field_ops: HashMap<FieldKey, (Vec<Value>, Vec<Value>)> = HashMap::new();
 
+        // Mapping from temporary spawn IDs to actual entity IDs.
+        // With spawn_with_id, temp IDs become real IDs, so this map stays empty.
+        // Kept for future flexibility if spawn semantics change.
+        let temp_to_real_id: HashMap<EntityId, EntityId> = HashMap::new();
+
+        // Helper to translate entity IDs (temp -> real)
+        let translate_id = |id: EntityId, map: &HashMap<EntityId, EntityId>| -> EntityId {
+            *map.get(&id).unwrap_or(&id)
+        };
+
         for effect in effects {
             match effect {
                 // Non-mergeable effects: apply immediately
@@ -396,7 +406,12 @@ impl<E: LineEditor> Repl<E> {
                     relationship,
                     target,
                 } => {
-                    let new_world = self.session.world().link(source, relationship, target)?;
+                    let real_source = translate_id(source, &temp_to_real_id);
+                    let real_target = translate_id(target, &temp_to_real_id);
+                    let new_world =
+                        self.session
+                            .world()
+                            .link(real_source, relationship, real_target)?;
                     *self.session.world_mut() = new_world;
                 }
                 VmEffect::Unlink {
@@ -404,7 +419,12 @@ impl<E: LineEditor> Repl<E> {
                     relationship,
                     target,
                 } => {
-                    let new_world = self.session.world().unlink(source, relationship, target)?;
+                    let real_source = translate_id(source, &temp_to_real_id);
+                    let real_target = translate_id(target, &temp_to_real_id);
+                    let new_world =
+                        self.session
+                            .world()
+                            .unlink(real_source, relationship, real_target)?;
                     *self.session.world_mut() = new_world;
                 }
                 VmEffect::SetComponent {
@@ -412,7 +432,8 @@ impl<E: LineEditor> Repl<E> {
                     component,
                     value,
                 } => {
-                    let new_world = self.session.world().set(entity, component, value)?;
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let new_world = self.session.world().set(real_entity, component, value)?;
                     *self.session.world_mut() = new_world;
                 }
                 VmEffect::SetField {
@@ -421,33 +442,48 @@ impl<E: LineEditor> Repl<E> {
                     field,
                     value,
                 } => {
-                    let new_world = self
-                        .session
-                        .world()
-                        .set_field(entity, component, field, value)?;
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let new_world =
+                        self.session
+                            .world()
+                            .set_field(real_entity, component, field, value)?;
                     *self.session.world_mut() = new_world;
                 }
-                VmEffect::Spawn { components } => {
-                    let (new_world, _entity_id) = self.session.world().spawn(&components)?;
+                VmEffect::Spawn {
+                    temp_id,
+                    components,
+                } => {
+                    // Use spawn_with_id to create the entity with the temp_id as its
+                    // permanent ID. This ensures EntityRefs returned from spawn! remain
+                    // valid after effects are applied.
+                    let (new_world, _) =
+                        self.session.world().spawn_with_id(temp_id, &components)?;
                     *self.session.world_mut() = new_world;
                 }
                 VmEffect::Destroy { entity } => {
-                    let new_world = self.session.world().destroy(entity)?;
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let new_world = self.session.world().destroy(real_entity)?;
                     *self.session.world_mut() = new_world;
                 }
                 VmEffect::RemoveComponent { entity, component } => {
-                    let new_world = self.session.world().remove_component(entity, component)?;
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let new_world = self
+                        .session
+                        .world()
+                        .remove_component(real_entity, component)?;
                     *self.session.world_mut() = new_world;
                 }
 
                 // Mergeable effects: collect for later merging
+                // Translate entity IDs from temp to real for all mergeable effects
                 VmEffect::VecRemove {
                     entity,
                     component,
                     field,
                     value,
                 } => {
-                    let key = (entity, component, field);
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let key = (real_entity, component, field);
                     let entry = vec_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
                     entry.0.push(value);
                 }
@@ -457,7 +493,8 @@ impl<E: LineEditor> Repl<E> {
                     field,
                     value,
                 } => {
-                    let key = (entity, component, field);
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let key = (real_entity, component, field);
                     let entry = vec_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
                     entry.1.push(value);
                 }
@@ -467,7 +504,8 @@ impl<E: LineEditor> Repl<E> {
                     field,
                     value,
                 } => {
-                    let key = (entity, component, field);
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let key = (real_entity, component, field);
                     let entry = set_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
                     entry.0.push(value);
                 }
@@ -477,7 +515,8 @@ impl<E: LineEditor> Repl<E> {
                     field,
                     value,
                 } => {
-                    let key = (entity, component, field);
+                    let real_entity = translate_id(entity, &temp_to_real_id);
+                    let key = (real_entity, component, field);
                     let entry = set_field_ops.entry(key).or_insert_with(|| (vec![], vec![]));
                     entry.1.push(value);
                 }
@@ -2795,11 +2834,66 @@ impl<E: LineEditor> Repl<E> {
         self.eval(&source)
     }
 
-    /// Formats a value for display.
-    #[allow(clippy::unused_self)]
+    /// Formats a value for display, resolving keywords via the world's interner.
     fn format_value(&self, value: &Value) -> String {
-        // Use Display formatting from Value
-        format!("\x1b[1m{value}\x1b[0m")
+        let formatted = self.format_value_inner(value);
+        format!("\x1b[1m{formatted}\x1b[0m")
+    }
+
+    /// Recursively formats a value, resolving keywords to their string names.
+    fn format_value_inner(&self, value: &Value) -> String {
+        match value {
+            Value::Nil => "nil".to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(n) => {
+                if n.fract() == 0.0 {
+                    format!("{n}.0")
+                } else {
+                    n.to_string()
+                }
+            }
+            Value::String(s) => format!("\"{s}\""),
+            Value::Symbol(id) => self
+                .session
+                .world()
+                .interner()
+                .get_symbol(*id)
+                .map_or_else(|| format!("Symbol({})", id.index()), str::to_string),
+            Value::Keyword(id) => self
+                .session
+                .world()
+                .interner()
+                .get_keyword(*id)
+                .map_or_else(|| format!("Keyword({})", id.index()), |s| format!(":{s}")),
+            Value::EntityRef(id) => format!("Entity({}, {})", id.index, id.generation),
+            Value::Vec(v) => {
+                let items: Vec<_> = v.iter().map(|v| self.format_value_inner(v)).collect();
+                format!("[{}]", items.join(" "))
+            }
+            Value::List(l) => {
+                let items: Vec<_> = l.iter().map(|v| self.format_value_inner(v)).collect();
+                format!("({})", items.join(" "))
+            }
+            Value::Set(s) => {
+                let items: Vec<_> = s.iter().map(|v| self.format_value_inner(v)).collect();
+                format!("#{{{}}}", items.join(" "))
+            }
+            Value::Map(m) => {
+                let pairs: Vec<_> = m
+                    .iter()
+                    .map(|(k, v)| {
+                        format!(
+                            "{} {}",
+                            self.format_value_inner(k),
+                            self.format_value_inner(v)
+                        )
+                    })
+                    .collect();
+                format!("{{{}}}", pairs.join(" "))
+            }
+            Value::Fn(_) => "<fn>".to_string(),
+        }
     }
 
     /// Prints an error to stderr.

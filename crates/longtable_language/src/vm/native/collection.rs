@@ -256,6 +256,25 @@ pub(crate) fn native_dissoc(args: &[Value]) -> Result<Value> {
     }
 }
 
+/// Collection: disj - Remove elements from a set
+pub(crate) fn native_disj(args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Set(s)) => {
+            let mut result = s.clone();
+            for elem in args.iter().skip(1) {
+                result = result.remove(elem);
+            }
+            Ok(Value::Set(result))
+        }
+        _ => Err(Error::new(ErrorKind::TypeMismatch {
+            expected: longtable_foundation::Type::set(longtable_foundation::Type::Any),
+            actual: args
+                .first()
+                .map_or(longtable_foundation::Type::Nil, |v| v.value_type()),
+        })),
+    }
+}
+
 /// Collection: contains?
 pub(crate) fn native_contains_p(args: &[Value]) -> Result<Value> {
     match (args.first(), args.get(1)) {

@@ -1,0 +1,135 @@
+;; Logic Grid Puzzle Solver - Core Infrastructure
+;;
+;; Models logic grid puzzles as constraint satisfaction problems.
+;; Uses Longtable's ECS to track possibilities and propagate constraints.
+
+;; =============================================================================
+;; SCHEMA DEFINITIONS
+;; =============================================================================
+
+;; A cell in the logic grid tracks whether two values CAN be paired
+(component: grid-cell
+  :cat1 :keyword          ;; First category
+  :val1 :keyword          ;; Value from first category
+  :cat2 :keyword          ;; Second category
+  :possibilities :set     ;; Set of still-possible values from cat2
+  :solved :keyword)       ;; The determined value (nil if unsolved)
+
+;; =============================================================================
+;; CELL MANAGEMENT
+;; =============================================================================
+
+;; Get the grid cell for a category/value pair tracking another category
+(fn: get-cell [cat1 val1 cat2]
+  (first
+    (filter
+      (fn [e]
+        (and (= (get-field e :grid-cell :cat1) cat1)
+             (= (get-field e :grid-cell :val1) val1)
+             (= (get-field e :grid-cell :cat2) cat2)))
+      (with-component :grid-cell))))
+
+;; Check if a cell is solved
+(fn: cell-solved? [cell]
+  (not (nil? (get-field cell :grid-cell :solved))))
+
+;; Get remaining possibilities for a cell
+(fn: cell-possibilities [cell]
+  (get-field cell :grid-cell :possibilities))
+
+;; Get the solved value for a cell
+(fn: cell-value [cell]
+  (get-field cell :grid-cell :solved))
+
+;; =============================================================================
+;; CONSTRAINT OPERATIONS
+;; =============================================================================
+
+;; Eliminate a possibility from a cell
+(fn: eliminate! [cell val]
+  (let [poss (cell-possibilities cell)]
+    (if (contains? poss val)
+      (do
+        (set-field! cell :grid-cell :possibilities (disj poss val))
+        (let [new-poss (disj poss val)]
+          (if (= (count new-poss) 1)
+            (solve-cell! cell (first (vec new-poss)))
+            nil))
+        true)
+      false)))
+
+;; Mark a cell as solved with a specific value
+(fn: solve-cell! [cell val]
+  (if (not (cell-solved? cell))
+    (do
+      (set-field! cell :grid-cell :solved val)
+      (set-field! cell :grid-cell :possibilities #{val})
+      (println (str "  Solved: "
+                    (get-field cell :grid-cell :cat1) "/"
+                    (get-field cell :grid-cell :val1) " = "
+                    (get-field cell :grid-cell :cat2) "/" val))
+      (propagate-row-elimination! cell val)
+      (propagate-col-elimination! cell val))
+    nil))
+
+;; Eliminate val from all other cells with same cat1/cat2
+(fn: propagate-row-elimination! [solved-cell val]
+  (let [cat1 (get-field solved-cell :grid-cell :cat1)
+        val1 (get-field solved-cell :grid-cell :val1)
+        cat2 (get-field solved-cell :grid-cell :cat2)]
+    (map
+      (fn [cell]
+        (if (and (= (get-field cell :grid-cell :cat1) cat1)
+                 (= (get-field cell :grid-cell :cat2) cat2)
+                 (not (= (get-field cell :grid-cell :val1) val1)))
+          (eliminate! cell val)
+          nil))
+      (with-component :grid-cell))))
+
+;; Solve the reverse cell
+(fn: propagate-col-elimination! [solved-cell val]
+  (let [cat1 (get-field solved-cell :grid-cell :cat1)
+        val1 (get-field solved-cell :grid-cell :val1)
+        cat2 (get-field solved-cell :grid-cell :cat2)]
+    (let [reverse-cell (get-cell cat2 val cat1)]
+      (if (and reverse-cell (not (cell-solved? reverse-cell)))
+        (solve-cell! reverse-cell val1)
+        nil))))
+
+;; =============================================================================
+;; CLUE APPLICATION
+;; =============================================================================
+
+;; Direct assignment: val1 from cat1 IS val2 from cat2
+(fn: clue-is! [cat1 val1 cat2 val2]
+  (let [cell (get-cell cat1 val1 cat2)]
+    (if cell
+      (solve-cell! cell val2)
+      nil)))
+
+;; Direct exclusion: val1 from cat1 is NOT val2 from cat2
+(fn: clue-not! [cat1 val1 cat2 val2]
+  (let [cell (get-cell cat1 val1 cat2)]
+    (if cell
+      (eliminate! cell val2)
+      nil)))
+
+;; =============================================================================
+;; PROPAGATION
+;; =============================================================================
+
+;; Check for naked singles: cells with only one possibility
+(fn: propagate-naked-singles! []
+  (let [unsolved (filter (fn [c] (not (cell-solved? c))) (with-component :grid-cell))
+        singles (filter (fn [c] (= (count (cell-possibilities c)) 1)) unsolved)]
+    (map (fn [c] (solve-cell! c (first (vec (cell-possibilities c))))) singles)
+    (count singles)))
+
+;; Main propagation loop
+(fn: propagate! []
+  (let [progress (propagate-naked-singles!)]
+    (if (> progress 0)
+      (propagate!)
+      nil)))
+
+(println "Logic Grid Solver core loaded.")

@@ -3,12 +3,6 @@
 use super::format_value;
 use longtable_foundation::{Error, ErrorKind, LtVec, Result, Value};
 
-/// String: str (concatenate to string)
-pub(crate) fn native_str(args: &[Value]) -> Result<Value> {
-    let result: String = args.iter().map(format_value).collect();
-    Ok(Value::String(result.into()))
-}
-
 /// String: str/len
 pub(crate) fn native_str_len(args: &[Value]) -> Result<Value> {
     match args.first() {

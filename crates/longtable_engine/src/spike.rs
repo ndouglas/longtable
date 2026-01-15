@@ -602,8 +602,11 @@ fn execute_spike_body(
 #[allow(dead_code, clippy::too_many_lines)]
 pub fn apply_effect(world: World, effect: &VmEffect) -> Result<World> {
     match effect {
-        VmEffect::Spawn { components } => {
-            let (new_world, _id) = world.spawn(components)?;
+        VmEffect::Spawn {
+            temp_id,
+            components,
+        } => {
+            let (new_world, _id) = world.spawn_with_id(*temp_id, components)?;
             Ok(new_world)
         }
         VmEffect::Destroy { entity } => world.destroy(*entity),

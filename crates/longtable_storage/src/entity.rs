@@ -155,6 +155,52 @@ impl EntityStore {
     pub fn generations(&self) -> &[u32] {
         &self.generations
     }
+
+    /// Spawns an entity with a specific ID.
+    ///
+    /// This is used when the entity ID was pre-determined (e.g., during VM execution
+    /// with read-your-writes semantics). The generations array is extended if needed.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the index is already occupied by a live entity with a different generation.
+    pub fn spawn_with_id(&mut self, id: EntityId) -> EntityId {
+        let idx = id.index as usize;
+
+        // Ensure the generations array is large enough
+        while self.generations.len() <= idx {
+            // Fill with 0 (even = dead/free)
+            self.generations.push(0);
+        }
+
+        // Check if this slot is already occupied (odd generation = alive)
+        let current_gen = self.generations[idx];
+        assert!(
+            current_gen % 2 == 0,
+            "spawn_with_id: index {} already occupied with generation {}",
+            id.index,
+            current_gen
+        );
+
+        // Set the generation and mark as alive
+        self.generations[idx] = id.generation;
+        self.live_count += 1;
+
+        id
+    }
+
+    /// Returns the current highest allocated index.
+    ///
+    /// Returns 0 if no entities have been allocated.
+    /// This is useful for determining safe `temp_id` ranges.
+    #[must_use]
+    pub fn max_index(&self) -> u64 {
+        if self.generations.is_empty() {
+            0
+        } else {
+            (self.generations.len() - 1) as u64
+        }
+    }
 }
 
 #[cfg(test)]

@@ -168,7 +168,9 @@ impl Session {
 
     /// Restores the world to a previously saved snapshot.
     ///
-    /// Returns Ok(()) if successful, or an error if the snapshot ID is invalid.
+    /// # Errors
+    ///
+    /// Returns an error if the snapshot ID does not exist.
     pub fn restore_state(&mut self, snapshot_id: u64) -> Result<()> {
         if let Some(snapshot) = self.state_snapshots.get(&snapshot_id) {
             self.world = snapshot.clone();
