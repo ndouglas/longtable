@@ -18,19 +18,6 @@ Longtable is designed for text-based simulation games where complex emergent beh
 - **Observability** — Tracing, breakpoints, watches, and causal "why" queries
 - **125+ Native Functions** — Comprehensive standard library for collections, math, strings, and more
 
-## Status
-
-**Phase 6: Observability Implementation** — Full debugging, tracing, and time travel complete.
-
-- Phases 0-5 complete: Foundation, storage, language, execution engine, interface
-- **Observability**: Explain system, tracing, breakpoints, watches, time travel
-- Standard library: 125+ native functions (collections, math, strings, predicates, vector math)
-- REPL with syntax highlighting, tab completion, and multi-line input
-- CLI with debug flags and batch mode
-- MessagePack serialization for world state
-
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for the full development roadmap.
-
 ## Quick Start
 
 ### Installation
